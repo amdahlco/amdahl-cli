@@ -10,6 +10,7 @@ import pkg from '../package.json'
 import { parseCommandLine } from '../src/args'
 import { EXIT, exitForHttp } from '../src/errors'
 import { generateKey } from '../src/keygen'
+import { SKILL_TEXT } from '../src/skill'
 import { VERSION } from '../src/version'
 import { cli, fakeIo } from './helpers/fake-io'
 import { startMockServer, type MockServer } from './helpers/mock-server'
@@ -94,10 +95,18 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.1.1\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.1.1\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.1.2\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.1.2\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
+  })
+
+  it('--help lists what you can do, and --json does not change it', async () => {
+    const io = fakeIo()
+    const help = (await cli(io, '--help')).stdout
+    expect(help).toMatchSnapshot()
+    expect(help).toContain('For everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md')
+    expect((await cli(io, '--help', '--json')).stdout).toBe(help)
   })
 })
 
@@ -213,9 +222,10 @@ describe('install', () => {
     mkdirSync(join(io.homedir, '.codex'))
     writeFileSync(path, 'model = "o3"\n')
     const first = await cli(io, 'install', 'codex', '--json')
-    expect(first.json).toEqual({ ok: true, client: 'codex', action: 'wrote', path })
+    const skill = join(io.homedir, '.agents', 'skills', 'amdahl', 'SKILL.md')
+    expect(first.json).toEqual({ ok: true, client: 'codex', action: 'wrote', path, skill: { action: 'wrote', path: skill } })
     const second = await cli(io, 'install', 'codex', '--json')
-    expect(second.json).toEqual({ ok: true, client: 'codex', action: 'unchanged', path })
+    expect(second.json).toEqual({ ok: true, client: 'codex', action: 'unchanged', path, skill: { action: 'unchanged', path: skill } })
     expect(readFileSync(path, 'utf8')).toBe(
       'model = "o3"\n\n[mcp_servers.amdahl]\nurl = "https://staging.amdahl.ai/mcp"\nrequired = true\n'
     )
@@ -236,7 +246,13 @@ describe('install', () => {
     const path = join(io.homedir, '.cursor', 'mcp.json')
     writeFileSync(path, JSON.stringify({ mcpServers: { other: { url: 'x' } }, theme: 'dark' }))
     const r = await cli(io, 'install', 'cursor', '--json')
-    expect(r.json).toEqual({ ok: true, client: 'cursor', action: 'wrote', path })
+    expect(r.json).toEqual({
+      ok: true,
+      client: 'cursor',
+      action: 'wrote',
+      path,
+      skill: { action: 'wrote', path: join(io.homedir, '.cursor', 'skills', 'amdahl', 'SKILL.md') },
+    })
     const written = readFileSync(path, 'utf8')
     expect(JSON.parse(written)).toEqual({
       mcpServers: { other: { url: 'x' }, amdahl: { url: 'https://app.amdahl.ai/mcp' } },
@@ -250,6 +266,7 @@ describe('install', () => {
     const io = fakeIo()
     const r = await cli(io, 'install', 'cursor', '--print', '--json')
     expect(r.json.action).toBe('printed')
+    expect(r.json.skill).toEqual({ action: 'printed', path: join(io.homedir, '.cursor', 'skills', 'amdahl', 'SKILL.md') })
     expect(existsSync(join(io.homedir, '.cursor'))).toBe(false)
   })
 
@@ -261,11 +278,56 @@ describe('install', () => {
       client: 'claude-code',
       action: 'printed',
       command: 'claude mcp add --transport http amdahl https://app.amdahl.ai/mcp',
+      skill: { action: 'wrote', path: join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md') },
     })
     io.run.mockImplementation(async () => ({ code: 0, stdout: '', stderr: '' }))
     const ran = await cli(io, 'install', 'claude-code', '--json')
     expect(ran.json.action).toBe('ran')
     expect(io.run).toHaveBeenLastCalledWith('claude', ['mcp', 'add', '--transport', 'http', 'amdahl', 'https://app.amdahl.ai/mcp'])
+  })
+
+  it('claude-code installs the bundled skill next to the MCP server', async () => {
+    const io = fakeIo()
+    io.run.mockImplementation(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const path = join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md')
+    const r = await cli(io, 'install', 'claude-code')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe(
+      `Added Amdahl to Claude Code. Run /mcp in Claude Code to sign in.\nAdded the Amdahl skill (what Amdahl can do) at ${path}.\n`
+    )
+    expect(readFileSync(path, 'utf8')).toBe(SKILL_TEXT)
+    expect((await cli(io, 'install', 'claude-code', '--json')).json.skill).toEqual({ action: 'unchanged', path })
+  })
+
+  it('keeps a changed skill file unless --force', async () => {
+    const io = fakeIo()
+    io.run.mockImplementation(async () => ({ code: 0, stdout: '', stderr: '' }))
+    const path = join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md')
+    mkdirSync(join(io.homedir, '.claude', 'skills', 'amdahl'), { recursive: true })
+    writeFileSync(path, 'my notes\n')
+    const kept = await cli(io, 'install', 'claude-code', '--json')
+    expect(kept.code).toBe(0)
+    expect(kept.json.skill).toEqual({ action: 'kept', path })
+    expect(kept.stderr).toBe(`Kept your changed ${path}; run again with --force to replace it with the current Amdahl skill.\n`)
+    expect(readFileSync(path, 'utf8')).toBe('my notes\n')
+    const forced = await cli(io, 'install', 'claude-code', '--force', '--json')
+    expect(forced.json.skill).toEqual({ action: 'replaced', path })
+    expect(readFileSync(path, 'utf8')).toBe(SKILL_TEXT)
+  })
+
+  it('claude-code --print shows the skill path and writes nothing', async () => {
+    const io = fakeIo()
+    const path = join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md')
+    const r = await cli(io, 'install', 'claude-code', '--print')
+    expect(r.stdout).toBe(`claude mcp add --transport http amdahl https://app.amdahl.ai/mcp\n# Amdahl skill: ${path}\n`)
+    expect(existsSync(join(io.homedir, '.claude'))).toBe(false)
+    expect(io.run).not.toHaveBeenCalled()
+  })
+
+  it('the bundled skill is the amdahl SKILL.md', () => {
+    const bundled = readFileSync(join(__dirname, '..', 'skill', 'SKILL.md'), 'utf8')
+    expect(SKILL_TEXT).toBe(bundled)
+    expect(bundled).toMatch(/^---\nname: amdahl\ndescription: .+\n---\n/)
   })
 
   it('an unknown client is a usage error', async () => {

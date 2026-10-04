@@ -1,6 +1,6 @@
 {
   "name": "@amdahl/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "The amdahl command line: sign in, check setup, optimize messages, manage API keys, connect MCP clients.",
   "license": "Apache-2.0",
@@ -40,7 +40,8 @@
     "clean": "rm -rf dist *.tgz",
     "test": "vitest run",
     "type-check": "tsc --noEmit",
-    "smoke:pack": "node scripts/smoke-pack.mjs"
+    "smoke:pack": "node scripts/smoke-pack.mjs",
+    "sync:skill": "node scripts/sync-skill.mjs"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -1,0 +1,36 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`exit codes > --help lists what you can do, and --json does not change it 1`] = `
+"Usage: amdahl <command> [options]
+
+What you can do:
+  amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
+  amdahl status                  Check that this workspace is set up to optimize
+  amdahl keys create --name ci   Make an API key for a server or CI
+  amdahl install claude-code     Connect your AI client (also codex, cursor)
+  For everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md
+
+Commands:
+  login   [--workspace <slug>] [--no-browser] [--port <n>]   Sign in (alias: auth login)
+  logout  [--all]                                           Sign out (alias: auth logout)
+  whoami  [--show-token]                                    Show who you are (alias: auth status)
+  auth token                                                Print a fresh access token
+  status                                                    Check whether this workspace can optimize
+  optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
+           [--on-unsupported flag|remove] [--tries] [--context <file.json>]
+  keys create --name <name> [--preset read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
+  keys list
+  keys revoke <id|prefix> [--yes] [--no-browser]
+  workspace list | workspace use <profile>
+  install claude-code|codex|cursor [--print] [--force]
+
+Global options:
+  --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the default profile)
+  --api-url <url>    API host (default: AMDAHL_API_URL, then the profile, then https://app.amdahl.ai)
+  --api-key <key>    Use an API key for this command (prefer AMDAHL_KEY: argv is visible to other users)
+  --json             Data on stdout as JSON, messages on stderr
+  --no-color         No colour (NO_COLOR is honoured too)
+  -h, --help         Show this help
+  -v, --version      Show the version
+"
+`;
