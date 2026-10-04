@@ -13,9 +13,8 @@ name: Publish
 # `--help` and `--version` here. Only `publish` can mint an OIDC token, and it
 # runs in the `npm` environment.
 #
-# Authentication is npm trusted publishing (GitHub OIDC), which also signs
-# provenance. NPM_TOKEN is a fallback that npm uses only if OIDC fails; delete
-# the secret once trusted publishing is confirmed.
+# Authentication is npm trusted publishing (GitHub OIDC) only, which also
+# signs provenance. There is no token fallback.
 
 on:
   push:
@@ -188,11 +187,13 @@ jobs:
       - name: Publish
         shell: bash
         env:
-          # Fallback only: npm tries OIDC first.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           TGZ: ${{ runner.temp }}/cli-pack/${{ needs.verify.outputs.tgz_name }}
           DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
         run: |
           set -euo pipefail
           test -f "$TGZ"
+          # setup-node writes an empty _authToken line, which stops npm from trying OIDC: https://github.com/actions/setup-node/issues/1551
+          if [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            sed -i '/_authToken/d' "$NPM_CONFIG_USERCONFIG"
+          fi
           npm publish "$TGZ" --access public --provenance --tag "$DIST_TAG"
