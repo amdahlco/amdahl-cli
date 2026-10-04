@@ -1,0 +1,51 @@
+{
+  "name": "@amdahl/cli",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "The amdahl command line: sign in, check setup, optimize messages, manage API keys, connect MCP clients.",
+  "license": "Apache-2.0",
+  "author": "Amdahl <hello@amdahl.ai>",
+  "homepage": "https://docs.amdahl.ai/cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/amdahlco/amdahl-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/amdahlco/amdahl-cli/issues"
+  },
+  "keywords": [
+    "amdahl",
+    "cli",
+    "mcp"
+  ],
+  "bin": {
+    "amdahl": "dist/amdahl.js"
+  },
+  "files": [
+    "dist/amdahl.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "build": "tsup",
+    "clean": "rm -rf dist *.tgz",
+    "test": "vitest run",
+    "type-check": "tsc --noEmit",
+    "smoke:pack": "node scripts/smoke-pack.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.3",
+    "vitest": "^4.1.4"
+  }
+}
