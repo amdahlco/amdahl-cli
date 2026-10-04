@@ -17,6 +17,22 @@ npm i -g @amdahl/cli
 amdahl login
 ```
 
+To connect an AI client, run `amdahl install claude-code` (or `codex`,
+`cursor`). It adds the Amdahl MCP server and also installs the Amdahl skill,
+a map of everything Amdahl can do, so your agent knows which tool fits each
+job. The skill goes to the client's user skills folder:
+
+| client | skill file |
+|---|---|
+| Claude Code | `~/.claude/skills/amdahl/SKILL.md` |
+| Codex | `~/.agents/skills/amdahl/SKILL.md` |
+| Cursor | `~/.cursor/skills/amdahl/SKILL.md` |
+
+If that file already exists and you changed it, `install` keeps your copy and
+says so; add `--force` to replace it. `--print` shows what it would run and the
+path it would write, without changing anything. The same map is published at
+https://docs.amdahl.ai/skills/amdahl/SKILL.md.
+
 ## Quick start
 
 ```sh
@@ -24,7 +40,7 @@ amdahl login                 # sign in through the browser with your console acc
 amdahl whoami                # the account, workspace and role you are signed in as
 amdahl status                # can this workspace optimize, and what blocks it
 amdahl optimize draft.md     # rewrite one message (or pipe it in with -)
-amdahl install claude-code   # point an MCP client at Amdahl (also codex, cursor)
+amdahl install claude-code   # connect an AI client and add the Amdahl skill (also codex, cursor)
 ```
 
 No workspace yet? `amdahl login` prints the console link where you can
@@ -46,7 +62,7 @@ amdahl keys create --name <name> [--preset read-only|agent|internal|admin] [--ex
 amdahl keys list
 amdahl keys revoke <id|prefix> [--yes] [--no-browser]
 amdahl workspace list | amdahl workspace use <profile>
-amdahl install claude-code|codex|cursor [--print]
+amdahl install claude-code|codex|cursor [--print] [--force]
 ```
 
 Global flags: `--profile`, `--api-url`, `--api-key`, `--json`, `--no-color`,
@@ -110,6 +126,7 @@ pnpm build         # dist/amdahl.js, one file, no runtime deps
 pnpm test          # vitest, against a local mock server
 pnpm type-check
 pnpm smoke:pack    # pack, install offline, run --version
+pnpm sync:skill    # refresh skill/SKILL.md from docs.amdahl.ai, then commit it
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues as described in

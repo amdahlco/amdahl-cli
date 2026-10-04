@@ -49,7 +49,7 @@ const COMMAND_OPTIONS: Record<string, OptionSpec> = {
   'keys revoke': { yes: { type: 'boolean' }, 'no-browser': { type: 'boolean' } },
   'workspace list': {},
   'workspace use': {},
-  install: { print: { type: 'boolean' } },
+  install: { print: { type: 'boolean' }, force: { type: 'boolean' } },
 }
 
 /** Aliases onto canonical command names. */
@@ -127,6 +127,13 @@ function strictParse(argv: string[], options: OptionSpec) {
 /** The help text. */
 export const USAGE = `Usage: amdahl <command> [options]
 
+What you can do:
+  amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
+  amdahl status                  Check that this workspace is set up to optimize
+  amdahl keys create --name ci   Make an API key for a server or CI
+  amdahl install claude-code     Connect your AI client (also codex, cursor)
+  For everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md
+
 Commands:
   login   [--workspace <slug>] [--no-browser] [--port <n>]   Sign in (alias: auth login)
   logout  [--all]                                           Sign out (alias: auth logout)
@@ -139,7 +146,7 @@ Commands:
   keys list
   keys revoke <id|prefix> [--yes] [--no-browser]
   workspace list | workspace use <profile>
-  install claude-code|codex|cursor [--print]
+  install claude-code|codex|cursor [--print] [--force]
 
 Global options:
   --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the default profile)

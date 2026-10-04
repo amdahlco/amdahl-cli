@@ -3,8 +3,8 @@
  *
  * One self-contained file, `dist/amdahl.js`, so the packed tarball has zero
  * runtime dependencies: `noExternal` bundles everything into the output. Node
- * built-ins stay external. The banner
- * is the shebang that makes the file runnable as the `amdahl` bin.
+ * built-ins stay external. `.md` files (the bundled skill) load as text. The
+ * banner is the shebang that makes the file runnable as the `amdahl` bin.
  */
 import { defineConfig } from 'tsup'
 
@@ -20,5 +20,6 @@ export default defineConfig({
   minify: false,
   dts: false,
   noExternal: [/.*/],
+  loader: { '.md': 'text' },
   banner: { js: '#!/usr/bin/env node' },
 })
