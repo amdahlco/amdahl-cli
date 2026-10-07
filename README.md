@@ -4,6 +4,35 @@ The `amdahl` command line. It signs you in with your console account, checks
 that a workspace can optimize, rewrites messages, manages API keys (each one
 approved in the console), and points MCP clients at Amdahl.
 
+## Using the Claude or ChatGPT app? You do not need this CLI
+
+The Claude and ChatGPT apps connect to the Amdahl Optimizer as a custom
+connector, with no key and no terminal. The MCP server URL is
+`https://app.amdahl.ai/mcp`.
+
+In Claude (web or desktop):
+
+1. Open Settings, then Customize, then Connectors
+   (https://claude.ai/customize/connectors).
+2. Click **+ Add**, then **Add custom connector**.
+3. Name it **Amdahl** and set the URL to `https://app.amdahl.ai/mcp`.
+4. Click **Connect**, sign in to Amdahl with your work email, and choose your
+   workspace.
+5. Open a new chat and turn on Amdahl in the **+** menu under Connectors. If
+   Amdahl is not listed, reload the app (Cmd+R, or Ctrl+R on Windows).
+6. Optional: in Amdahl's connector settings, set its tool access to
+   **Always available**, so Claude does not have to search for its tools.
+7. Name the server in your ask: "Use the Amdahl MCP server to optimize this
+   draft: ...". Claude does not call Amdahl for a plain "make this better".
+
+In the ChatGPT desktop app: open Settings, then Plugins, then **Add**, then
+**Add MCP server**. Choose **Connect to a custom MCP**, name it Amdahl, set the
+type to Streamable HTTP and the URL to `https://app.amdahl.ai/mcp`, save, then
+click **Authenticate** and sign in. In Work mode, ask "Use the Amdahl MCP server
+to optimize this draft: ...".
+
+Full steps: https://amdahl.ai/connect
+
 ## Install
 
 Needs Node.js 20 or later.
