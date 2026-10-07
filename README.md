@@ -20,9 +20,14 @@ In Claude (web or desktop):
    workspace.
 5. Open a new chat and turn on Amdahl in the **+** menu under Connectors. If
    Amdahl is not listed, reload the app (Cmd+R, or Ctrl+R on Windows).
+6. Name the server in your ask: "Use the Amdahl MCP server to optimize this
+   draft: ...". Claude does not call Amdahl for a plain "make this better".
 
-In ChatGPT: open Settings, then Apps and Connectors, turn on Developer mode,
-and add a connector with the same URL.
+In the ChatGPT desktop app: open Settings, then Plugins, then **Add**, then
+**Add MCP server**. Choose **Connect to a custom MCP**, name it Amdahl, set the
+type to Streamable HTTP and the URL to `https://app.amdahl.ai/mcp`, save, then
+click **Authenticate** and sign in. In Work mode, ask "Use the Amdahl MCP server
+to optimize this draft: ...".
 
 Full steps: https://amdahl.ai/connect
 
