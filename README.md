@@ -20,7 +20,9 @@ In Claude (web or desktop):
    workspace.
 5. Open a new chat and turn on Amdahl in the **+** menu under Connectors. If
    Amdahl is not listed, reload the app (Cmd+R, or Ctrl+R on Windows).
-6. Name the server in your ask: "Use the Amdahl MCP server to optimize this
+6. Optional: in Amdahl's connector settings, set its tool access to
+   **Always available**, so Claude does not have to search for its tools.
+7. Name the server in your ask: "Use the Amdahl MCP server to optimize this
    draft: ...". Claude does not call Amdahl for a plain "make this better".
 
 In the ChatGPT desktop app: open Settings, then Plugins, then **Add**, then
