@@ -1,6 +1,6 @@
 {
   "name": "@amdahl/cli",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "The amdahl command line: sign in, check setup, optimize messages, manage API keys, connect MCP clients.",
   "license": "Apache-2.0",
