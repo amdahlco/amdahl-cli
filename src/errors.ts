@@ -15,6 +15,8 @@ export const EXIT = {
   rateLimited: 6,
   denied: 7,
   network: 8,
+  /** `skills add` would install a skill amdahl.ai's security review flagged, with no terminal to ask and no --accept-warning. */
+  flagged: 9,
   cancelled: 130,
 } as const
 
@@ -32,14 +34,17 @@ export class CliError extends Error {
   readonly hint?: string
   /** Technical detail for `--json` only, kept out of the plain message. */
   readonly detail?: string
+  /** More fields for `--json` only, printed beside `ok` and `error`. */
+  readonly data?: Record<string, unknown>
 
-  constructor(code: string, message: string, exit: ExitCode, hint?: string, detail?: string) {
+  constructor(code: string, message: string, exit: ExitCode, hint?: string, detail?: string, data?: Record<string, unknown>) {
     super(message)
     this.name = 'CliError'
     this.code = code
     this.exit = exit
     this.hint = hint
     this.detail = detail
+    this.data = data
   }
 }
 

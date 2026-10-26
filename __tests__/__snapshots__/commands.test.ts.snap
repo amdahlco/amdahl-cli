@@ -26,12 +26,17 @@ Commands:
   keys revoke <id|prefix> [--yes] [--no-browser]
   workspace list | workspace use <profile>
   install claude-code|codex|cursor [--print] [--force]
-  skills add <publisher>/<skill> [-y] [-g] [--agents] [--force] [--site <origin>]
+  skills add <publisher>/<skill> [-y] [-g] [--agents] [--force] [--accept-warning] [--site <origin>]
            In a terminal it asks one question: this project (Enter) or every project.
            -y        add without asking, to this project
            -g        every project (~/.claude/skills), not just this one
            --agents  also .agents/skills, for Codex, Cursor and other agents
            --force   replace a different copy of the skill already there
+           --accept-warning
+                     install a skill that amdahl.ai's security review flagged,
+                     after printing the warning. Without it, a terminal asks
+                     (Cancel or Install anyway); -y, --json or no terminal
+                     stops (exit 9)
 
 Global options:
   --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the default profile)

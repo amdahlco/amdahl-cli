@@ -1,6 +1,6 @@
 // src/commands/skills.ts
 //
-// `amdahl skills add <publisher>/<skill> [-g] [--agents] [--force] [--site <origin>]`:
+// `amdahl skills add <publisher>/<skill> [-g] [--agents] [--force] [--accept-warning] [--site <origin>]`:
 // install one skill from the library at amdahl.ai/skills. Reads the skill's
 // one-entry index (Agent Skills Discovery v0.2.0) at
 // `<site>/skills/<publisher>/<skill>/.well-known/agent-skills/index.json`,
@@ -15,7 +15,10 @@
 // request has a deadline and a size cap. Writes `./.claude/skills/<name>/`
 // (`-g`: under the home folder; `--agents`: `.agents/skills` too), never
 // replaces a different skill of the same name without `--force`, and writes
-// nothing on a refusal.
+// nothing on a refusal. A skill amdahl.ai's security review flagged carries a
+// warning in its index entry: it is printed before anything is written, and
+// the install goes on only with `--accept-warning` or a person's "Install
+// anyway" at a terminal (./skills-warning.ts).
 
 import { createHash } from 'node:crypto'
 import { parseDocument } from 'yaml'
@@ -25,6 +28,7 @@ import { printable } from '../output'
 import { ArchiveError, readSkillArchive, type SkillArchive } from '../tar-gz'
 import { agentsInUse, guide, nextStep, runningAgent, shouldGuide, skillsFolders, type SkillSummary } from './skills-guide'
 import { planInstall, refuseClashes, skillDirs, writeInstall, type FilePlan, type Payload, type Targets } from './skills-install'
+import { WARNING_FIELD, confirmWarning, readWarning, warningJson, type SkillWarning } from './skills-warning'
 
 /** Where the skills library is published. */
 export const DEFAULT_SKILLS_SITE = 'https://amdahl.ai'
@@ -49,7 +53,7 @@ export const MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
 
 const DIGEST_RE = /^sha256:([0-9a-f]{64})$/i
 const FRONT_MATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/
-const USAGE = 'Usage: amdahl skills add <publisher>/<skill> [-y] [-g] [--agents] [--force] [--site <origin>]'
+const USAGE = 'Usage: amdahl skills add <publisher>/<skill> [-y] [-g] [--agents] [--force] [--accept-warning] [--site <origin>]'
 
 /** One skill in the library. */
 export interface SkillRef {
@@ -173,11 +177,14 @@ export interface IndexEntry {
   sha256: string
   description: string
   version?: string
+  /** The security review's warning, checked (UNREADABLE_WARNING when the field is there but could not be read). */
+  warning?: SkillWarning
 }
 
 /**
  * Find the skill's entry in its index and return its type, the URL of its
- * SKILL.md or archive (on the site) and the sha256 hex the download must match.
+ * SKILL.md or archive (on the site), the sha256 hex the download must match
+ * and the security warning, when it carries one.
  */
 export function readIndex(body: Buffer, indexUrl: string, ref: SkillRef, site: string): IndexEntry {
   const bad = (why: string) => new CliError('invalid_index', `The index at ${indexUrl} ${why}.`, EXIT.general)
@@ -206,12 +213,14 @@ export function readIndex(body: Buffer, indexUrl: string, ref: SkillRef, site: s
   if (!url) throw bad(`gives ${ref.skill} no file URL`)
   if (url.origin !== site) throw bad(`points ${ref.skill} at ${url.origin}, not ${site}`)
   const version = typeof entry.version === 'string' ? printable(entry.version) : ''
+  const warning = readWarning(entry[WARNING_FIELD])
   return {
     type,
     url: url.href,
     sha256: digest[1].toLowerCase(),
     description: typeof entry.description === 'string' ? entry.description : '',
     ...(version ? { version } : {}),
+    ...(warning ? { warning } : {}),
   }
 }
 
@@ -340,6 +349,13 @@ export async function skillsAdd(ctx: Ctx, args: string[]): Promise<number> {
   const { entry, payload, meta } = fetched
   const { url, sha256 } = entry
 
+  // A flagged skill: the warning is shown before any question or write, and only a yes goes on.
+  const { warning } = entry
+  if (warning) {
+    if (!(await confirmWarning(ctx, ref, site, warning))) return EXIT.ok
+    if (guided) ctx.out.info('')
+  }
+
   const agent = runningAgent(ctx)
   let targets: Targets
   let seen: string[] = []
@@ -372,7 +388,15 @@ export async function skillsAdd(ctx: Ctx, args: string[]): Promise<number> {
     f.action === 'unchanged' ? `Already up to date: ${f.path}` : `${f.action === 'wrote' ? 'Wrote' : 'Replaced'} ${f.path}${count}`
   )
   if (contents && plan.some((f) => f.action !== 'unchanged')) lines.push(...contents.map((p) => `  ${p}`))
-  const result = { ok: true, publisher: ref.publisher, skill: ref.skill, url, digest: `sha256:${sha256}`, files: plan }
+  const result = {
+    ok: true,
+    publisher: ref.publisher,
+    skill: ref.skill,
+    url,
+    digest: `sha256:${sha256}`,
+    files: plan,
+    ...(warning ? { warning: warningJson(warning, site, ref) } : {}),
+  }
   if (guided) {
     // A person gets the skills folders in the short form they would type; the file list is for scripts.
     const changed = plan.filter((f) => f.action !== 'unchanged')
