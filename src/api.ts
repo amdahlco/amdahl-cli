@@ -18,6 +18,8 @@
 // revokes the key, happens in the console. The secret never reaches the
 // server: the CLI sends only its sha256 hash and display prefix.
 
+import { VERSION } from './version'
+
 // ── Types ───────────────────────────────────────────────────────────────────
 
 /** A workspace as the CLI endpoints name it. */
@@ -294,7 +296,11 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
     options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
   ): Promise<T> {
     const { method = 'GET', body, headers = {} } = options
-    const allHeaders: Record<string, string> = { ...headers, Authorization: `Bearer ${token}` }
+    const allHeaders: Record<string, string> = {
+      ...headers,
+      Authorization: `Bearer ${token}`,
+      'User-Agent': `amdahl-cli/${VERSION}`,
+    }
     if (body && !allHeaders['Content-Type']) allHeaders['Content-Type'] = 'application/json'
 
     const response = await fetch(`${baseUrl}${path}`, {
