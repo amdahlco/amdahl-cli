@@ -6,6 +6,7 @@ import { describe, expect, it, afterEach } from 'vitest'
 import { createCtx, resolveCredential } from '../src/context'
 import { createOutput } from '../src/output'
 import { createSecretStore, keychainAccount } from '../src/secrets'
+import { VERSION } from '../src/version'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { API_KEY, startMockServer, type MockServer } from './helpers/mock-server'
 
@@ -73,6 +74,14 @@ describe('credential precedence', () => {
     expect(ctxFor(io).apiUrl).toBe('https://staging.amdahl.ai')
     expect(ctxFor(io, { 'api-url': 'http://localhost:3001' }).apiUrl).toBe('http://localhost:3001')
     expect((await cli(io, 'status', '--api-url', 'ftp://x', '--json')).code).toBe(2)
+  })
+
+  it('an API call names the CLI and its version in the user agent', async () => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: API_KEY })
+    expect((await cli(io, 'whoami', '--json')).code).toBe(0)
+    const call = server.log.find((entry) => entry.path === '/api/platform/v1/me/context')
+    expect(call?.headers['user-agent']).toBe(`amdahl-cli/${VERSION}`)
   })
 
   it('never sends a profile token to a different host', async () => {
