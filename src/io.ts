@@ -188,7 +188,7 @@ export function realIo(): Io {
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     loginTimeoutMs: 900_000,
-    browserGraceMs: 5_000,
+    browserGraceMs: 60_000,
     fetchTimeoutMs: 15_000,
   }
 }

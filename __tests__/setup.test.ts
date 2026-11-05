@@ -397,7 +397,7 @@ describe('bare amdahl: the browser sign-in', () => {
     expect(r.stdout).toContain('✓ Signed in · Acme\n')
   })
 
-  it('prints the link once the browser has not answered for a few seconds, and keeps waiting', async () => {
+  it('prints the link once the browser has not answered for a while, and keeps waiting', async () => {
     const io = await atServer(false)
     io.browserGraceMs = 20
     slowBrowser(io, 200)
