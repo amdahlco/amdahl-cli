@@ -1,7 +1,7 @@
 // The keychain adapters never put the secret on argv (spy on every spawn),
 // and the file fallback is owner-only with a one-time warning.
 
-import { statSync } from 'node:fs'
+import { chmodSync, statSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
 import type { ProcessResult } from '../src/io'
 import {
@@ -113,18 +113,34 @@ describe('stored entries with a bad expiry read as signed out', () => {
 })
 
 describe('file fallback', () => {
-  it('falls back to an owner-only file with a one-time warning', async () => {
+  it('falls back to an owner-only file, said once and only under --verbose', async () => {
     const io = fakeIo({ AMDAHL_CREDENTIAL_STORE: undefined })
     io.platform = 'linux' // the default fake run fails like a missing secret-tool
-    const store = createSecretStore(io)
+    await createSecretStore(io).set('h/quiet', SECRETS)
+    expect(io.err.join('')).toBe('')
+    await createSecretStore(io).delete('h/quiet')
+    const store = createSecretStore(io, { verbose: true })
     await store.set('h/a', SECRETS)
     await store.set('h/b', SECRETS)
     expect(statSync(credentialsPath(io)).mode & 0o777).toBe(0o600)
-    const warnings = io.err.join('').match(/Warning: no OS keychain/g) ?? []
-    expect(warnings).toHaveLength(1)
+    const notes = io.err.join('').match(/No OS keychain here, so your sign-in is stored in /g) ?? []
+    expect(notes).toHaveLength(1)
     expect(await store.get('h/a')).toEqual(SECRETS)
     await store.delete('h/a')
     expect(await store.get('h/a')).toBeNull()
+  })
+
+  it('a credentials file other users can read is made owner-only, with a warning even without --verbose', async () => {
+    const io = fakeIo({ AMDAHL_CREDENTIAL_STORE: 'file' })
+    await createSecretStore(io).set('h/a', SECRETS)
+    chmodSync(credentialsPath(io), 0o644)
+    const store = createSecretStore(io)
+    expect(await store.get('h/a')).toEqual(SECRETS)
+    expect(await store.get('h/a')).toEqual(SECRETS)
+    expect(statSync(credentialsPath(io)).mode & 0o777).toBe(0o600)
+    expect(io.err.join('')).toBe(
+      `Warning: ${credentialsPath(io)} was readable by other users on this machine. It is private now; to be safe, run \`amdahl logout\` and sign in again.\n`
+    )
   })
 
   it('AMDAHL_CREDENTIAL_STORE=file skips the keychain and the warning', async () => {

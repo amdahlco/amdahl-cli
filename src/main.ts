@@ -62,7 +62,8 @@ export async function runCli(argv: string[], io: Io): Promise<number> {
     }
     if (!parsed.command) {
       // Bare `amdahl` in a person's terminal is the guided setup; anything else keeps the usage and exit 2.
-      if (argv.length === 0 && shouldSetUp(io)) return await setup(createCtx(io, out, parsed.flags))
+      // `--verbose` is the one flag the setup takes.
+      if (argv.every((a) => a === '--verbose') && shouldSetUp(io)) return await setup(createCtx(io, out, parsed.flags))
       io.stderr(USAGE)
       return EXIT.usage
     }

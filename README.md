@@ -60,36 +60,48 @@ The quickest way to start is `npx amdahl` with nothing after it, in a
 terminal. It walks you through setup:
 
 ```
-Amdahl, predictive ML for GTM
-Found on this machine: Claude Code ✓  Cursor ✓  Codex –
-Set up Amdahl in:
+$ npx amdahl
+Amdahl · predictive ML for GTM
+Set up in:
 > [x] Claude Code
-  [x] Cursor
+  [ ] Cursor
   [ ] Codex
 (Use the arrow keys, Space to tick or untick, then Enter)
+Opening your browser…
+✓ Signed in · Acme
+✓ Added to Claude Code
+Try it: in Claude Code, run /mcp once to connect, then say "make this email sound less like AI"
 ```
 
 It finds Claude Code, Cursor and Codex by their command on your PATH
 (`claude`, `cursor`, `codex`) or their folder in your home folder (`.claude`,
 `.cursor`, `.codex`), and ticks the ones it finds. Enter accepts. If you are
-not signed in, it signs you in through the browser first; otherwise it prints
-`Signed in as <email> (workspace: <name>)`. If the server rejects a key set in
+not signed in, it signs you in through the browser first. It prints the
+sign-in link only if the browser could not be opened, or nothing came back
+within 5 seconds, and it waits up to 15 minutes, so someone new can create
+their workspace on the way and land back in the same setup. If the server
+rejects a key set in
 `AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`, `--api-key`), it says
 so and skips the browser sign-in, since that key would still win. Then it
-runs `amdahl install` for each client you ticked. A client that fails prints
+sets up each client you ticked the way `amdahl install` does, one line each.
+A client that fails prints
 its error and the rest still run; the exit code is the first failure's. It
-ends with something to try, such as
-`Try it: open Claude Code and say "make this email sound less like AI"`
-(for Codex, it first says to run `codex mcp login amdahl`).
+ends with something to try in the first client it set up. Each client then
+signs in to Amdahl itself, once, the first time it connects: `/mcp` in
+Claude Code, `codex mcp login amdahl` for Codex (always named, since the CLI
+cannot tell whether it ran), and Cursor asks on first use.
+`npx amdahl --verbose` also prints the files it wrote, the profile and where
+the sign-in is stored.
 Run it again once you are set up and it says `You're set up in Claude Code
-and Cursor.` with the same line to try, and asks nothing; if it cannot reach
+and Cursor.` with a line to try, and asks nothing; if it cannot reach
 Amdahl to check your sign-in, it still says so. Ctrl+C at the question stops
 it with nothing written (exit 130).
 
 It only does this for a person at a terminal. When stdin, stdout or stderr
 (where the menu draws) is not a terminal, `CI` is set, an agent runs it (`CLAUDECODE` or `CURSOR_AGENT` is
-set), `AMDAHL_NO_PROMPT=1` is set, or any flag is given (such as `--json`),
-bare `amdahl` prints the usage to stderr and exits 2, as before.
+set), `AMDAHL_NO_PROMPT=1` is set, or any flag other than `--verbose` is given
+(such as `--json`), bare `amdahl` prints the usage to stderr and exits 2, as
+before.
 
 To connect one AI client yourself, run `amdahl install claude-code` (or `codex`,
 `cursor`). It adds the Amdahl MCP server and also installs the Amdahl skill,
@@ -124,8 +136,14 @@ amdahl install claude-code   # connect an AI client and add the Amdahl skill (al
 amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to this project
 ```
 
-No workspace yet? `amdahl login` prints the console link where you can
-create one or join the beta. The CLI never creates or joins a workspace.
+No workspace yet? With a work email, the sign-in page offers to create your
+company's workspace and then finishes signing you in. If you signed in with
+an address Amdahl can't use, the browser tab and the terminal say what to do
+and link a new sign-in ("Sign in with your work email", "Sign in again" for
+a subdomain address, "Try again" once you've confirmed your email), and the
+terminal keeps waiting for it. Anything
+else exits 5 with the one next step (ask your company's admins, try again
+tomorrow, and so on). The CLI itself never creates or joins a workspace.
 
 On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 
@@ -325,7 +343,8 @@ the default profile). `whoami` names the source that won. `keys create`,
   tokens.
 - Tokens: the OS keychain (service `amdahl-cli`; macOS `security`, Linux
   `secret-tool`), passed on stdin, never on argv. Without a keychain:
-  `credentials.json` (mode 0600) with a one-time warning.
+  `credentials.json` (mode 0600), named under `--verbose`. If that file is
+  ever readable by other users, the CLI makes it owner-only and warns.
   `AMDAHL_CREDENTIAL_STORE=keychain|file` forces either.
 
 ## Keys

@@ -19,6 +19,7 @@ const GLOBAL_OPTIONS: OptionSpec = {
   'no-color': { type: 'boolean' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
+  verbose: { type: 'boolean' },
 }
 
 /** Each command's own flags, keyed by its canonical name. */
@@ -146,6 +147,7 @@ export const USAGE = `Usage: amdahl <command> [options]
 What you can do:
   amdahl                         Set up Claude Code, Cursor or Codex, in a terminal: it asks
                                  which, signs you in, and runs install for each one
+                                 (--verbose shows the files and profile it used)
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
   amdahl status                  Check that this workspace is set up to optimize
   amdahl keys create --name ci   Make an API key for a server or CI
@@ -186,6 +188,7 @@ Global options:
   --api-key <key>    Use an API key for this command (prefer AMDAHL_KEY: argv is visible to other users)
   --json             Data on stdout as JSON, messages on stderr
   --no-color         No colour (NO_COLOR is honoured too)
+  --verbose          Say more: files written, the profile, where the sign-in is stored
   -h, --help         Show this help
   -v, --version      Show the version
 `

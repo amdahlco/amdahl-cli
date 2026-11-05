@@ -183,18 +183,78 @@ export function authorizeUrl(
   return `${endpoints.authorization_endpoint}?${query}`
 }
 
+/**
+ * The refusals a sign-in with another email fixes. The browser keeps the
+ * address it signed in with (amdahl-app redeems its refresh cookie silently),
+ * so running the CLI again alone would hit the same refusal: the loopback page
+ * links the server's sign-in page instead, which returns to the same
+ * authorize request while the terminal keeps waiting.
+ */
+export const SIGN_IN_AGAIN: Record<string, { why: string; label: string }> = {
+  not_work_email: { why: 'Amdahl needs your work email.', label: 'Sign in with your work email' },
+  subdomain_email: { why: 'Use your main company email.', label: 'Sign in again' },
+  email_unconfirmed: { why: 'Check your inbox to confirm your email, then try again.', label: 'Try again' },
+}
+
+/** What the terminal says while the loopback waits: the page's words, then its link. */
+export function signInAgainLine(reason: string, url: string): string {
+  const again = SIGN_IN_AGAIN[reason]
+  return again ? `${again.why} ${again.label}:\n\n  ${url}\n` : ''
+}
+
+/**
+ * The sentence for a sign-in with no workspace. `reason` is the server's
+ * self-serve answer (`authorizeWorkspaces.ts` in amdahl-app): each names the
+ * one thing to do. Without a reason, the two original messages, frozen by the
+ * contract: create one, or join the waitlist.
+ */
+export function noBusinessMessage(consoleUrl: string, mayCreate: boolean, reason?: string): string {
+  switch (reason) {
+    case undefined:
+      return mayCreate
+        ? `You're signed in, but you don't have a workspace yet. Create one at ${consoleUrl}/new, then run \`amdahl login\` again.`
+        : `You're signed in, but you don't have access yet. Amdahl is in beta: join the waitlist at ${consoleUrl}/new, then run \`amdahl login\` again once you're in.`
+    case 'domain_has_workspace':
+      return `Your company already has an Amdahl workspace. Ask its admins to let you in at ${consoleUrl}, then try again.`
+    case 'invite_only':
+      return "Your company's Amdahl workspace is invite-only. Ask a colleague in it to invite you, then try again."
+    case 'not_work_email':
+    case 'subdomain_email':
+    case 'email_unconfirmed': {
+      const again = SIGN_IN_AGAIN[reason]!
+      return `${again.why} Run this again, then choose "${again.label}" in the browser.`
+    }
+    case 'daily_cap':
+      return "Amdahl isn't taking more new workspaces today. Try again tomorrow."
+    case 'paused':
+      return 'New workspaces are paused for now. Try again later.'
+    case 'domain_used':
+      return 'Your company already used its free workspace. Email hello@amdahl.ai to get access.'
+    default:
+      return "Amdahl couldn't create your workspace just now. Try again in a few minutes."
+  }
+}
+
 /** What arrived on the loopback callback. */
 export type CallbackResult =
   | { kind: 'code'; code: string }
-  | { kind: 'no_business'; mayCreate: boolean }
+  | { kind: 'no_business'; mayCreate: boolean; reason?: string }
   | { kind: 'error'; error: string; description?: string }
 
 /** A listening loopback server. */
 export interface Loopback {
   redirectUri: string
-  /** Resolves with the first callback, or rejects with a CliError. */
+  /** Resolves with the first callback that ends the sign-in, or rejects with a CliError. */
   result: Promise<CallbackResult>
+  /** The authorize URL the browser was sent to: a sign-in with another email returns to it. */
+  setAuthorizeUrl: (url: string) => void
   close: () => void
+}
+
+/** The server's sign-in page, returning to the same authorize request. */
+function signInAgainUrl(authorize: string): string {
+  const url = new URL(authorize)
+  return `${url.origin}/login?redirect=${encodeURIComponent(`${url.pathname}${url.search}`)}`
 }
 
 /** Escape text for the loopback page. */
@@ -208,15 +268,27 @@ function page(body: string): string {
 
 /**
  * Listen on `127.0.0.1:<port>/callback` (port 0 picks a free one). The first
- * request carrying our `state` settles `result`; a different `state` rejects
- * it with exit 1 `state_mismatch`. Times out with exit 1 `login_timeout`.
+ * request carrying our `state` settles `result`, except a refusal another
+ * email fixes ({@link SIGN_IN_AGAIN}): its page links the server's sign-in
+ * page, `onSignInAgain` tells the terminal, and the listener keeps waiting
+ * for the retry. A different `state` rejects with exit 1 `state_mismatch`.
+ * Times out with exit 1 `login_timeout`, or exit 5 with the refusal when the
+ * retry never came.
  *
  * @param consoleUrl - the console origin the no-workspace page links to.
  */
 export async function startLoopback(
   io: Io,
-  input: { port: number; state: string; consoleUrl: string; timeoutMs: number }
+  input: {
+    port: number
+    state: string
+    consoleUrl: string
+    timeoutMs: number
+    onSignInAgain?: (reason: string, url: string) => void
+  }
 ): Promise<Loopback> {
+  let authorize: string | null = null
+  let refused: string | null = null
   let settle!: (value: CallbackResult) => void
   let fail!: (err: CliError) => void
   const result = new Promise<CallbackResult>((resolve, reject) => {
@@ -244,9 +316,18 @@ export async function startLoopback(
     const error = url.searchParams.get('error')
     const code = url.searchParams.get('code')
     if (error === 'no_business') {
-      const newUrl = `${input.consoleUrl}/new`
-      send(200, `<p>You're signed in, but you don't have a workspace yet.</p><p><a href="${html(newUrl)}">Go to ${html(newUrl)}</a>, then run <code>amdahl login</code> again.</p>`)
-      settle({ kind: 'no_business', mayCreate: url.searchParams.get('may_create') === 'true' })
+      const mayCreate = url.searchParams.get('may_create') === 'true'
+      const reason = url.searchParams.get('reason') ?? undefined
+      const again = reason ? SIGN_IN_AGAIN[reason] : undefined
+      if (again && authorize) {
+        refused = reason!
+        const retry = signInAgainUrl(authorize)
+        send(200, `<p>${html(again.why)}</p><p><a href="${html(retry)}">${html(again.label)} →</a></p>`)
+        input.onSignInAgain?.(reason!, retry)
+        return
+      }
+      send(200, `<p>${html(noBusinessMessage(input.consoleUrl, mayCreate, reason))}</p>`)
+      settle({ kind: 'no_business', mayCreate, reason })
     } else if (error) {
       send(400, `<p>Sign-in failed: ${html(url.searchParams.get('error_description') ?? error)}</p>`)
       settle({ kind: 'error', error, description: url.searchParams.get('error_description') ?? undefined })
@@ -274,12 +355,19 @@ export async function startLoopback(
   })
   const port = (server.address() as AddressInfo).port
   const timer = setTimeout(() => {
-    fail(new CliError('login_timeout', 'Timed out waiting for the browser sign-in.', EXIT.general, 'Run `amdahl login` again.'))
+    fail(
+      refused
+        ? new CliError('no_business', noBusinessMessage(input.consoleUrl, false, refused), EXIT.noWorkspace)
+        : new CliError('login_timeout', 'Timed out waiting for the browser sign-in.', EXIT.general, 'Run `amdahl login` again.')
+    )
   }, input.timeoutMs)
   timer.unref?.()
   return {
     redirectUri: `http://127.0.0.1:${port}/callback`,
     result,
+    setAuthorizeUrl: (url) => {
+      authorize = url
+    },
     close: () => {
       clearTimeout(timer)
       server.closeAllConnections?.()

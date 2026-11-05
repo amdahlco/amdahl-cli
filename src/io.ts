@@ -64,8 +64,8 @@ export interface Io {
   /** Run synchronous file writes that Ctrl+C must not cut off half way. */
   uninterruptible: <T>(fn: () => T) => T
   run: RunProcess
-  /** Open a URL in the default browser. Never throws. */
-  openUrl: (url: string) => Promise<void>
+  /** Open a URL in the default browser. Never throws; false when the opener failed. */
+  openUrl: (url: string) => Promise<boolean>
   homedir: string
   /** The working directory: where a project's skills go. */
   cwd: string
@@ -73,8 +73,10 @@ export interface Io {
   hostname: string
   now: () => number
   sleep: (ms: number) => Promise<void>
-  /** How long `login` waits for the browser callback. */
+  /** How long `login` waits for the browser callback: long enough to create a workspace on the way. */
   loginTimeoutMs: number
+  /** How long sign-in waits for the browser before it prints the link. */
+  browserGraceMs: number
   /** How long `skills add` waits for each request, body included. */
   fetchTimeoutMs: number
 }
@@ -177,7 +179,7 @@ export function realIo(): Io {
     run: runProcess,
     openUrl: async (url) => {
       const [cmd, args] = openerFor(process.platform, url)
-      await runProcess(cmd, args)
+      return (await runProcess(cmd, args)).code === 0
     },
     homedir: homedir(),
     cwd: process.cwd(),
@@ -185,7 +187,8 @@ export function realIo(): Io {
     hostname: hostname(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
-    loginTimeoutMs: 300_000,
+    loginTimeoutMs: 900_000,
+    browserGraceMs: 5_000,
     fetchTimeoutMs: 15_000,
   }
 }
