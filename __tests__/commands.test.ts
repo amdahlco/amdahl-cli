@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import pkg from '../package.json'
 import { parseCommandLine } from '../src/args'
+import { whatAmdahlDid } from '../src/commands/optimize'
 import { EXIT, exitForHttp } from '../src/errors'
 import { generateKey } from '../src/keygen'
 import { SKILL_TEXT, isShippedSkill } from '../src/skill'
@@ -162,20 +163,57 @@ describe('optimize', () => {
     writeFileSync(join(io.homedir, 'a.md'), 'draft')
     const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
     expect(r.stdout).toBe('Hi Sam, ...\n')
-    expect(r.stderr).toContain(
+    expect(r.stderr).toBe(
       [
         'Wrote it from your facts.',
-        'What Amdahl did:',
-        '  Cut the opener and 3 more sentences, replaced the ask.',
-        '  Checked each sentence against what you sent: rewrote 2, removed 1 that nothing backed. Reworked the ask, its weakest part.',
-        '  Left out 3 things: None of the facts gives a customer count. Nothing you sent backs it.',
-        "  Checked against your customers' conversations (20 quotes); removed 1 claim nothing there backs; 1 claim nothing there backs is still in it, so check before sending; built on Amdahl's record of the recipient.",
+        'Cut the opener and 3 more sentences, replaced the ask.',
+        "Checked against 20 customer quotes; cut 1 unbacked claim; built on Amdahl's own records.",
+        'Check before sending: 1 unbacked claim is still in it.',
+        '',
       ].join('\n')
     )
 
     const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
     expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
-    expect(json.stderr).not.toContain('What Amdahl did')
+    expect(json.stderr).not.toContain('Check before sending')
+  })
+
+  it('what Amdahl did: steps and omitted reasons fill the lines left, at most three', () => {
+    const steps = [
+      { node: 'w3', changed: true, reason: 'repaired:2,deleted:1,open:1' },
+      { node: 'w5', changed: true, reason: 'repaired:ask' },
+      { node: 'w6', changed: true, reason: 'kept_before_repair:adds_claim' },
+    ]
+    const omitted = [
+      { what: 'a', why: 'None of the facts gives a customer count' },
+      { what: 'b', why: 'Nothing you sent backs it.' },
+      { what: 'c', why: 'Nothing you sent backs it.' },
+    ]
+    expect(whatAmdahlDid({ steps, omitted })).toEqual([
+      'Checked each sentence: rewrote 2, cut 1 nothing backed. Reworked the ask.',
+      'Left out 3 things: None of the facts gives a customer count. (1 more reason in --json)',
+      'Check before sending: 1 sentence problem still open.',
+    ])
+    // With more to say, the step trail is the first line dropped.
+    const full = whatAmdahlDid({
+      what_changed: 'Cut the opener',
+      steps,
+      omitted,
+      evidence: { requested: 'workspace', used: true },
+      unsupported_claims: [],
+      context_use: { rows: [{ bucket: 'external', verdict: 'pass' }, { bucket: 'internal', verdict: 'fail' }] },
+    })
+    expect(full).toEqual([
+      'Cut the opener.',
+      "Checked against your customers' conversations; found no unbacked claims; built on what their company or market published.",
+      'Check before sending: 1 sentence problem still open.',
+    ])
+    // A kept draft is not what the steps describe.
+    expect(whatAmdahlDid({ unchanged: true, steps })).toEqual([])
+    // An unknown second-check reason still asks for a check.
+    expect(whatAmdahlDid({ steps: [{ node: 'w6', changed: true, reason: 'something_new' }] })).toEqual([
+      'Check before sending: a second check flagged it.',
+    ])
   })
 
   it('prints no what-Amdahl-did section when the response says nothing worth reading', async () => {
@@ -211,10 +249,9 @@ describe('optimize', () => {
     const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
     expect(r.stderr).toBe(
       [
-        'What Amdahl did:',
-        '  Wrote this[2J message from the context you sent.',
-        '  A second check had a concern: it leaves out your ask. Read it before sending.',
-        "  Your customers' conversations were not read: the workspace has no conversations yet.",
+        'Wrote this[2J message from the context you sent.',
+        'Customer conversations not read: the workspace has none yet.',
+        'Check before sending: a second check says it leaves out your ask.',
         '',
       ].join('\n')
     )

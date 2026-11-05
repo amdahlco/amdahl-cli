@@ -5,7 +5,7 @@
 // retry and a 180 s timeout. A result of `ok: false` (the optimizer was
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
-// summary and a short "What Amdahl did" section go to stderr.
+// summary and up to three lines on what Amdahl did go to stderr.
 
 import { readFileSync } from 'node:fs'
 import { apiClient, resolveCredential, toCliError, str, type Ctx } from '../context'
@@ -59,7 +59,8 @@ function withTimeout<T>(promise: Promise<T>, ms: number, file: string): Promise<
 }
 
 // `steps` carries codes (`w3` with `repaired:2,deleted:1`); these say them in
-// plain words. A code with no entry here is left out of the section.
+// plain words. An unknown weakest part or second-check reason still prints its
+// generic line, since the API says to treat an unknown veto as a refusal.
 const WEAKEST: Record<string, string> = {
   rules: 'how it follows your rules',
   ask: 'the ask',
@@ -83,10 +84,13 @@ const CONCERNS: Record<string, string> = {
 }
 
 const EVIDENCE_MISSED: Record<string, string> = {
-  corpus_empty: 'the workspace has no conversations yet',
+  corpus_empty: 'the workspace has none yet',
   evidence_unavailable: 'this environment does not read them',
-  evidence_read_failed: 'reading them failed, so a retry may work',
+  evidence_read_failed: 'the read failed, so a retry may work',
 }
+
+/** At most this many lines, so the section never buries the message. */
+const MAX_LINES = 3
 
 function list(value: unknown): Record<string, unknown>[] | null {
   return Array.isArray(value) ? value.filter((v): v is Record<string, unknown> => !!v && typeof v === 'object') : null
@@ -108,10 +112,10 @@ function plural(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`
 }
 
-/** The `steps` trail as one plain line, or '' when no step changed the message. */
-function stepsLine(steps: Record<string, unknown>[]): string {
-  const said: string[] = []
+/** What the `steps` trail did to the message, and what it left for the sender to check. */
+function readSteps(steps: Record<string, unknown>[]): { did: string; check: string[] } {
   const reasonOf = (node: string) => text(steps.find((s) => s.node === node)?.reason)
+  const changed = (node: string) => steps.some((s) => s.node === node && s.changed === true)
   const counts = new Map(
     reasonOf('w3')
       .split(',')
@@ -119,77 +123,85 @@ function stepsLine(steps: Record<string, unknown>[]): string {
       .filter(([, n]) => /^\d+$/.test(n ?? ''))
       .map(([code, n]) => [code, Number(n)] as const)
   )
+  const did: string[] = []
   const fixed = [
     counts.get('repaired') ? `rewrote ${counts.get('repaired')}` : '',
-    counts.get('deleted') ? `removed ${counts.get('deleted')} that nothing backed` : '',
-    counts.get('open') ? `${counts.get('open')} still open` : '',
+    counts.get('deleted') ? `cut ${counts.get('deleted')} nothing backed` : '',
   ].filter(Boolean)
-  if (fixed.length) said.push(`Checked each sentence against what you sent: ${fixed.join(', ')}.`)
+  if (fixed.length) did.push(`Checked each sentence: ${fixed.join(', ')}.`)
   const repair = reasonOf('w5')
-  if (steps.some((s) => s.node === 'w5' && s.changed === true) && repair.startsWith('repaired:')) {
+  if (changed('w5') && repair.startsWith('repaired:')) {
     const weakest = WEAKEST[repair.slice('repaired:'.length)]
-    said.push(weakest ? `Reworked ${weakest}, its weakest part.` : 'Reworked its weakest part.')
+    did.push(weakest ? `Reworked ${weakest}.` : 'Reworked its weakest part.')
   }
+  const check: string[] = []
+  const open = counts.get('open')
+  if (open) check.push(`${plural(open, 'sentence problem')} still open`)
   const second = reasonOf('w6')
-  if (steps.some((s) => s.node === 'w6' && s.changed === true)) {
-    if (second.startsWith('kept_before_repair')) said.push('A second check kept the version from before that rework.')
-    else {
-      const concern = CONCERNS[second]
-      said.push(`A second check had a concern${concern ? `: ${concern}` : ''}. Read it before sending.`)
-    }
+  if (changed('w6') && !second.startsWith('kept_before_repair')) {
+    const concern = CONCERNS[second]
+    check.push(concern ? `a second check says ${concern}` : 'a second check flagged it')
   }
-  return said.join(' ')
+  return { did: did.join(' '), check }
 }
 
 /**
- * Up to four plain lines on what the run did and why, from fields the API
- * already returns: `what_changed`, `steps`, `omitted`, `evidence` (with
- * `lift.quotes`), `unsupported_claims` and `context_use`. Empty when none of
- * them says anything worth reading.
+ * At most three short lines on what the run did, from fields the API already
+ * returns: `what_changed`, `evidence` (with `lift.quotes`), `unsupported_claims`,
+ * `context_use`, `steps` and `omitted`. What the sender must check before
+ * sending is never dropped; past that, the lines worth most are kept. They print
+ * with what Amdahl did first and the check last. Empty when nothing says
+ * anything worth reading.
  */
 export function whatAmdahlDid(result: Record<string, unknown>): string[] {
-  const lines: string[] = []
+  // A kept draft is not the version the steps describe.
+  const steps = result.unchanged === true ? { did: '', check: [] } : readSteps(list(result.steps) ?? [])
+  const check = [...steps.check]
 
-  const changed = text(result.what_changed)
-  if (changed) lines.push(sentence(changed))
-
-  const steps = stepsLine(list(result.steps) ?? [])
-  if (steps) lines.push(steps)
-
-  const omitted = list(result.omitted) ?? []
-  if (omitted.length) {
-    const whys = [...new Set(omitted.map((o) => text(o.why)).filter(Boolean))]
-    const shown = whys.slice(0, 2).map(sentence).join(' ')
-    const more = whys.length > 2 ? ` (${whys.length - 2} more in --json)` : ''
-    lines.push(`Left out ${plural(omitted.length, 'thing')}${shown ? `: ${shown}` : '.'}${more}`)
-  }
-
-  const checks: string[] = []
+  const grounded: string[] = []
   const evidence = record(result.evidence)
   const claims = list(result.unsupported_claims)
   if (evidence?.used === true) {
     const quotes = record(result.lift)?.quotes
-    const read = typeof quotes === 'number' && quotes > 0 ? ` (${plural(quotes, 'quote')})` : ''
-    checks.push(`Checked against your customers' conversations${read}`)
+    grounded.push(
+      typeof quotes === 'number' && quotes > 0
+        ? `Checked against ${plural(quotes, 'customer quote')}`
+        : "Checked against your customers' conversations"
+    )
     if (claims) {
       const still = claims.filter((c) => c.status !== 'removed').length
       const removed = claims.length - still
-      if (removed) checks.push(`removed ${plural(removed, 'claim')} nothing there backs`)
-      if (still) checks.push(`${plural(still, 'claim')} nothing there backs ${still === 1 ? 'is' : 'are'} still in it, so check before sending`)
-      if (!claims.length) checks.push('every claim is backed')
+      if (removed) grounded.push(`cut ${plural(removed, 'unbacked claim')}`)
+      if (!claims.length) grounded.push('found no unbacked claims')
+      if (still) check.unshift(`${plural(still, 'unbacked claim')} ${still === 1 ? 'is' : 'are'} still in it`)
     }
   } else if (evidence?.requested === 'workspace' && EVIDENCE_MISSED[text(evidence.reason)]) {
-    checks.push(`Your customers' conversations were not read: ${EVIDENCE_MISSED[text(evidence.reason)]}`)
+    grounded.push(`Customer conversations not read: ${EVIDENCE_MISSED[text(evidence.reason)]}`)
   }
   const used = (list(record(result.context_use)?.rows) ?? []).filter((r) => r.verdict === 'pass')
   const sources = [
-    used.some((r) => r.bucket === 'internal') ? "Amdahl's record of the recipient" : '',
+    used.some((r) => r.bucket === 'internal') ? "Amdahl's own records" : '',
     used.some((r) => r.bucket === 'external') ? 'what their company or market published' : '',
   ].filter(Boolean)
-  if (sources.length) checks.push(`${checks.length ? 'built' : 'Built'} on ${sources.join(' and ')}`)
-  if (checks.length) lines.push(sentence(checks.join('; ')))
+  if (sources.length) grounded.push(`${grounded.length ? 'built' : 'Built'} on ${sources.join(' and ')}`)
 
-  return lines
+  const omitted = list(result.omitted) ?? []
+  const whys = [...new Set(omitted.map((o) => text(o.why)).filter(Boolean))]
+  const more = whys.length > 1 ? ` (${plural(whys.length - 1, 'more reason')} in --json)` : ''
+  const leftOut = omitted.length
+    ? `Left out ${plural(omitted.length, 'thing')}${whys[0] ? `: ${sentence(whys[0])}` : '.'}${more}`
+    : ''
+
+  // In print order, each with its rank: 1 is kept first.
+  const lines = [
+    { rank: 2, line: sentence(text(result.what_changed)) },
+    { rank: 3, line: grounded.length ? sentence(grounded.join('; ')) : '' },
+    { rank: 5, line: steps.did },
+    { rank: 4, line: leftOut },
+    { rank: 1, line: check.length ? sentence(`Check before sending: ${check.join('; ')}`) : '' },
+  ].filter((l) => l.line && l.line !== '.')
+  const kept = new Set([...lines].sort((a, b) => a.rank - b.rank).slice(0, MAX_LINES))
+  return lines.filter((l) => kept.has(l)).map((l) => l.line)
 }
 
 /** `amdahl optimize [<file>... | -]`. */
@@ -263,7 +275,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       else if (typeof result.summary === 'string') out.info(result.summary)
       out.result({}, String(result.message ?? ''))
       const did = whatAmdahlDid(result)
-      if (did.length) out.info(['What Amdahl did:', ...did.map((line) => `  ${line}`)].join('\n'))
+      if (did.length) out.info(did.join('\n'))
     }
   }
   if (out.json) out.result(results.length === 1 ? (results[0] as unknown as Record<string, unknown>) : (results as unknown as Record<string, unknown>[]))
