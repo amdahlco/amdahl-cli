@@ -167,15 +167,15 @@ describe('optimize', () => {
       [
         'Wrote it from your facts.',
         'Cut the opener and 3 more sentences, replaced the ask.',
-        "Checked against 20 customer quotes; cut 1 unbacked claim; built on Amdahl's own records.",
-        'Check before sending: 1 unbacked claim is still in it.',
+        "Removed 1 claim your calls don't back.",
+        "Flagged 1 claim your calls don't back; check before sending.",
         '',
       ].join('\n')
     )
 
     const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
     expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
-    expect(json.stderr).not.toContain('Check before sending')
+    expect(json.stderr).not.toContain('Flagged')
   })
 
   it('what Amdahl did: steps and omitted reasons fill the lines left, at most three', () => {
@@ -190,29 +190,40 @@ describe('optimize', () => {
       { what: 'c', why: 'Nothing you sent backs it.' },
     ]
     expect(whatAmdahlDid({ steps, omitted })).toEqual([
-      'Checked each sentence: rewrote 2, cut 1 nothing backed. Reworked the ask.',
+      'Rewrote 2 sentences and cut 1 that nothing backed. Reworked the ask.',
       'Left out 3 things: None of the facts gives a customer count. (1 more reason in --json)',
-      'Check before sending: 1 sentence problem still open.',
+      'Flagged 1 sentence problem it could not fix; check before sending.',
     ])
     // With more to say, the step trail is the first line dropped.
     const full = whatAmdahlDid({
       what_changed: 'Cut the opener',
       steps,
-      omitted,
       evidence: { requested: 'workspace', used: true },
       unsupported_claims: [],
       context_use: { rows: [{ bucket: 'external', verdict: 'pass' }, { bucket: 'internal', verdict: 'fail' }] },
     })
     expect(full).toEqual([
       'Cut the opener.',
-      "Checked against your customers' conversations; found no unbacked claims; built on what their company or market published.",
-      'Check before sending: 1 sentence problem still open.',
+      "Checked every claim against your calls and found none they don't back.",
+      'Flagged 1 sentence problem it could not fix; check before sending.',
+    ])
+    expect(
+      whatAmdahlDid({
+        evidence: { requested: 'workspace', used: true },
+        lift: { quotes: 20 },
+        unsupported_claims: [{ status: 'removed' }, { status: 'removed' }],
+        context_use: { rows: [{ bucket: 'internal', verdict: 'pass' }, { bucket: 'external', verdict: 'pass' }] },
+      })
+    ).toEqual([
+      'Checked every claim against your calls (20 quotes).',
+      "Removed 2 claims your calls don't back.",
+      "Used 2 sources: Amdahl's own records and what their company or market published.",
     ])
     // A kept draft is not what the steps describe.
     expect(whatAmdahlDid({ unchanged: true, steps })).toEqual([])
     // An unknown second-check reason still asks for a check.
     expect(whatAmdahlDid({ steps: [{ node: 'w6', changed: true, reason: 'something_new' }] })).toEqual([
-      'Check before sending: a second check flagged it.',
+      'Flagged a second-check concern; check before sending.',
     ])
   })
 
@@ -250,8 +261,8 @@ describe('optimize', () => {
     expect(r.stderr).toBe(
       [
         'Wrote this[2J message from the context you sent.',
-        'Customer conversations not read: the workspace has none yet.',
-        'Check before sending: a second check says it leaves out your ask.',
+        'Skipped checking claims against your calls: the workspace has none yet.',
+        'Flagged a second-check concern (it leaves out your ask); check before sending.',
         '',
       ].join('\n')
     )
