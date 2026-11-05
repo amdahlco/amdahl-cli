@@ -158,7 +158,13 @@ export function fileStore(io: Io, note: boolean): SecretStore {
     if (checked || io.platform === 'win32' || !existsSync(path)) return
     checked = true
     if ((statSync(path).mode & 0o077) === 0) return
-    chmodSync(path, 0o600)
+    try {
+      chmodSync(path, 0o600)
+    } catch {
+      // Not ours to change (left by `sudo`, say): warn, and still read it.
+      io.stderr(`Warning: ${path} can be read by other users on this machine, and this CLI cannot change that. Run \`chmod 600 ${path}\` as its owner.\n`)
+      return
+    }
     io.stderr(
       `Warning: ${path} was readable by other users on this machine. It is private now; to be safe, run \`amdahl logout\` and sign in again.\n`
     )

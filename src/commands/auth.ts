@@ -25,8 +25,10 @@ import {
   exchangeCode,
   noBusinessMessage,
   revokeToken,
+  signInAgainLine,
   startLoopback,
 } from '../oauth'
+import { printable } from '../output'
 import { keychainAccount } from '../secrets'
 
 export { noBusinessMessage }
@@ -66,17 +68,24 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
   const endpoints = await discover(ctx.apiUrl)
   const pkce = createPkce()
   const consoleUrl = consoleUrlFor(io, ctx.apiUrl)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let linkShown = false
   const loopback = await startLoopback(io, {
     port,
     state: pkce.state,
     consoleUrl,
     timeoutMs: io.loginTimeoutMs,
+    // The page carries the way on; the authorize link would only sign in as the same address again.
+    onSignInAgain: (reason) => {
+      clearTimeout(timer)
+      linkShown = true
+      out.info(signInAgainLine(reason))
+    },
   })
-  let timer: ReturnType<typeof setTimeout> | undefined
   try {
     const url = authorizeUrl(endpoints, { redirectUri: loopback.redirectUri, pkce, workspace })
+    loopback.setAuthorizeUrl(url)
     out.event({ event: 'open_url', url })
-    let linkShown = false
     const showLink = (lead: string) => {
       if (linkShown) return
       linkShown = true
@@ -102,7 +111,7 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
     if (callback.kind === 'error') {
       throw new CliError(
         callback.error,
-        `Sign-in failed: ${callback.description ?? callback.error}`,
+        `Sign-in failed: ${printable(callback.description ?? callback.error)}`,
         callback.error === 'access_denied' ? EXIT.forbidden : EXIT.general
       )
     }
@@ -137,7 +146,7 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
 
 /** The sentence `amdahl login` ends with (and `amdahl --verbose` shows). */
 export function signedInLine(ctx: Ctx, { profile, me, workspace }: SignedIn): string {
-  return `Signed in as ${me.email ?? me.user_id} to ${ctx.out.bold(workspace.name)} (${workspace.slug}). Profile: ${profile}.`
+  return `Signed in as ${printable(me.email ?? me.user_id)} to ${ctx.out.bold(printable(workspace.name))} (${printable(workspace.slug)}). Profile: ${profile}.`
 }
 
 /** `amdahl login`. */

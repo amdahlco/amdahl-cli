@@ -20,8 +20,14 @@ export interface LoggedRequest {
 }
 
 export interface MockOptions {
-  /** Answer authorize with `error=no_business` (and the self-serve `reason`, when given). */
-  noBusiness?: { mayCreate: boolean; reason?: string }
+  /**
+   * Answer authorize with `error=no_business` (and the self-serve `reason`,
+   * when given): every time, or only the first `times` (a person who then
+   * signs in with another email).
+   */
+  noBusiness?: { mayCreate: boolean; reason?: string; times?: number }
+  /** The workspace name /me/context answers (default Acme). */
+  workspaceName?: string
   /**
    * A signed-in person with no workspace yet: authorize answers the self-serve
    * create page until `POST /oauth/authorize/self-serve` creates one, which
@@ -65,6 +71,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   const revoked: string[] = []
   const keyRequests = new Map<string, Record<string, unknown>>()
   let workspaceCreated = false
+  let refusals = 0
   const codes = new Map<string, { challenge: string; redirectUri: string }>()
   const keys = [
     {
@@ -145,7 +152,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         }
         const state = options.wrongState ? 'not-the-state' : (q.get('state') ?? '')
         let location: string
-        if (options.noBusiness) {
+        if (options.noBusiness && (options.noBusiness.times === undefined || refusals++ < options.noBusiness.times)) {
           const reason = options.noBusiness.reason ? `&reason=${options.noBusiness.reason}` : ''
           location = `${redirectUri}?error=no_business&may_create=${options.noBusiness.mayCreate}${reason}&state=${state}`
         } else {
@@ -222,7 +229,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
           scopes: ['data:read', 'connections:read', 'messages:execute'],
           auth_method: kind,
           email: 'dev@example.com',
-          workspace: { id: BIZ, name: 'Acme', slug: 'acme' },
+          workspace: { id: BIZ, name: options.workspaceName ?? 'Acme', slug: 'acme' },
           role: 'editor',
           client_id: kind === 'oauth' ? 'amdahl-cli' : null,
         })

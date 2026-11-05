@@ -88,7 +88,8 @@ A client that fails prints
 its error and the rest still run; the exit code is the first failure's. It
 ends with something to try in the first client it set up. Each client then
 signs in to Amdahl itself, once, the first time it connects: `/mcp` in
-Claude Code, `codex mcp login amdahl` for Codex, and Cursor asks on first use.
+Claude Code, `codex mcp login amdahl` for Codex (always named, since the CLI
+cannot tell whether it ran), and Cursor asks on first use.
 `npx amdahl --verbose` also prints the files it wrote, the profile and where
 the sign-in is stored.
 Run it again once you are set up and it says `You're set up in Claude Code
@@ -136,10 +137,12 @@ amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to t
 ```
 
 No workspace yet? With a work email, the sign-in page offers to create your
-company's workspace and then finishes signing you in. Otherwise `amdahl login`
-exits 5 with the one next step (ask your company's admins, sign in with a
-work email, try again tomorrow, and so on). The CLI itself never creates or
-joins a workspace.
+company's workspace and then finishes signing you in. If you signed in with
+an address Amdahl can't use (a personal email, a subdomain address, or one
+that isn't confirmed), the browser tab offers "Use a different email" (or
+"Sign in again") and the terminal keeps waiting for that sign-in. Anything
+else exits 5 with the one next step (ask your company's admins, try again
+tomorrow, and so on). The CLI itself never creates or joins a workspace.
 
 On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 

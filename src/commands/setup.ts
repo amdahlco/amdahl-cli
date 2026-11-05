@@ -21,6 +21,7 @@
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT } from '../errors'
 import type { Io } from '../io'
+import { printable } from '../output'
 import { browserSignIn, signedInLine } from './auth'
 import { detectClients, installClient, isInstalled, type Client, type Step } from './install'
 import { joinNames } from './skills-guide'
@@ -33,13 +34,15 @@ const SHOWN: { client: Client; name: string }[] = [
 ]
 
 /**
- * The first thing to ask the client once it is set up. `connect` adds the
- * client's own one-time sign-in, for a client this run just pointed at Amdahl.
+ * The first thing to ask the client once it is set up. `connect` adds Claude
+ * Code's one-time sign-in, for a Claude Code this run just pointed at Amdahl.
+ * Codex always gets its login: whether it ran cannot be told from here, and
+ * whoever runs the setup again because Codex "does not work" needs it most.
  */
 export function tryItLine(name: string, connect = false): string {
   const ask = 'say "make this email sound less like AI"'
   if (connect && name === 'Claude Code') return `Try it: in Claude Code, run /mcp once to connect, then ${ask}`
-  if (connect && name === 'Codex') return `Try it: run \`codex mcp login amdahl\`, then open Codex and ${ask}`
+  if (name === 'Codex') return `Try it: run \`codex mcp login amdahl\`, then open Codex and ${ask}`
   return `Try it: open ${name} and ${ask}`
 }
 
@@ -76,7 +79,7 @@ async function signIn(ctx: Ctx): Promise<SignIn> {
   }
   try {
     const me = await call(() => apiClient(ctx, credential).cli.whoami())
-    return { kind: 'in', email: me.email ?? me.user_id, workspace: me.workspace?.name ?? me.business_id }
+    return { kind: 'in', email: printable(me.email ?? me.user_id), workspace: printable(me.workspace?.name ?? me.business_id) }
   } catch (err) {
     if (!(err instanceof CliError && err.exit === EXIT.unauthenticated)) throw err
     return credential.source === 'profile' ? { kind: 'out' } : { kind: 'rejected', source: credential.source }
@@ -131,7 +134,7 @@ export async function setup(ctx: Ctx): Promise<number> {
     detail(`Signed in as ${who.email}.`)
   } else if (who.kind === 'out') {
     const signedIn = await browserSignIn(ctx)
-    say(`✓ Signed in · ${signedIn.workspace.name}`)
+    say(`✓ Signed in · ${printable(signedIn.workspace.name)}`)
     detail(signedInLine(ctx, signedIn))
   } else {
     const name = who.source === 'flag' ? '--api-key' : who.source.slice('env:'.length)

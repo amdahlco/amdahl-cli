@@ -2,7 +2,7 @@
 // the exact message), a state mismatch (exit 1) and the timeout (exit 1).
 
 import { createHash } from 'node:crypto'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { authorizeUrl, consoleUrlFor, createPkce } from '../src/oauth'
 import { realIo } from '../src/io'
 import { cli, fakeIo, followAuthorize } from './helpers/fake-io'
@@ -64,7 +64,6 @@ describe('the loopback answer', () => {
   it.each<[string, string]>([
     ['domain_has_workspace', 'Your company already has an Amdahl workspace. Ask its admins to let you in at https://console.example.com, then try again.'],
     ['invite_only', "Your company's Amdahl workspace is invite-only. Ask a colleague in it to invite you, then try again."],
-    ['not_work_email', 'Amdahl needs a work email. Try again and sign in with your company address.'],
     ['daily_cap', "Amdahl isn't taking more new workspaces today. Try again tomorrow."],
     ['something_new', "Amdahl couldn't create your workspace just now. Try again in a few minutes."],
   ])('no_business with reason=%s exits 5 with that reason\'s next step, on the terminal and the page', async (reason, message) => {
@@ -81,6 +80,58 @@ describe('the loopback answer', () => {
     expect(r.json.error).toEqual({ code: 'no_business', message })
     // The page reaches the browser whole, though the CLI stops at once.
     expect(await page).toContain(message.replace(/'/g, '&#39;'))
+  })
+
+  describe.each<[string, string, string]>([
+    ['not_work_email', "That address isn't a work email. Amdahl needs your company address.", 'Use a different email'],
+    ['subdomain_email', "Amdahl needs your address at your company's main domain.", 'Use a different email'],
+    ['email_unconfirmed', "Your email isn't confirmed yet. Sign in again with the code we email you.", 'Sign in again'],
+  ])('no_business with reason=%s: another sign-in fixes it', (reason, why, label) => {
+    /** A browser that keeps the loopback page of each callback it reaches. */
+    function browser(io: ReturnType<typeof fakeIo>) {
+      const pages: string[] = []
+      const visit = async (url: string) => {
+        const res = await fetch(url, { redirect: 'manual' })
+        pages.push(await fetch(res.headers.get('location') ?? '').then((r) => r.text()))
+      }
+      io.openUrl = async (url) => {
+        io.opened.push(url)
+        await visit(url)
+        return true
+      }
+      return { pages, visit }
+    }
+
+    it('keeps waiting, and the page links the sign-in page back to the same request, so the retry lands in this run', async () => {
+      server = await startMockServer({ noBusiness: { mayCreate: false, reason, times: 1 } })
+      const io = fakeIo({ AMDAHL_API_URL: server.url })
+      // Long enough for the refusal to arrive first under a loaded test run; the wait below outlasts it.
+      io.browserGraceMs = 500
+      const { pages, visit } = browser(io)
+      const run = cli(io, 'login')
+      await vi.waitFor(() => expect(pages).toHaveLength(1))
+      const authorize = new URL(io.opened[0]!)
+      const again = `${server.url}/login?redirect=${encodeURIComponent(`${authorize.pathname}${authorize.search}`)}`
+      expect(pages[0]).toContain(`<p>${why.replace(/'/g, '&#39;')}</p><p><a href="${again.replace(/&/g, '&#38;')}">${label}</a></p><p>Your terminal is still waiting.</p>`)
+      // Past the grace period: the authorize link, which would only sign in as the same address again, never prints.
+      await new Promise((r) => setTimeout(r, 700))
+      // The server's sign-in page returns the browser to the same authorize URL, signed in as someone else.
+      await visit(io.opened[0]!)
+      const r = await run
+      expect(r.code).toBe(0)
+      expect(r.stderr).toBe(`Opening your browser…\n${why} In the browser, choose "${label}". Still waiting…\n`)
+      expect(r.stdout).toContain('Signed in as dev@example.com')
+    })
+
+    it('when no other sign-in comes, exits 5 with an honest next step', async () => {
+      server = await startMockServer({ noBusiness: { mayCreate: false, reason } })
+      const io = fakeIo({ AMDAHL_API_URL: server.url })
+      io.loginTimeoutMs = 200
+      browser(io)
+      const r = await cli(io, 'login', '--json')
+      expect(r.code).toBe(5)
+      expect(r.json.error).toEqual({ code: 'no_business', message: `${why} Run this again, and in the browser choose "${label}".` })
+    })
   })
 
   it('the link waits for the browser, and --no-browser prints it at once', async () => {

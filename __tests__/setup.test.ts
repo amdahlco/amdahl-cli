@@ -270,6 +270,25 @@ describe('bare amdahl: setting up', () => {
 })
 
 describe('bare amdahl: already set up', () => {
+  it('Codex keeps its login step on a run that changes nothing: whether it ran cannot be told', async () => {
+    const io = await atServer(true)
+    mkdirSync(join(io.homedir, '.codex'))
+    io.answers.push('')
+    expect(lastLine((await cli(io)).stdout)).toBe(CODEX_TRY)
+    const again = await cli(io)
+    expect(io.prompts).toHaveLength(1)
+    expect(again.stdout).toBe(`${TITLE}You're set up in Codex.\n${CODEX_TRY}\n`)
+  })
+
+  it('Codex keeps its login step when the setup asks again and its config is already there', async () => {
+    const io = await atServer(true)
+    mkdirSync(join(io.homedir, '.codex'))
+    writeFileSync(join(io.homedir, '.codex', 'config.toml'), `[mcp_servers.amdahl]\nurl = "${server!.url}/mcp"\n`)
+    io.answers.push('')
+    const r = await cli(io)
+    expect(r.stdout).toBe(`${TITLE}✓ Signed in · Acme\n✓ Codex already has Amdahl\n${CODEX_TRY}\n`)
+  })
+
   it('says so and asks nothing', async () => {
     const io = await atServer(true)
     cursorSetUp(io, `${server!.url}/mcp`)
@@ -413,12 +432,39 @@ describe('bare amdahl: the browser sign-in', () => {
   })
 
   it('a sign-in the server gives no workspace stops with its one next step (exit 5), and sets nothing up', async () => {
-    server = await startMockServer({ noBusiness: { mayCreate: false, reason: 'not_work_email' } })
+    server = await startMockServer({ noBusiness: { mayCreate: false, reason: 'invite_only' } })
     const io = terminal({ AMDAHL_API_URL: server.url })
     io.answers.push('3')
     const r = await cli(io)
     expect(r.code).toBe(5)
-    expect(r.stderr).toContain('Error: Amdahl needs a work email. Try again and sign in with your company address.\n')
+    expect(r.stderr).toContain("Error: Your company's Amdahl workspace is invite-only. Ask a colleague in it to invite you, then try again.\n")
     expect(existsSync(join(io.homedir, '.codex'))).toBe(false)
+  })
+
+  it('a personal email: the page offers another sign-in, and the setup finishes in the same run', async () => {
+    server = await startMockServer({ noBusiness: { mayCreate: false, reason: 'not_work_email', times: 1 } })
+    const io = terminal({ AMDAHL_API_URL: server.url })
+    // First visit: refused. The person picks "Use a different email", which returns to the same authorize URL.
+    slowBrowser(io, 0, true, async (url) => {
+      await followAuthorize(url)
+      await followAuthorize(url)
+    })
+    io.answers.push('3')
+    const r = await cli(io)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toContain(`That address isn't a work email. Amdahl needs your company address. In the browser, choose "Use a different email". Still waiting…\n`)
+    expect(r.stdout).toBe(`${TITLE}✓ Signed in · Acme\n✓ Added to Codex\n${CODEX_TRY}\n`)
+  })
+
+  it('prints no control characters from the server: a workspace name cannot drive the terminal', async () => {
+    server = await startMockServer({ workspaceName: 'Acme\u001b]0;pwned\u0007\u001b[2J' })
+    const io = terminal({ AMDAHL_API_URL: server.url })
+    io.answers.push('3')
+    const r = await cli(io, '--verbose')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('✓ Signed in · Acme]0;pwned[2J\n')
+    expect(r.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f]/)
+    const again = await cli(io)
+    expect(again.stdout).not.toMatch(/[\u0000-\u0009\u000b-\u001f]/)
   })
 })
