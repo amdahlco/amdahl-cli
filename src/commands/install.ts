@@ -3,7 +3,8 @@
 // `amdahl install claude-code|codex|cursor [--print] [--force]`: point an MCP
 // client at `<api>/mcp` and put the Amdahl skill (the capability map) in the
 // client's user skills folder. NEVER writes a token: every client signs in over
-// OAuth on first use. `--print` only prints what it would run or write. An
+// OAuth on first use. A client that already points at Amdahl is left as it is
+// (for Claude Code, `claude mcp add` is skipped), and the skill still goes in. `--print` only prints what it would run or write. An
 // existing skill file that an earlier release wrote is upgraded; one the user
 // edited is kept unless `--force`.
 
@@ -64,6 +65,31 @@ export async function detectClients(ctx: Ctx): Promise<Record<Client, boolean>> 
 }
 
 /**
+ * True when Claude Code already has an `amdahl` server at `mcpUrl`, by the
+ * `URL:` line of `claude mcp get amdahl`. Its output is never printed: it can
+ * hold the server's headers, an API key among them.
+ */
+async function claudeHasAmdahl(ctx: Ctx, mcpUrl: string): Promise<boolean> {
+  const res = await ctx.io.run('claude', ['mcp', 'get', 'amdahl'])
+  return res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`)
+}
+
+/**
+ * Run the file reads and writes of one config update. A failure that is not
+ * already a CliError (EACCES, ENOTDIR, a folder where the file should be)
+ * becomes `write_failed` (exit 1) that names the file, not a network error.
+ */
+function updateConfig<T>(path: string, fn: () => T): T {
+  try {
+    return fn()
+  } catch (err) {
+    if (err instanceof CliError) throw err
+    const reason = err instanceof Error ? err.message : String(err)
+    throw new CliError('write_failed', `Could not update ${path} (${reason}).`, EXIT.general)
+  }
+}
+
+/**
  * True when `install <client>` would change nothing: the client already
  * points at Amdahl and its skill is current (or is the person's own edit,
  * which `install` keeps). Writes nothing and never prints what it ran: the
@@ -74,11 +100,7 @@ export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
   const current = existsSync(skill) ? readFileSync(skill, 'utf8') : null
   if (current === null || (current !== SKILL_TEXT && isShippedSkill(current))) return false
   const mcpUrl = `${ctx.apiUrl}/mcp`
-  if (client === 'claude-code') {
-    if (!(await onPath(ctx, 'claude'))) return false
-    const res = await ctx.io.run('claude', ['mcp', 'get', 'amdahl'])
-    return res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`)
-  }
+  if (client === 'claude-code') return (await onPath(ctx, 'claude')) && (await claudeHasAmdahl(ctx, mcpUrl))
   if (client === 'codex') {
     const path = codexConfigPath(ctx.io.homedir)
     return existsSync(path) && codexHasAmdahl(readFileSync(path, 'utf8'))
@@ -161,6 +183,11 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
       const notes = print ? [] : ['`claude` is not on your PATH. Run the command above once it is installed.']
       return { data: { ok: true, client, action: 'printed', command }, human: command, notes }
     }
+    // `claude mcp add` fails when the server is already there, so check first:
+    // otherwise someone with Amdahl in Claude Code but no skill would never get it.
+    if (await claudeHasAmdahl(ctx, mcpUrl)) {
+      return { data: { ok: true, client, action: 'unchanged', command }, human: `Claude Code already has Amdahl at ${mcpUrl}; nothing changed.`, notes: [] }
+    }
     const res = await io.run('claude', args)
     if (res.code !== 0) {
       throw new CliError('install_failed', `\`${command}\` failed: ${res.stderr.trim() || `exit ${res.code}`}`, EXIT.general)
@@ -174,14 +201,16 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
     if (print) {
       return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${block}`, notes: [] }
     }
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : ''
-    if (codexHasAmdahl(current)) {
-      return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already has [mcp_servers.amdahl]; nothing changed.`, notes: [] }
-    }
-    mkdirSync(dirname(path), { recursive: true })
-    const sep = current.length === 0 ? '' : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n'
-    writeFileSync(path, `${current}${sep}${block}`)
-    return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Run \`codex mcp login amdahl\` to sign in.`, notes: [] }
+    return updateConfig(path, (): Step => {
+      const current = existsSync(path) ? readFileSync(path, 'utf8') : ''
+      if (codexHasAmdahl(current)) {
+        return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already has [mcp_servers.amdahl]; nothing changed.`, notes: [] }
+      }
+      mkdirSync(dirname(path), { recursive: true })
+      const sep = current.length === 0 ? '' : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n'
+      writeFileSync(path, `${current}${sep}${block}`)
+      return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Run \`codex mcp login amdahl\` to sign in.`, notes: [] }
+    })
   }
 
   // cursor
@@ -190,23 +219,25 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
   if (print) {
     return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${JSON.stringify({ mcpServers: { amdahl: entry } }, null, 2)}`, notes: [] }
   }
-  let config: Record<string, unknown> = {}
-  if (existsSync(path)) {
-    const raw = readFileSync(path, 'utf8')
-    if (raw.trim()) {
-      try {
-        config = JSON.parse(raw) as Record<string, unknown>
-      } catch {
-        throw new CliError('invalid_config', `${path} is not valid JSON; not changing it.`, EXIT.general)
+  return updateConfig(path, (): Step => {
+    let config: Record<string, unknown> = {}
+    if (existsSync(path)) {
+      const raw = readFileSync(path, 'utf8')
+      if (raw.trim()) {
+        try {
+          config = JSON.parse(raw) as Record<string, unknown>
+        } catch {
+          throw new CliError('invalid_config', `${path} is not valid JSON; not changing it.`, EXIT.general)
+        }
       }
     }
-  }
-  const servers = (config.mcpServers && typeof config.mcpServers === 'object' ? config.mcpServers : {}) as Record<string, unknown>
-  if (JSON.stringify(servers.amdahl) === JSON.stringify(entry)) {
-    return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already points at ${mcpUrl}; nothing changed.`, notes: [] }
-  }
-  config.mcpServers = { ...servers, amdahl: entry }
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`)
-  return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Cursor asks you to sign in on first use.`, notes: [] }
+    const servers = (config.mcpServers && typeof config.mcpServers === 'object' ? config.mcpServers : {}) as Record<string, unknown>
+    if (JSON.stringify(servers.amdahl) === JSON.stringify(entry)) {
+      return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already points at ${mcpUrl}; nothing changed.`, notes: [] }
+    }
+    config.mcpServers = { ...servers, amdahl: entry }
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`)
+    return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Cursor asks you to sign in on first use.`, notes: [] }
+  })
 }
