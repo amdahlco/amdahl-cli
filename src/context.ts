@@ -78,7 +78,7 @@ export function createCtx(io: Io, out: Output, flags: Ctx['flags']): Ctx {
     profile,
     apiUrl: normaliseApiUrl(rawApi),
     nonInteractive: !io.stdinIsTTY || io.env.AMDAHL_NO_PROMPT === '1',
-    secrets: () => (store ??= createSecretStore(io)),
+    secrets: () => (store ??= createSecretStore(io, { verbose: flags.verbose === true })),
     saveConfig: () => saveConfig(io, config),
   }
 }

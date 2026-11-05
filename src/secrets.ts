@@ -2,8 +2,9 @@
 //
 // Where OAuth tokens live. The OS keychain first (service `amdahl-cli`,
 // account `<api_host>/<profile>`): macOS through `security`, Linux through
-// `secret-tool`. Without one, an owner-only `credentials.json`, announced by a
-// one-time warning when that file is first created. AMDAHL_CREDENTIAL_STORE
+// `secret-tool`. Without one, an owner-only `credentials.json`, announced
+// under --verbose when that file is first created. A credentials file other
+// users can read is always a warning, and is made owner-only. AMDAHL_CREDENTIAL_STORE
 // (`keychain` or `file`) forces either.
 //
 // THE SECRET NEVER GOES ON ARGV. Any local user can read another process's
@@ -12,7 +13,7 @@
 // reads the secret from stdin. Pinned by __tests__/secrets.test.ts, which spies
 // on every spawn.
 
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { configDir, writePrivateJson } from './config'
 import { CliError, EXIT } from './errors'
@@ -143,15 +144,28 @@ function readCredentials(path: string): CredentialsFile {
 }
 
 /**
- * The owner-only file store.
+ * The owner-only file store. A file other users can read (copied in, or
+ * chmod-ed) is made owner-only on the first read, with a warning: the tokens
+ * in it may have been seen.
  *
  * @param io - the process boundary.
- * @param warn - whether creating the file prints the one-time warning.
+ * @param note - whether creating the file says where the sign-in went.
  */
-export function fileStore(io: Io, warn: boolean): SecretStore {
+export function fileStore(io: Io, note: boolean): SecretStore {
   const path = credentialsPath(io)
+  let checked = false
+  const checkMode = () => {
+    if (checked || io.platform === 'win32' || !existsSync(path)) return
+    checked = true
+    if ((statSync(path).mode & 0o077) === 0) return
+    chmodSync(path, 0o600)
+    io.stderr(
+      `Warning: ${path} was readable by other users on this machine. It is private now; to be safe, run \`amdahl logout\` and sign in again.\n`
+    )
+  }
   return {
     async get(account) {
+      checkMode()
       return asSecrets(readCredentials(path).accounts[account])
     },
     async set(account, secrets) {
@@ -159,10 +173,8 @@ export function fileStore(io: Io, warn: boolean): SecretStore {
       const file = readCredentials(path)
       file.accounts[account] = secrets
       writePrivateJson(path, file)
-      if (!existed && warn) {
-        io.stderr(
-          `Warning: no OS keychain is available, so your sign-in is stored in ${path} (readable only by you).\n`
-        )
+      if (!existed && note) {
+        io.stderr(`No OS keychain here, so your sign-in is stored in ${path} (readable only by you).\n`)
       }
     },
     async delete(account) {
@@ -177,11 +189,11 @@ export function fileStore(io: Io, warn: boolean): SecretStore {
 
 /**
  * The store for this machine. With a keychain, writes go to the keychain and
- * fall back to the file (with the warning) when the keychain refuses; reads
- * and deletes cover both, so a token written during a fallback is still found
- * and still removed.
+ * fall back to the file (said under `verbose`) when the keychain refuses;
+ * reads and deletes cover both, so a token written during a fallback is still
+ * found and still removed.
  */
-export function createSecretStore(io: Io): SecretStore {
+export function createSecretStore(io: Io, options: { verbose?: boolean } = {}): SecretStore {
   const forced = io.env.AMDAHL_CREDENTIAL_STORE
   if (forced && forced !== 'keychain' && forced !== 'file') {
     throw new CliError(
@@ -215,7 +227,7 @@ export function createSecretStore(io: Io): SecretStore {
     }
   }
 
-  const file = fileStore(io, true)
+  const file = fileStore(io, options.verbose === true)
   if (!keychain) return file
   return {
     async get(account) {

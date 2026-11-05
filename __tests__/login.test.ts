@@ -4,7 +4,8 @@
 import { createHash } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { authorizeUrl, consoleUrlFor, createPkce } from '../src/oauth'
-import { cli, fakeIo } from './helpers/fake-io'
+import { realIo } from '../src/io'
+import { cli, fakeIo, followAuthorize } from './helpers/fake-io'
 import { startMockServer, type MockServer } from './helpers/mock-server'
 
 let server: MockServer | null = null
@@ -58,6 +59,47 @@ describe('the loopback answer', () => {
     expect(r.stderr).toContain(
       "You're signed in, but you don't have access yet. Amdahl is in beta: join the waitlist at https://console.example.com/new, then run `amdahl login` again once you're in."
     )
+  })
+
+  it.each<[string, string]>([
+    ['domain_has_workspace', 'Your company already has an Amdahl workspace. Ask its admins to let you in at https://console.example.com, then try again.'],
+    ['invite_only', "Your company's Amdahl workspace is invite-only. Ask a colleague in it to invite you, then try again."],
+    ['not_work_email', 'Amdahl needs a work email. Try again and sign in with your company address.'],
+    ['daily_cap', "Amdahl isn't taking more new workspaces today. Try again tomorrow."],
+    ['something_new', "Amdahl couldn't create your workspace just now. Try again in a few minutes."],
+  ])('no_business with reason=%s exits 5 with that reason\'s next step, on the terminal and the page', async (reason, message) => {
+    server = await startMockServer({ noBusiness: { mayCreate: false, reason } })
+    const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_CONSOLE_URL: 'https://console.example.com' })
+    let page: Promise<string> = Promise.resolve('')
+    io.openUrl = async (url) => {
+      const res = await fetch(url, { redirect: 'manual' })
+      page = fetch(res.headers.get('location') ?? '').then((r) => r.text())
+      return true
+    }
+    const r = await cli(io, 'login', '--json')
+    expect(r.code).toBe(5)
+    expect(r.json.error).toEqual({ code: 'no_business', message })
+    // The page reaches the browser whole, though the CLI stops at once.
+    expect(await page).toContain(message.replace(/'/g, '&#39;'))
+  })
+
+  it('the link waits for the browser, and --no-browser prints it at once', async () => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url })
+    const quick = await cli(io, 'login')
+    expect(quick.stderr).toBe('Opening your browser…\n')
+    io.openUrl = async () => false
+    const noBrowser = cli(io, 'login', '--no-browser')
+    await new Promise((r) => setTimeout(r, 50))
+    const url = /(http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?\S+)/.exec(io.err.join(''))?.[1]
+    expect(io.err.join('')).toMatch(/^Open this URL in a browser to sign in:\n\n {2}http/)
+    await followAuthorize(url ?? '')
+    expect((await noBrowser).code).toBe(0)
+  })
+
+  it('waits 15 minutes for the browser by default: time to create a workspace on the way', () => {
+    expect(realIo().loginTimeoutMs).toBe(900_000)
+    expect(realIo().browserGraceMs).toBe(5_000)
   })
 
   it('a state mismatch exits 1 and saves nothing', async () => {

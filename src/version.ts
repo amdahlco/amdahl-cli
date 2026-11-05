@@ -3,4 +3,4 @@
 // The CLI version. Kept equal to package.json by a test in __tests__/commands.test.ts.
 
 /** The `amdahl --version` string. */
-export const VERSION = '0.3.0'
+export const VERSION = '0.3.1'

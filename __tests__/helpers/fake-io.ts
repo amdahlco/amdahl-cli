@@ -80,6 +80,7 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     openUrl: async (url) => {
       io.opened.push(url)
       await followAuthorize(url)
+      return true
     },
     homedir: dir,
     cwd,
@@ -88,6 +89,7 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     now: () => Date.now(),
     sleep: async () => {},
     loginTimeoutMs: 3000,
+    browserGraceMs: 2000,
     fetchTimeoutMs: 100,
   }
   return io

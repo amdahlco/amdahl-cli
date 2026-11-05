@@ -114,10 +114,16 @@ export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
 }
 
 /** What one install step did: its JSON, its human lines, and stderr notes. */
-interface Step {
+export interface Step {
   data: Record<string, unknown>
   human: string
   notes: string[]
+}
+
+/** Point `client` at Amdahl and add the skill, printing nothing: the caller reports both steps. */
+export async function installClient(ctx: Ctx, client: Client, print: boolean): Promise<{ mcp: Step; skill: Step }> {
+  const mcp = await installMcp(ctx, client, print)
+  return { mcp, skill: installSkill(ctx, client, print) }
 }
 
 /** `amdahl install <client>`. */
@@ -126,9 +132,7 @@ export async function install(ctx: Ctx, args: string[]): Promise<number> {
   if (!client || args.length > 1 || !CLIENTS.includes(client)) {
     throw usageError(`Usage: amdahl install ${CLIENTS.join('|')} [--print] [--force]`)
   }
-  const print = ctx.flags.print === true
-  const mcp = await installMcp(ctx, client, print)
-  const skill = installSkill(ctx, client, print)
+  const { mcp, skill } = await installClient(ctx, client, ctx.flags.print === true)
   const human = [mcp.human.replace(/\n$/, ''), skill.human].filter(Boolean).join('\n')
   ctx.out.result({ ...mcp.data, skill: skill.data }, human)
   for (const note of [...mcp.notes, ...skill.notes]) ctx.out.info(note)

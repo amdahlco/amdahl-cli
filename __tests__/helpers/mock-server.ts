@@ -20,8 +20,14 @@ export interface LoggedRequest {
 }
 
 export interface MockOptions {
-  /** Answer authorize with `error=no_business`. */
-  noBusiness?: { mayCreate: boolean }
+  /** Answer authorize with `error=no_business` (and the self-serve `reason`, when given). */
+  noBusiness?: { mayCreate: boolean; reason?: string }
+  /**
+   * A signed-in person with no workspace yet: authorize answers the self-serve
+   * create page until `POST /oauth/authorize/self-serve` creates one, which
+   * returns to the same authorize request (as amdahl-app does with V0 on).
+   */
+  selfServe?: boolean
   /** Answer authorize with a different state. */
   wrongState?: boolean
   /** Never answer authorize (the login times out). */
@@ -58,6 +64,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   const issued = { access: [] as string[], refresh: [] as string[] }
   const revoked: string[] = []
   const keyRequests = new Map<string, Record<string, unknown>>()
+  let workspaceCreated = false
   const codes = new Map<string, { challenge: string; redirectUri: string }>()
   const keys = [
     {
@@ -132,16 +139,27 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
           return json(res, 400, { error: 'invalid_request' })
         }
         if (options.hangAuthorize) return json(res, 200, { waiting: true })
+        if (options.selfServe && !workspaceCreated) {
+          res.writeHead(200, { 'Content-Type': 'text/html' }).end(`<form method="post" action="/oauth/authorize/self-serve"><input name="return_to" value="${url.pathname}${url.search}"></form>`)
+          return
+        }
         const state = options.wrongState ? 'not-the-state' : (q.get('state') ?? '')
         let location: string
         if (options.noBusiness) {
-          location = `${redirectUri}?error=no_business&may_create=${options.noBusiness.mayCreate}&state=${state}`
+          const reason = options.noBusiness.reason ? `&reason=${options.noBusiness.reason}` : ''
+          location = `${redirectUri}?error=no_business&may_create=${options.noBusiness.mayCreate}${reason}&state=${state}`
         } else {
           const code = `code_${++n}`
           codes.set(code, { challenge: q.get('code_challenge') ?? '', redirectUri })
           location = `${redirectUri}?code=${code}&state=${state}`
         }
         res.writeHead(302, { Location: location }).end()
+        return
+      }
+
+      if (path === '/oauth/authorize/self-serve' && req.method === 'POST') {
+        workspaceCreated = true
+        res.writeHead(303, { Location: new URLSearchParams(body).get('return_to') ?? '/' }).end()
         return
       }
 

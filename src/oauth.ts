@@ -183,10 +183,43 @@ export function authorizeUrl(
   return `${endpoints.authorization_endpoint}?${query}`
 }
 
+/**
+ * The sentence for a sign-in with no workspace. `reason` is the server's
+ * self-serve answer (`authorizeWorkspaces.ts` in amdahl-app): each names the
+ * one thing to do. Without a reason, the two original messages, frozen by the
+ * contract: create one, or join the waitlist.
+ */
+export function noBusinessMessage(consoleUrl: string, mayCreate: boolean, reason?: string): string {
+  switch (reason) {
+    case undefined:
+      return mayCreate
+        ? `You're signed in, but you don't have a workspace yet. Create one at ${consoleUrl}/new, then run \`amdahl login\` again.`
+        : `You're signed in, but you don't have access yet. Amdahl is in beta: join the waitlist at ${consoleUrl}/new, then run \`amdahl login\` again once you're in.`
+    case 'domain_has_workspace':
+      return `Your company already has an Amdahl workspace. Ask its admins to let you in at ${consoleUrl}, then try again.`
+    case 'invite_only':
+      return "Your company's Amdahl workspace is invite-only. Ask a colleague in it to invite you, then try again."
+    case 'not_work_email':
+      return 'Amdahl needs a work email. Try again and sign in with your company address.'
+    case 'subdomain_email':
+      return "Try again and sign in with your address at your company's main domain."
+    case 'email_unconfirmed':
+      return "Your email isn't confirmed yet. Try again and sign in with the code we email you."
+    case 'daily_cap':
+      return "Amdahl isn't taking more new workspaces today. Try again tomorrow."
+    case 'paused':
+      return 'New workspaces are paused for now. Try again later.'
+    case 'domain_used':
+      return 'Your company already used its free workspace. Email hello@amdahl.ai to get access.'
+    default:
+      return "Amdahl couldn't create your workspace just now. Try again in a few minutes."
+  }
+}
+
 /** What arrived on the loopback callback. */
 export type CallbackResult =
   | { kind: 'code'; code: string }
-  | { kind: 'no_business'; mayCreate: boolean }
+  | { kind: 'no_business'; mayCreate: boolean; reason?: string }
   | { kind: 'error'; error: string; description?: string }
 
 /** A listening loopback server. */
@@ -244,9 +277,10 @@ export async function startLoopback(
     const error = url.searchParams.get('error')
     const code = url.searchParams.get('code')
     if (error === 'no_business') {
-      const newUrl = `${input.consoleUrl}/new`
-      send(200, `<p>You're signed in, but you don't have a workspace yet.</p><p><a href="${html(newUrl)}">Go to ${html(newUrl)}</a>, then run <code>amdahl login</code> again.</p>`)
-      settle({ kind: 'no_business', mayCreate: url.searchParams.get('may_create') === 'true' })
+      const mayCreate = url.searchParams.get('may_create') === 'true'
+      const reason = url.searchParams.get('reason') ?? undefined
+      send(200, `<p>${html(noBusinessMessage(input.consoleUrl, mayCreate, reason))}</p>`)
+      settle({ kind: 'no_business', mayCreate, reason })
     } else if (error) {
       send(400, `<p>Sign-in failed: ${html(url.searchParams.get('error_description') ?? error)}</p>`)
       settle({ kind: 'error', error, description: url.searchParams.get('error_description') ?? undefined })
