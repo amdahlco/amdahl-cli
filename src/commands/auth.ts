@@ -76,10 +76,10 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
     consoleUrl,
     timeoutMs: io.loginTimeoutMs,
     // The page carries the way on; the authorize link would only sign in as the same address again.
-    onSignInAgain: (reason) => {
+    onSignInAgain: (reason, retry) => {
       clearTimeout(timer)
       linkShown = true
-      out.info(signInAgainLine(reason))
+      out.info(signInAgainLine(reason, retry))
     },
   })
   try {

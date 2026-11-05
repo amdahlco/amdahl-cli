@@ -444,7 +444,7 @@ describe('bare amdahl: the browser sign-in', () => {
   it('a personal email: the page offers another sign-in, and the setup finishes in the same run', async () => {
     server = await startMockServer({ noBusiness: { mayCreate: false, reason: 'not_work_email', times: 1 } })
     const io = terminal({ AMDAHL_API_URL: server.url })
-    // First visit: refused. The person picks "Use a different email", which returns to the same authorize URL.
+    // First visit: refused. The person picks "Sign in with your work email →", which returns to the same authorize URL.
     slowBrowser(io, 0, true, async (url) => {
       await followAuthorize(url)
       await followAuthorize(url)
@@ -452,7 +452,7 @@ describe('bare amdahl: the browser sign-in', () => {
     io.answers.push('3')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stderr).toContain(`That address isn't a work email. Amdahl needs your company address. In the browser, choose "Use a different email". Still waiting…\n`)
+    expect(r.stderr).toMatch(/Amdahl needs your work email\. Sign in with your work email:\n\n {2}http:\/\/127\.0\.0\.1:\d+\/login\?redirect=%2Foauth%2Fauthorize%3F\S+\n/)
     expect(r.stdout).toBe(`${TITLE}✓ Signed in · Acme\n✓ Added to Codex\n${CODEX_TRY}\n`)
   })
 

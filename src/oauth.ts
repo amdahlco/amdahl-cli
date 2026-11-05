@@ -191,15 +191,15 @@ export function authorizeUrl(
  * authorize request while the terminal keeps waiting.
  */
 export const SIGN_IN_AGAIN: Record<string, { why: string; label: string }> = {
-  not_work_email: { why: "That address isn't a work email. Amdahl needs your company address.", label: 'Use a different email' },
-  subdomain_email: { why: "Amdahl needs your address at your company's main domain.", label: 'Use a different email' },
-  email_unconfirmed: { why: "Your email isn't confirmed yet. Sign in again with the code we email you.", label: 'Sign in again' },
+  not_work_email: { why: 'Amdahl needs your work email.', label: 'Sign in with your work email' },
+  subdomain_email: { why: 'Use your main company email.', label: 'Sign in again' },
+  email_unconfirmed: { why: 'Check your inbox to confirm your email, then try again.', label: 'Try again' },
 }
 
-/** What the terminal says while the loopback waits for a sign-in with another email. */
-export function signInAgainLine(reason: string): string {
+/** What the terminal says while the loopback waits: the page's words, then its link. */
+export function signInAgainLine(reason: string, url: string): string {
   const again = SIGN_IN_AGAIN[reason]
-  return again ? `${again.why} In the browser, choose "${again.label}". Still waiting…` : ''
+  return again ? `${again.why} ${again.label}:\n\n  ${url}\n` : ''
 }
 
 /**
@@ -222,7 +222,7 @@ export function noBusinessMessage(consoleUrl: string, mayCreate: boolean, reason
     case 'subdomain_email':
     case 'email_unconfirmed': {
       const again = SIGN_IN_AGAIN[reason]!
-      return `${again.why} Run this again, and in the browser choose "${again.label}".`
+      return `${again.why} Run this again, then choose "${again.label}" in the browser.`
     }
     case 'daily_cap':
       return "Amdahl isn't taking more new workspaces today. Try again tomorrow."
@@ -284,7 +284,7 @@ export async function startLoopback(
     state: string
     consoleUrl: string
     timeoutMs: number
-    onSignInAgain?: (reason: string) => void
+    onSignInAgain?: (reason: string, url: string) => void
   }
 ): Promise<Loopback> {
   let authorize: string | null = null
@@ -321,8 +321,9 @@ export async function startLoopback(
       const again = reason ? SIGN_IN_AGAIN[reason] : undefined
       if (again && authorize) {
         refused = reason!
-        send(200, `<p>${html(again.why)}</p><p><a href="${html(signInAgainUrl(authorize))}">${html(again.label)}</a></p><p>Your terminal is still waiting.</p>`)
-        input.onSignInAgain?.(reason!)
+        const retry = signInAgainUrl(authorize)
+        send(200, `<p>${html(again.why)}</p><p><a href="${html(retry)}">${html(again.label)} →</a></p>`)
+        input.onSignInAgain?.(reason!, retry)
         return
       }
       send(200, `<p>${html(noBusinessMessage(input.consoleUrl, mayCreate, reason))}</p>`)

@@ -83,9 +83,9 @@ describe('the loopback answer', () => {
   })
 
   describe.each<[string, string, string]>([
-    ['not_work_email', "That address isn't a work email. Amdahl needs your company address.", 'Use a different email'],
-    ['subdomain_email', "Amdahl needs your address at your company's main domain.", 'Use a different email'],
-    ['email_unconfirmed', "Your email isn't confirmed yet. Sign in again with the code we email you.", 'Sign in again'],
+    ['not_work_email', 'Amdahl needs your work email.', 'Sign in with your work email'],
+    ['subdomain_email', 'Use your main company email.', 'Sign in again'],
+    ['email_unconfirmed', 'Check your inbox to confirm your email, then try again.', 'Try again'],
   ])('no_business with reason=%s: another sign-in fixes it', (reason, why, label) => {
     /** A browser that keeps the loopback page of each callback it reaches. */
     function browser(io: ReturnType<typeof fakeIo>) {
@@ -112,14 +112,15 @@ describe('the loopback answer', () => {
       await vi.waitFor(() => expect(pages).toHaveLength(1))
       const authorize = new URL(io.opened[0]!)
       const again = `${server.url}/login?redirect=${encodeURIComponent(`${authorize.pathname}${authorize.search}`)}`
-      expect(pages[0]).toContain(`<p>${why.replace(/'/g, '&#39;')}</p><p><a href="${again.replace(/&/g, '&#38;')}">${label}</a></p><p>Your terminal is still waiting.</p>`)
+      // The same words on the page and the terminal: the page links them, the terminal prints the URL.
+      expect(pages[0]).toContain(`<p>${why}</p><p><a href="${again.replace(/&/g, '&#38;')}">${label} →</a></p></body>`)
       // Past the grace period: the authorize link, which would only sign in as the same address again, never prints.
       await new Promise((r) => setTimeout(r, 700))
       // The server's sign-in page returns the browser to the same authorize URL, signed in as someone else.
       await visit(io.opened[0]!)
       const r = await run
       expect(r.code).toBe(0)
-      expect(r.stderr).toBe(`Opening your browser…\n${why} In the browser, choose "${label}". Still waiting…\n`)
+      expect(r.stderr).toBe(`Opening your browser…\n${why} ${label}:\n\n  ${again}\n`)
       expect(r.stdout).toContain('Signed in as dev@example.com')
     })
 
@@ -130,7 +131,7 @@ describe('the loopback answer', () => {
       browser(io)
       const r = await cli(io, 'login', '--json')
       expect(r.code).toBe(5)
-      expect(r.json.error).toEqual({ code: 'no_business', message: `${why} Run this again, and in the browser choose "${label}".` })
+      expect(r.json.error).toEqual({ code: 'no_business', message: `${why} Run this again, then choose "${label}" in the browser.` })
     })
   })
 

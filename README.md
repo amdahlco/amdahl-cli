@@ -138,9 +138,10 @@ amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to t
 
 No workspace yet? With a work email, the sign-in page offers to create your
 company's workspace and then finishes signing you in. If you signed in with
-an address Amdahl can't use (a personal email, a subdomain address, or one
-that isn't confirmed), the browser tab offers "Use a different email" (or
-"Sign in again") and the terminal keeps waiting for that sign-in. Anything
+an address Amdahl can't use, the browser tab and the terminal say what to do
+and link a new sign-in ("Sign in with your work email", "Sign in again" for
+a subdomain address, "Try again" once you've confirmed your email), and the
+terminal keeps waiting for it. Anything
 else exits 5 with the one next step (ask your company's admins, try again
 tomorrow, and so on). The CLI itself never creates or joins a workspace.
 
