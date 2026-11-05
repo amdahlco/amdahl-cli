@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import pkg from '../package.json'
 import { parseCommandLine } from '../src/args'
+import { whatAmdahlDid } from '../src/commands/optimize'
 import { EXIT, exitForHttp } from '../src/errors'
 import { generateKey } from '../src/keygen'
 import { SKILL_TEXT, isShippedSkill } from '../src/skill'
@@ -130,6 +131,141 @@ describe('optimize', () => {
     writeFileSync(join(io.homedir, 'a.md'), 'draft')
     const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
     expect(r.stdout).toBe('better: draft\n')
+  })
+
+  it('prints what Amdahl did on stderr after the message, and nothing extra under --json', async () => {
+    const optimizeResult = {
+      ok: true,
+      outcome: 'rewritten',
+      message: 'Hi Sam, ...',
+      summary: 'Wrote it from your facts.',
+      what_changed: 'Cut the opener and 3 more sentences, replaced the ask',
+      steps: [
+        { node: 'w1', changed: false, reason: 'not_planned' },
+        { node: 'w2', changed: true, reason: 'wrote_one_version' },
+        { node: 'w3', changed: true, reason: 'repaired:2,deleted:1' },
+        { node: 'w4', changed: false, reason: 'weakest:ask' },
+        { node: 'w5', changed: true, reason: 'repaired:ask' },
+        { node: 'w6', changed: false, reason: 'no_draft' },
+        { node: 'w7', changed: false, reason: 'message' },
+      ],
+      omitted: [
+        { what: 'The customer count', why: 'None of the facts gives a customer count.' },
+        { what: 'A sentence', why: 'Nothing you sent backs it' },
+        { what: 'Another sentence', why: 'Nothing you sent backs it' },
+      ],
+      evidence: { requested: 'workspace', used: true },
+      lift: { quotes: 20 },
+      unsupported_claims: [{ span: 'we cut onboarding 40%', status: 'kept' }, { span: 'x', status: 'removed' }],
+      context_use: { pack_id: 'cp_1', identity: 'high', rows: [{ row: 'r', bucket: 'internal', verdict: 'pass', cited_id: 'ci_3' }] },
+    }
+    const io = await loggedIn({ optimizeResult })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stdout).toBe('Hi Sam, ...\n')
+    expect(r.stderr).toBe(
+      [
+        'Wrote it from your facts.',
+        'Cut the opener and 3 more sentences, replaced the ask.',
+        "Removed 1 claim your calls don't back.",
+        "Flagged 1 claim your calls don't back; check before sending.",
+        '',
+      ].join('\n')
+    )
+
+    const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
+    expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
+    expect(json.stderr).not.toContain('Flagged')
+  })
+
+  it('what Amdahl did: steps and omitted reasons fill the lines left, at most three', () => {
+    const steps = [
+      { node: 'w3', changed: true, reason: 'repaired:2,deleted:1,open:1' },
+      { node: 'w5', changed: true, reason: 'repaired:ask' },
+      { node: 'w6', changed: true, reason: 'kept_before_repair:adds_claim' },
+    ]
+    const omitted = [
+      { what: 'a', why: 'None of the facts gives a customer count' },
+      { what: 'b', why: 'Nothing you sent backs it.' },
+      { what: 'c', why: 'Nothing you sent backs it.' },
+    ]
+    expect(whatAmdahlDid({ steps, omitted })).toEqual([
+      'Rewrote 2 sentences and cut 1 that nothing backed. Reworked the ask.',
+      'Left out 3 things: None of the facts gives a customer count. (1 more reason in --json)',
+      'Flagged 1 sentence problem it could not fix; check before sending.',
+    ])
+    // With more to say, the step trail is the first line dropped.
+    const full = whatAmdahlDid({
+      what_changed: 'Cut the opener',
+      steps,
+      evidence: { requested: 'workspace', used: true },
+      unsupported_claims: [],
+      context_use: { rows: [{ bucket: 'external', verdict: 'pass' }, { bucket: 'internal', verdict: 'fail' }] },
+    })
+    expect(full).toEqual([
+      'Cut the opener.',
+      "Checked every claim against your calls and found none they don't back.",
+      'Flagged 1 sentence problem it could not fix; check before sending.',
+    ])
+    expect(
+      whatAmdahlDid({
+        evidence: { requested: 'workspace', used: true },
+        lift: { quotes: 20 },
+        unsupported_claims: [{ status: 'removed' }, { status: 'removed' }],
+        context_use: { rows: [{ bucket: 'internal', verdict: 'pass' }, { bucket: 'external', verdict: 'pass' }] },
+      })
+    ).toEqual([
+      'Checked every claim against your calls (20 quotes).',
+      "Removed 2 claims your calls don't back.",
+      "Used 2 sources: Amdahl's own records and what their company or market published.",
+    ])
+    // A kept draft is not what the steps describe.
+    expect(whatAmdahlDid({ unchanged: true, steps })).toEqual([])
+    // An unknown second-check reason still asks for a check.
+    expect(whatAmdahlDid({ steps: [{ node: 'w6', changed: true, reason: 'something_new' }] })).toEqual([
+      'Flagged a second-check concern; check before sending.',
+    ])
+  })
+
+  it('prints no what-Amdahl-did section when the response says nothing worth reading', async () => {
+    const io = await loggedIn({
+      optimizeResult: {
+        ok: true,
+        message: 'Hi',
+        summary: 'Tighter.',
+        steps: [{ node: 'w3', changed: false, reason: 'no_open_problems' }, { node: 'w6', changed: false, reason: 'no_draft' }],
+        omitted: [],
+        evidence: { requested: 'off', used: false, reason: 'not_requested' },
+        unsupported_claims: null,
+      },
+    })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stdout).toBe('Hi\n')
+    expect(r.stderr).toBe('Tighter.\n')
+  })
+
+  it('names a second-check concern, a missed evidence read and strips control characters', async () => {
+    const io = await loggedIn({
+      optimizeResult: {
+        ok: true,
+        message: 'Hi',
+        what_changed: 'Wrote this\u001b[2J message from the context you sent.',
+        steps: [{ node: 'w6', changed: true, reason: 'drops_ask' }],
+        evidence: { requested: 'workspace', used: false, reason: 'corpus_empty' },
+        unsupported_claims: null,
+      },
+    })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stderr).toBe(
+      [
+        'Wrote this[2J message from the context you sent.',
+        'Skipped checking claims against your calls: the workspace has none yet.',
+        'Flagged a second-check concern (it leaves out your ask); check before sending.',
+        '',
+      ].join('\n')
+    )
   })
 
   it('an ok:false result exits 1 and prints its reason', async () => {
