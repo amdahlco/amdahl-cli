@@ -1,11 +1,11 @@
-// The arrow-key menu (src/select.ts), driven through readline's own keypress
+// The arrow-key menus (src/select.ts), driven through readline's own keypress
 // decoding over a fake terminal: the keys a person presses, and that raw
 // mode, the keypress listener and the cursor are put back on every way out.
 
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { PromptCancelled } from '../src/io'
-import { selectMenu } from '../src/select'
+import { multiSelectMenu, selectMenu } from '../src/select'
 
 const UP = '\u001b[A'
 const DOWN = '\u001b[B'
@@ -138,5 +138,56 @@ describe('selectMenu', () => {
     t.input.write('\r')
     await done
     expect(t.input.rawCalls).toEqual([true, true])
+  })
+})
+
+describe('multiSelectMenu', () => {
+  const CLIENTS = ['Claude Code', 'Cursor', 'Codex']
+
+  async function tick(keys: string[], ticked?: boolean[]) {
+    const t = terminal()
+    const result = multiSelectMenu(t.input, t.output, 'Set up Amdahl in:', CLIENTS, { ticked }).then(
+      (picks) => ({ picks }),
+      (error: unknown) => ({ error })
+    )
+    for (const key of keys) {
+      t.input.write(key)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+    return { ...(await result), ...t }
+  }
+
+  it.each<[string, string[], boolean[] | undefined, number[]]>([
+    ['Enter keeps the start ticks', ['\r'], [true, false, true], [0, 2]],
+    ['Enter with nothing ticked picks none', ['\r'], undefined, []],
+    ['Space ticks the marked row', [' ', '\r'], undefined, [0]],
+    ['Space unticks it', [' ', '\r'], [true, true, false], [1]],
+    ['Down, Space ticks the second row', [DOWN, ' ', '\r'], undefined, [1]],
+    ['Up wraps to the last row', [UP, ' ', '\r'], undefined, [2]],
+    ['j and k move too', ['j', 'j', 'k', ' ', '\r'], undefined, [1]],
+    ['a digit ticks that row', ['3', '1', '\r'], undefined, [0, 2]],
+    ['a digit twice unticks it', ['2', '2', '\r'], undefined, []],
+    ['other keys are ignored', ['x', '9', '\r'], [false, true, false], [1]],
+  ])('%s', async (_label, keys, ticked, want) => {
+    const r = await tick(keys, ticked)
+    expect(r).toMatchObject({ picks: want })
+    expect(r.input.rawCalls).toEqual([true, false])
+    expect(r.input.listenerCount('keypress')).toBe(0)
+  })
+
+  it('draws a box per row, then collapses to the ticked names', async () => {
+    const r = await tick([DOWN, ' ', '\r'], [true, false, false])
+    expect(plain(r.drawn())).toContain('Set up Amdahl in:\n> [x] Claude Code\n  [ ] Cursor\n  [ ] Codex\n(Use the arrow keys, Space to tick or untick, then Enter)\n')
+    expect(plain(r.drawn())).toContain('> [x] Cursor\n')
+    expect(r.drawn().endsWith('Set up Amdahl in: Claude Code, Cursor\n\u001b[?25h')).toBe(true)
+    const none = await tick(['\r'])
+    expect(none.drawn().endsWith('Set up Amdahl in: none\n\u001b[?25h')).toBe(true)
+  })
+
+  it('Ctrl+C rejects with PromptCancelled and restores the terminal', async () => {
+    const r = await tick([' ', '\u0003'])
+    expect((r as { error?: unknown }).error).toBeInstanceOf(PromptCancelled)
+    expect(r.input.rawCalls).toEqual([true, false])
+    expect(r.drawn().endsWith('\u001b[?25h')).toBe(true)
   })
 })

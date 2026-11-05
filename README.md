@@ -56,7 +56,36 @@ amdahl login
 `npx @amdahl/cli ...`. That package ([packages/amdahl](packages/amdahl)) has no
 code of its own: it depends on `@amdahl/cli` at the same version and runs it.
 
-To connect an AI client, run `amdahl install claude-code` (or `codex`,
+The quickest way to start is `npx amdahl` with nothing after it, in a
+terminal. It walks you through setup:
+
+```
+Amdahl, predictive ML for GTM
+Found on this machine: Claude Code ✓  Cursor ✓  Codex –
+Set up Amdahl in:
+> [x] Claude Code
+  [x] Cursor
+  [ ] Codex
+(Use the arrow keys, Space to tick or untick, then Enter)
+```
+
+It finds Claude Code, Cursor and Codex by their command on your PATH
+(`claude`, `cursor`, `codex`) or their folder in your home folder (`.claude`,
+`.cursor`, `.codex`), and ticks the ones it finds. Enter accepts. If you are
+not signed in, it signs you in through the browser first; otherwise it prints
+`Signed in as <email> (workspace: <name>)`. Then it runs `amdahl install`
+for each client you ticked, and ends with something to try, such as
+`Try it: open Claude Code and say "make this email sound less like AI"`.
+Run it again once you are set up and it says `You're set up in Claude Code
+and Cursor.` with the same line to try, and asks nothing. Ctrl+C at the
+question stops it with nothing written (exit 130).
+
+It only does this for a person at a terminal. When stdin or stdout is not a
+terminal, `CI` is set, an agent runs it (`CLAUDECODE` or `CURSOR_AGENT` is
+set), `AMDAHL_NO_PROMPT=1` is set, or any flag is given (such as `--json`),
+bare `amdahl` prints the usage to stderr and exits 2, as before.
+
+To connect one AI client yourself, run `amdahl install claude-code` (or `codex`,
 `cursor`). It adds the Amdahl MCP server and also installs the Amdahl skill,
 a map of everything Amdahl can do, so your agent knows which tool fits each
 job. The skill goes to the client's user skills folder:
@@ -77,6 +106,7 @@ https://docs.amdahl.ai/skills/amdahl/SKILL.md.
 ## Quick start
 
 ```sh
+amdahl                       # in a terminal: guided setup for Claude Code, Cursor and Codex
 amdahl login                 # sign in through the browser with your console account
 amdahl whoami                # the account, workspace and role you are signed in as
 amdahl status                # can this workspace optimize, and what blocks it
@@ -93,6 +123,7 @@ On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 ## Commands
 
 ```
+amdahl                                                           (guided setup, in a terminal)
 amdahl login   [--workspace <slug>] [--no-browser] [--port <n>]   (alias: auth login)
 amdahl logout  [--all]                                           (alias: auth logout)
 amdahl whoami  [--show-token]                                    (alias: auth status)

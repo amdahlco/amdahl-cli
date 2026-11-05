@@ -144,6 +144,8 @@ function strictParse(argv: string[], options: OptionSpec) {
 export const USAGE = `Usage: amdahl <command> [options]
 
 What you can do:
+  amdahl                         Set up Claude Code, Cursor or Codex, in a terminal: it asks
+                                 which, signs you in, and runs install for each one
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
   amdahl status                  Check that this workspace is set up to optimize
   amdahl keys create --name ci   Make an API key for a server or CI

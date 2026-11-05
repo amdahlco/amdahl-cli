@@ -13,8 +13,20 @@ import type { Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { SKILL_TEXT, SKILL_URL, isShippedSkill, skillPath } from '../skill'
 
-const CLIENTS = ['claude-code', 'codex', 'cursor'] as const
-type Client = (typeof CLIENTS)[number]
+/** The clients `install` sets up. */
+export const CLIENTS = ['claude-code', 'codex', 'cursor'] as const
+/** One of {@link CLIENTS}. */
+export type Client = (typeof CLIENTS)[number]
+
+/** Where Codex keeps its MCP servers. */
+function codexConfigPath(home: string): string {
+  return join(home, '.codex', 'config.toml')
+}
+
+/** Where Cursor keeps its user MCP servers. */
+function cursorConfigPath(home: string): string {
+  return join(home, '.cursor', 'mcp.json')
+}
 
 /** The Codex config block. `required = true` makes Codex wait for Amdahl. */
 export function codexBlock(mcpUrl: string): string {
@@ -27,10 +39,56 @@ export function codexHasAmdahl(toml: string): boolean {
 }
 
 /** True when `command` resolves on PATH. */
-async function onPath(ctx: Ctx, command: string): Promise<boolean> {
+export async function onPath(ctx: Ctx, command: string): Promise<boolean> {
   const probe = ctx.io.platform === 'win32' ? 'where' : 'which'
   const res = await ctx.io.run(probe, [command])
   return res.code === 0
+}
+
+/** Each client's command on PATH and its folder in the home directory: either one means it is on this machine. */
+const CLIENT_SIGNS: Record<Client, { command: string; dir: string }> = {
+  'claude-code': { command: 'claude', dir: '.claude' },
+  codex: { command: 'codex', dir: '.codex' },
+  cursor: { command: 'cursor', dir: '.cursor' },
+}
+
+/** Which clients this machine has: the client's command on PATH, or its folder in the home directory. */
+export async function detectClients(ctx: Ctx): Promise<Record<Client, boolean>> {
+  const found = await Promise.all(
+    CLIENTS.map(async (client) => {
+      const { command, dir } = CLIENT_SIGNS[client]
+      return existsSync(join(ctx.io.homedir, dir)) || (await onPath(ctx, command))
+    })
+  )
+  return Object.fromEntries(CLIENTS.map((client, i) => [client, found[i]])) as Record<Client, boolean>
+}
+
+/**
+ * True when `install <client>` would change nothing: the client already
+ * points at Amdahl and its skill is current (or is the person's own edit,
+ * which `install` keeps). Writes nothing and never prints what it ran: the
+ * output of `claude mcp get` can hold another server's headers.
+ */
+export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
+  const skill = skillPath(client, ctx.io.homedir)
+  const current = existsSync(skill) ? readFileSync(skill, 'utf8') : null
+  if (current === null || (current !== SKILL_TEXT && isShippedSkill(current))) return false
+  const mcpUrl = `${ctx.apiUrl}/mcp`
+  if (client === 'claude-code') {
+    if (!(await onPath(ctx, 'claude'))) return false
+    const res = await ctx.io.run('claude', ['mcp', 'get', 'amdahl'])
+    return res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`)
+  }
+  if (client === 'codex') {
+    const path = codexConfigPath(ctx.io.homedir)
+    return existsSync(path) && codexHasAmdahl(readFileSync(path, 'utf8'))
+  }
+  try {
+    const config = JSON.parse(readFileSync(cursorConfigPath(ctx.io.homedir), 'utf8')) as { mcpServers?: { amdahl?: unknown } }
+    return JSON.stringify(config.mcpServers?.amdahl) === JSON.stringify({ url: mcpUrl })
+  } catch {
+    return false
+  }
 }
 
 /** What one install step did: its JSON, its human lines, and stderr notes. */
@@ -111,7 +169,7 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
   }
 
   if (client === 'codex') {
-    const path = join(io.homedir, '.codex', 'config.toml')
+    const path = codexConfigPath(io.homedir)
     const block = codexBlock(mcpUrl)
     if (print) {
       return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${block}`, notes: [] }
@@ -127,7 +185,7 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
   }
 
   // cursor
-  const path = join(io.homedir, '.cursor', 'mcp.json')
+  const path = cursorConfigPath(io.homedir)
   const entry = { url: mcpUrl }
   if (print) {
     return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${JSON.stringify({ mcpServers: { amdahl: entry } }, null, 2)}`, notes: [] }
