@@ -132,6 +132,94 @@ describe('optimize', () => {
     expect(r.stdout).toBe('better: draft\n')
   })
 
+  it('prints what Amdahl did on stderr after the message, and nothing extra under --json', async () => {
+    const optimizeResult = {
+      ok: true,
+      outcome: 'rewritten',
+      message: 'Hi Sam, ...',
+      summary: 'Wrote it from your facts.',
+      what_changed: 'Cut the opener and 3 more sentences, replaced the ask',
+      steps: [
+        { node: 'w1', changed: false, reason: 'not_planned' },
+        { node: 'w2', changed: true, reason: 'wrote_one_version' },
+        { node: 'w3', changed: true, reason: 'repaired:2,deleted:1' },
+        { node: 'w4', changed: false, reason: 'weakest:ask' },
+        { node: 'w5', changed: true, reason: 'repaired:ask' },
+        { node: 'w6', changed: false, reason: 'no_draft' },
+        { node: 'w7', changed: false, reason: 'message' },
+      ],
+      omitted: [
+        { what: 'The customer count', why: 'None of the facts gives a customer count.' },
+        { what: 'A sentence', why: 'Nothing you sent backs it' },
+        { what: 'Another sentence', why: 'Nothing you sent backs it' },
+      ],
+      evidence: { requested: 'workspace', used: true },
+      lift: { quotes: 20 },
+      unsupported_claims: [{ span: 'we cut onboarding 40%', status: 'kept' }, { span: 'x', status: 'removed' }],
+      context_use: { pack_id: 'cp_1', identity: 'high', rows: [{ row: 'r', bucket: 'internal', verdict: 'pass', cited_id: 'ci_3' }] },
+    }
+    const io = await loggedIn({ optimizeResult })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stdout).toBe('Hi Sam, ...\n')
+    expect(r.stderr).toContain(
+      [
+        'Wrote it from your facts.',
+        'What Amdahl did:',
+        '  Cut the opener and 3 more sentences, replaced the ask.',
+        '  Checked each sentence against what you sent: rewrote 2, removed 1 that nothing backed. Reworked the ask, its weakest part.',
+        '  Left out 3 things: None of the facts gives a customer count. Nothing you sent backs it.',
+        "  Checked against your customers' conversations (20 quotes); removed 1 claim nothing there backs; 1 claim nothing there backs is still in it, so check before sending; built on Amdahl's record of the recipient.",
+      ].join('\n')
+    )
+
+    const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
+    expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
+    expect(json.stderr).not.toContain('What Amdahl did')
+  })
+
+  it('prints no what-Amdahl-did section when the response says nothing worth reading', async () => {
+    const io = await loggedIn({
+      optimizeResult: {
+        ok: true,
+        message: 'Hi',
+        summary: 'Tighter.',
+        steps: [{ node: 'w3', changed: false, reason: 'no_open_problems' }, { node: 'w6', changed: false, reason: 'no_draft' }],
+        omitted: [],
+        evidence: { requested: 'off', used: false, reason: 'not_requested' },
+        unsupported_claims: null,
+      },
+    })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stdout).toBe('Hi\n')
+    expect(r.stderr).toBe('Tighter.\n')
+  })
+
+  it('names a second-check concern, a missed evidence read and strips control characters', async () => {
+    const io = await loggedIn({
+      optimizeResult: {
+        ok: true,
+        message: 'Hi',
+        what_changed: 'Wrote this\u001b[2J message from the context you sent.',
+        steps: [{ node: 'w6', changed: true, reason: 'drops_ask' }],
+        evidence: { requested: 'workspace', used: false, reason: 'corpus_empty' },
+        unsupported_claims: null,
+      },
+    })
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stderr).toBe(
+      [
+        'What Amdahl did:',
+        '  Wrote this[2J message from the context you sent.',
+        '  A second check had a concern: it leaves out your ask. Read it before sending.',
+        "  Your customers' conversations were not read: the workspace has no conversations yet.",
+        '',
+      ].join('\n')
+    )
+  })
+
   it('an ok:false result exits 1 and prints its reason', async () => {
     const io = await loggedIn({ optimizeResult: { ok: false, reason: 'optimizer_timeout', detail: 'Took too long.' } })
     io.stdinIsTTY = false
