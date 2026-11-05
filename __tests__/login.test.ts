@@ -149,9 +149,9 @@ describe('the loopback answer', () => {
     expect((await noBrowser).code).toBe(0)
   })
 
-  it('waits 15 minutes for the browser by default: time to create a workspace on the way', () => {
+  it('waits 15 minutes for the browser by default, and a minute before it prints the link: time to sign in, or create a workspace on the way', () => {
     expect(realIo().loginTimeoutMs).toBe(900_000)
-    expect(realIo().browserGraceMs).toBe(5_000)
+    expect(realIo().browserGraceMs).toBe(60_000)
   })
 
   it('a state mismatch exits 1 and saves nothing', async () => {

@@ -7,7 +7,7 @@
 // the authorize URL, exchange the code, then ask /me/context who the token is
 // and save that as a profile named after the workspace slug. The link is
 // printed only when the browser could not be opened, or nothing came back
-// within a few seconds. A new user may create their workspace on the way
+// within a minute. A new user may create their workspace on the way
 // (the server's self-serve page, which returns to the same authorize request),
 // so the wait is long. A user the server gives no workspace comes back as
 // `error=no_business` and exits 5 with the one next step: the CLI never

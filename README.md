@@ -78,7 +78,7 @@ It finds Claude Code, Cursor and Codex by their command on your PATH
 `.cursor`, `.codex`), and ticks the ones it finds. Enter accepts. If you are
 not signed in, it signs you in through the browser first. It prints the
 sign-in link only if the browser could not be opened, or nothing came back
-within 5 seconds, and it waits up to 15 minutes, so someone new can create
+within a minute, and it waits up to 15 minutes, so someone new can create
 their workspace on the way and land back in the same setup. If the server
 rejects a key set in
 `AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`, `--api-key`), it says
