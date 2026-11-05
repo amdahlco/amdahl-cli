@@ -4,6 +4,8 @@ exports[`exit codes > --help lists what you can do, and --json does not change i
 "Usage: amdahl <command> [options]
 
 What you can do:
+  amdahl                         Set up Claude Code, Cursor or Codex, in a terminal: it asks
+                                 which, signs you in, and runs install for each one
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
   amdahl status                  Check that this workspace is set up to optimize
   amdahl keys create --name ci   Make an API key for a server or CI

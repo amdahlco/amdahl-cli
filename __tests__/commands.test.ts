@@ -95,8 +95,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.2.4\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.2.4\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.3.0\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.3.0\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })
@@ -284,6 +284,44 @@ describe('install', () => {
     const ran = await cli(io, 'install', 'claude-code', '--json')
     expect(ran.json.action).toBe('ran')
     expect(io.run).toHaveBeenLastCalledWith('claude', ['mcp', 'add', '--scope', 'user', '--transport', 'http', 'amdahl', 'https://app.amdahl.ai/mcp'])
+  })
+
+  it('claude-code skips `claude mcp add` when Amdahl is already there at this URL, and still adds the skill', async () => {
+    const io = fakeIo()
+    io.run.mockImplementation(async (command: string, args: string[]) =>
+      args[1] === 'get'
+        ? { code: 0, stdout: 'amdahl:\n  URL: https://app.amdahl.ai/mcp\n  Headers:\n    X-API-Key: amdhl_secret_header\n', stderr: '' }
+        : { code: 0, stdout: '', stderr: '' }
+    )
+    const r = await cli(io, 'install', 'claude-code', '--json')
+    expect(r.code).toBe(0)
+    expect(r.json).toEqual({
+      ok: true,
+      client: 'claude-code',
+      action: 'unchanged',
+      command: 'claude mcp add --scope user --transport http amdahl https://app.amdahl.ai/mcp',
+      skill: { action: 'wrote', path: join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md') },
+    })
+    expect(io.run.mock.calls.filter((c) => c[0] === 'claude').map((c) => (c[1] as string[])[1])).toEqual(['get'])
+    expect(r.stdout + r.stderr).not.toContain('amdhl_secret_header')
+    // At another URL it still tries the add (which Claude Code refuses for an existing name).
+    io.run.mockImplementation(async (command: string, args: string[]) =>
+      args[1] === 'get' ? { code: 0, stdout: 'amdahl:\n  URL: https://elsewhere/mcp\n', stderr: '' } : { code: 0, stdout: '', stderr: '' }
+    )
+    expect((await cli(io, 'install', 'claude-code', '--json')).json.action).toBe('ran')
+  })
+
+  it.each<[string, string]>([
+    ['cursor', 'mcp.json'],
+    ['codex', 'config.toml'],
+  ])('%s: a config file it cannot write exits 1 with write_failed, not a network error', async (client, file) => {
+    const io = fakeIo()
+    const dir = join(io.homedir, `.${client}`)
+    writeFileSync(dir, 'a file where the folder should be')
+    const r = await cli(io, 'install', client, '--json')
+    expect(r.code).toBe(1)
+    expect(r.json.error.code).toBe('write_failed')
+    expect(r.json.error.message).toMatch(new RegExp(`^Could not update ${join(dir, file).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\(`))
   })
 
   it('claude-code installs the bundled skill next to the MCP server', async () => {

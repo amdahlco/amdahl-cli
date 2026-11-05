@@ -9,6 +9,7 @@ import { authToken, login, logout, whoami } from './commands/auth'
 import { install } from './commands/install'
 import { keysCreate, keysList, keysRevoke } from './commands/keys'
 import { optimize } from './commands/optimize'
+import { setup, shouldSetUp } from './commands/setup'
 import { skillsAdd } from './commands/skills'
 import { status, workspaceList, workspaceUse } from './commands/workspace-status'
 import { createCtx, toCliError, type Ctx } from './context'
@@ -60,6 +61,8 @@ export async function runCli(argv: string[], io: Io): Promise<number> {
       return EXIT.ok
     }
     if (!parsed.command) {
+      // Bare `amdahl` in a person's terminal is the guided setup; anything else keeps the usage and exit 2.
+      if (argv.length === 0 && shouldSetUp(io)) return await setup(createCtx(io, out, parsed.flags))
       io.stderr(USAGE)
       return EXIT.usage
     }

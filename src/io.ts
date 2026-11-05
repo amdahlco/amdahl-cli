@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
-import { selectMenu } from './select'
+import { multiSelectMenu, selectMenu } from './select'
 
 /** Result of running a child process to completion. */
 export interface ProcessResult {
@@ -55,6 +55,12 @@ export interface Io {
    * brand colour; without it, bold.
    */
   select: (question: string, choices: string[], options?: { initial?: number; color?: boolean }) => Promise<number>
+  /**
+   * Show a menu of rows to tick on the terminal (Space ticks, Enter accepts)
+   * and return the ticked rows in order, maybe none. `ticked` says which
+   * start ticked. Rejects with PromptCancelled on Ctrl+C or Ctrl+D.
+   */
+  multiSelect: (question: string, choices: string[], options?: { ticked?: boolean[]; color?: boolean }) => Promise<number[]>
   /** Run synchronous file writes that Ctrl+C must not cut off half way. */
   uninterruptible: <T>(fn: () => T) => T
   run: RunProcess
@@ -159,6 +165,11 @@ export function realIo(): Io {
     prompt: promptLine,
     select: (question, choices, options) =>
       selectMenu(process.stdin, process.stderr, question, choices, {
+        ...options,
+        trueColor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
+      }),
+    multiSelect: (question, choices, options) =>
+      multiSelectMenu(process.stdin, process.stderr, question, choices, {
         ...options,
         trueColor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
       }),

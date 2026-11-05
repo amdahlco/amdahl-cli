@@ -64,6 +64,16 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
       const n = Number(answer)
       return answer && Number.isInteger(n) && n >= 1 && n <= choices.length ? n - 1 : (options?.initial ?? 0)
     },
+    // A tick menu answers from the same queue: '' accepts the start ticks, '1,3' ticks those rows, 'none' ticks none, null is Ctrl+C.
+    multiSelect: async (question, choices, options) => {
+      io.prompts.push(`${question} [${choices.map((c, i) => `${options?.ticked?.[i] ? 'x' : ' '} ${c}`).join(' | ')}]`)
+      io.selectColor.push(options?.color === true)
+      const answer = io.answers.shift()
+      if (answer === null) throw new PromptCancelled()
+      if (answer === 'none') return []
+      if (!answer) return choices.flatMap((_, i) => (options?.ticked?.[i] ? [i] : []))
+      return answer.split(',').map((n) => Number(n) - 1)
+    },
     selectColor: [],
     uninterruptible: (fn) => fn(),
     run: vi.fn(async (): Promise<ProcessResult> => ({ code: -1, stdout: '', stderr: 'not found' })),
