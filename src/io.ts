@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
-import { multiSelectMenu, selectMenu } from './select'
+import { listenForEnter, multiSelectMenu, selectMenu } from './select'
 
 /** Result of running a child process to completion. */
 export interface ProcessResult {
@@ -61,6 +61,12 @@ export interface Io {
    * start ticked. Rejects with PromptCancelled on Ctrl+C or Ctrl+D.
    */
   multiSelect: (question: string, choices: string[], options?: { ticked?: boolean[]; color?: boolean }) => Promise<number[]>
+  /**
+   * Call `onEnter` at each Enter on the terminal until the returned function
+   * is called; other keys do nothing. Ctrl+C stops listening and calls
+   * `onCancel`. The terminal is restored either way.
+   */
+  listenForEnter: (onEnter: () => void, onCancel: () => void) => () => void
   /** Run synchronous file writes that Ctrl+C must not cut off half way. */
   uninterruptible: <T>(fn: () => T) => T
   run: RunProcess
@@ -75,8 +81,6 @@ export interface Io {
   sleep: (ms: number) => Promise<void>
   /** How long `login` waits for the browser callback: long enough to create a workspace on the way. */
   loginTimeoutMs: number
-  /** How long sign-in waits for the browser before it prints the link. */
-  browserGraceMs: number
   /** How long `skills add` waits for each request, body included. */
   fetchTimeoutMs: number
 }
@@ -175,6 +179,7 @@ export function realIo(): Io {
         ...options,
         trueColor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
       }),
+    listenForEnter: (onEnter, onCancel) => listenForEnter(process.stdin, onEnter, onCancel),
     uninterruptible,
     run: runProcess,
     openUrl: async (url) => {
@@ -188,7 +193,6 @@ export function realIo(): Io {
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
     loginTimeoutMs: 900_000,
-    browserGraceMs: 60_000,
     fetchTimeoutMs: 15_000,
   }
 }

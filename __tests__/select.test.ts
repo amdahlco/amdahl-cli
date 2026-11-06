@@ -5,7 +5,7 @@
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { PromptCancelled } from '../src/io'
-import { multiSelectMenu, selectMenu } from '../src/select'
+import { listenForEnter, multiSelectMenu, selectMenu } from '../src/select'
 
 const UP = '\u001b[A'
 const DOWN = '\u001b[B'
@@ -189,5 +189,68 @@ describe('multiSelectMenu', () => {
     expect((r as { error?: unknown }).error).toBeInstanceOf(PromptCancelled)
     expect(r.input.rawCalls).toEqual([true, false])
     expect(r.drawn().endsWith('\u001b[?25h')).toBe(true)
+  })
+})
+
+describe('listenForEnter', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve))
+
+  /** Listen on a fake terminal and count what happened. */
+  function listen() {
+    const t = terminal()
+    const seen = { enter: 0, cancel: 0 }
+    const stop = listenForEnter(
+      t.input,
+      () => seen.enter++,
+      () => seen.cancel++
+    )
+    return { ...t, seen, stop }
+  }
+
+  it('calls back at each Enter, ignores every other key, draws nothing, and restores the terminal when stopped', async () => {
+    const t = listen()
+    expect(t.input.isRaw).toBe(true)
+    for (const key of ['a', ' ', UP, '\r', 'q', '\n', '\u0004']) {
+      t.input.write(key)
+      await tick()
+    }
+    expect(t.seen).toEqual({ enter: 2, cancel: 0 })
+    expect(t.drawn()).toBe('')
+    t.stop()
+    t.stop()
+    expect(t.input.rawCalls).toEqual([true, false])
+    expect(t.input.listenerCount('keypress')).toBe(0)
+    t.input.write('\r')
+    await tick()
+    expect(t.seen.enter).toBe(2)
+  })
+
+  it('Ctrl+C restores the terminal and cancels, once', async () => {
+    const before = process.listenerCount('SIGINT')
+    const t = listen()
+    expect(process.listenerCount('SIGINT')).toBe(before + 1)
+    t.input.write('\u0003')
+    await tick()
+    t.stop()
+    expect(t.seen).toEqual({ enter: 0, cancel: 1 })
+    expect(t.input.rawCalls).toEqual([true, false])
+    expect(t.input.listenerCount('keypress')).toBe(0)
+    expect(process.listenerCount('SIGINT')).toBe(before)
+  })
+
+  it('a SIGINT sent to the process restores the terminal and cancels', () => {
+    const before = process.listenerCount('SIGINT')
+    const t = listen()
+    process.emit('SIGINT')
+    expect(t.seen).toEqual({ enter: 0, cancel: 1 })
+    expect(t.input.rawCalls).toEqual([true, false])
+    expect(process.listenerCount('SIGINT')).toBe(before)
+  })
+
+  it('puts back raw mode as it found it', () => {
+    const t = terminal()
+    t.input.isRaw = true
+    listenForEnter(t.input, () => {}, () => {})()
+    expect(t.input.rawCalls).toEqual([true, true])
   })
 })

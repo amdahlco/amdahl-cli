@@ -20,6 +20,10 @@ export interface FakeIo extends Io {
   prompts: string[]
   /** Whether each menu was asked for colour. */
   selectColor: boolean[]
+  /** The sign-in's wait for Enter while it listens, else null: `enter()` is Enter, `cancel()` is Ctrl+C. */
+  keys: { enter: () => void; cancel: () => void } | null
+  /** How many times something started listening for Enter. */
+  listened: number
   run: Io['run'] & ReturnType<typeof vi.fn>
 }
 
@@ -75,6 +79,23 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
       return answer.split(',').map((n) => Number(n) - 1)
     },
     selectColor: [],
+    keys: null,
+    listened: 0,
+    listenForEnter: (enter, onCancel) => {
+      io.listened++
+      const stop = () => {
+        if (io.keys === keys) io.keys = null
+      }
+      const keys = {
+        enter,
+        cancel: () => {
+          stop()
+          onCancel()
+        },
+      }
+      io.keys = keys
+      return stop
+    },
     uninterruptible: (fn) => fn(),
     run: vi.fn(async (): Promise<ProcessResult> => ({ code: -1, stdout: '', stderr: 'not found' })),
     openUrl: async (url) => {
@@ -89,7 +110,6 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     now: () => Date.now(),
     sleep: async () => {},
     loginTimeoutMs: 3000,
-    browserGraceMs: 2000,
     fetchTimeoutMs: 100,
   }
   return io

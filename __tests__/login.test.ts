@@ -105,8 +105,6 @@ describe('the loopback answer', () => {
     it('keeps waiting, and the page links the sign-in page back to the same request, so the retry lands in this run', async () => {
       server = await startMockServer({ noBusiness: { mayCreate: false, reason, times: 1 } })
       const io = fakeIo({ AMDAHL_API_URL: server.url })
-      // Long enough for the refusal to arrive first under a loaded test run; the wait below outlasts it.
-      io.browserGraceMs = 500
       const { pages, visit } = browser(io)
       const run = cli(io, 'login')
       await vi.waitFor(() => expect(pages).toHaveLength(1))
@@ -114,8 +112,7 @@ describe('the loopback answer', () => {
       const again = `${server.url}/login?redirect=${encodeURIComponent(`${authorize.pathname}${authorize.search}`)}`
       // The same words on the page and the terminal: the page links them, the terminal prints the URL.
       expect(pages[0]).toContain(`<p>${why}</p><p><a href="${again.replace(/&/g, '&#38;')}">${label} →</a></p></body>`)
-      // Past the grace period: the authorize link, which would only sign in as the same address again, never prints.
-      await new Promise((r) => setTimeout(r, 700))
+      // The authorize link, which would only sign in as the same address again, never prints.
       // The server's sign-in page returns the browser to the same authorize URL, signed in as someone else.
       await visit(io.opened[0]!)
       const r = await run
@@ -135,11 +132,13 @@ describe('the loopback answer', () => {
     })
   })
 
-  it('the link waits for the browser, and --no-browser prints it at once', async () => {
+  it('the link stays out of the way while the browser answers, and --no-browser prints it at once', async () => {
     server = await startMockServer()
     const io = fakeIo({ AMDAHL_API_URL: server.url })
     const quick = await cli(io, 'login')
     expect(quick.stderr).toBe('Opening your browser…\n')
+    // stderr is not a terminal here, so nothing waits for Enter.
+    expect(io.listened).toBe(0)
     io.openUrl = async () => false
     const noBrowser = cli(io, 'login', '--no-browser')
     await new Promise((r) => setTimeout(r, 50))
@@ -149,9 +148,8 @@ describe('the loopback answer', () => {
     expect((await noBrowser).code).toBe(0)
   })
 
-  it('waits 15 minutes for the browser by default, and a minute before it prints the link: time to sign in, or create a workspace on the way', () => {
+  it('waits 15 minutes for the browser by default: time to create a workspace on the way', () => {
     expect(realIo().loginTimeoutMs).toBe(900_000)
-    expect(realIo().browserGraceMs).toBe(60_000)
   })
 
   it('a state mismatch exits 1 and saves nothing', async () => {

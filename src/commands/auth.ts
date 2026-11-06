@@ -5,9 +5,11 @@
 // Login is the OAuth authorization-code flow with PKCE over a loopback
 // redirect: discover the endpoints, listen on 127.0.0.1, open the browser on
 // the authorize URL, exchange the code, then ask /me/context who the token is
-// and save that as a profile named after the workspace slug. The link is
-// printed only when the browser could not be opened, or nothing came back
-// within a minute. A new user may create their workspace on the way
+// and save that as a profile named after the workspace slug. The full link
+// is printed at once only with --no-browser or when the browser could not be
+// opened. Otherwise a person at a terminal gets one short line: a clickable
+// link where the terminal supports one, and Enter prints the full link.
+// A new user may create their workspace on the way
 // (the server's self-serve page, which returns to the same authorize request),
 // so the wait is long. A user the server gives no workspace comes back as
 // `error=no_business` and exits 5 with the one next step: the CLI never
@@ -17,6 +19,7 @@ import type { MeContext } from '../api'
 import type { StoredWorkspace } from '../config'
 import { apiClient, call, requireOAuthCredential, resolveCredential, str, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
+import { PromptCancelled } from '../io'
 import {
   authorizeUrl,
   consoleUrlFor,
@@ -28,7 +31,7 @@ import {
   signInAgainLine,
   startLoopback,
 } from '../oauth'
-import { printable } from '../output'
+import { hyperlink, printable, supportsHyperlinks } from '../output'
 import { keychainAccount } from '../secrets'
 
 export { noBusinessMessage }
@@ -49,8 +52,9 @@ export interface SignedIn {
 }
 
 /**
- * Sign in through the browser and save the profile. Says only "Opening your
- * browser…", plus the link when it is needed; the caller reports the result.
+ * Sign in through the browser and save the profile. Says "Opening your
+ * browser…" and, at a terminal, how to get the link; the caller reports the
+ * result. Ctrl+C while it waits rejects with PromptCancelled.
  */
 export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
   const { io, out, flags } = ctx
@@ -68,7 +72,7 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
   const endpoints = await discover(ctx.apiUrl)
   const pkce = createPkce()
   const consoleUrl = consoleUrlFor(io, ctx.apiUrl)
-  let timer: ReturnType<typeof setTimeout> | undefined
+  let stopKeys = () => {}
   let linkShown = false
   const loopback = await startLoopback(io, {
     port,
@@ -77,7 +81,6 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
     timeoutMs: io.loginTimeoutMs,
     // The page carries the way on; the authorize link would only sign in as the same address again.
     onSignInAgain: (reason, retry) => {
-      clearTimeout(timer)
       linkShown = true
       out.info(signInAgainLine(reason, retry))
     },
@@ -91,19 +94,28 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
       linkShown = true
       out.info(`${lead}\n\n  ${url}\n`)
     }
+    let cancelled: Promise<never> | undefined
     if (flags['no-browser']) {
       showLink('Open this URL in a browser to sign in:')
     } else {
       out.info('Opening your browser…')
+      if (!ctx.nonInteractive && io.stderrIsTTY) {
+        const fallback = supportsHyperlinks(io.env, out.color) ? hyperlink('Open the sign-in page', url) : 'Press Enter for the link.'
+        out.info(`Browser didn't open? ${fallback}`)
+        cancelled = new Promise<never>((_, reject) => {
+          stopKeys = io.listenForEnter(
+            () => showLink('Open this link to sign in:'),
+            () => reject(new PromptCancelled())
+          )
+        })
+      }
       void io.openUrl(url).then((opened) => {
         if (!opened) showLink('Your browser did not open. Open this link to sign in:')
       })
-      timer = setTimeout(() => showLink('Finish in your browser, or open this link:'), io.browserGraceMs)
-      timer.unref?.()
     }
 
-    const callback = await loopback.result
-    clearTimeout(timer)
+    const callback = await (cancelled ? Promise.race([loopback.result, cancelled]) : loopback.result)
+    stopKeys()
     linkShown = true
     if (callback.kind === 'no_business') {
       throw new CliError('no_business', noBusinessMessage(consoleUrl, callback.mayCreate, callback.reason), EXIT.noWorkspace)
@@ -139,7 +151,7 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
     ctx.saveConfig()
     return { profile: name, me, workspace: ws }
   } finally {
-    clearTimeout(timer)
+    stopKeys()
     loopback.close()
   }
 }
