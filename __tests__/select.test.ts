@@ -5,7 +5,7 @@
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { PromptCancelled } from '../src/io'
-import { listenForEnter, multiSelectMenu, screenLines, selectMenu, type TickMenuOptions } from '../src/select'
+import { listenForEnter, multiSelectMenu, readPaste, screenLines, selectMenu, type TickMenuOptions } from '../src/select'
 
 const UP = '\u001b[A'
 const DOWN = '\u001b[B'
@@ -316,6 +316,39 @@ describe('multiSelectMenu', () => {
     expect(screen(t.drawn(), 30)).toEqual(['Where? none'])
   })
 
+  it('the setup\'s menu with nothing found: a two-line note, four rows, the marker on the last, and Space then Enter picks it', async () => {
+    const note = "We didn't find Claude Code, Cursor or Codex on this computer.\nUsing the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect"
+    for (const columns of [80, 40]) {
+      const t = terminal()
+      const done = multiSelectMenu(t.input, t.output, 'Where should Amdahl work?', [...CLIENTS, 'This terminal'], {
+        note,
+        initial: 3,
+        hint: '↑↓ move · Space tick/untick · Enter continue',
+        columns: () => columns,
+      })
+      if (columns === 80) {
+        expect(plain(t.drawn())).toContain(
+          "Where should Amdahl work?\nWe didn't find Claude Code, Cursor or Codex on this computer.\nUsing the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect\n  [ ] Claude Code\n  [ ] Cursor\n  [ ] Codex\n> [ ] This terminal\n↑↓ move · Space tick/untick · Enter continue\n"
+        )
+      }
+      t.input.write(' ')
+      await new Promise((resolve) => setImmediate(resolve))
+      t.input.write('\r')
+      expect(await done).toEqual([3])
+      // The note's two lines (wrapped or not) are erased with the rest.
+      expect(screen(t.drawn(), columns)).toEqual(['Where should Amdahl work? This terminal'])
+    }
+  })
+
+  it('a ticked row wins over `initial` for where the marker starts', async () => {
+    const t = terminal()
+    const done = multiSelectMenu(t.input, t.output, 'Where?', [...CLIENTS, 'This terminal'], { ticked: [false, true, false, false], initial: 3 })
+    t.input.write(' ')
+    await new Promise((resolve) => setImmediate(resolve))
+    t.input.write('\r')
+    expect(await done).toEqual([])
+  })
+
   it('counts the screen lines a row takes', () => {
     expect(screenLines('abc', 80)).toBe(1)
     expect(screenLines('x'.repeat(40), 40)).toBe(1)
@@ -399,5 +432,65 @@ describe('listenForEnter', () => {
     t.input.isRaw = true
     listenForEnter(t.input, () => {}, () => {})()
     expect(t.input.rawCalls).toEqual([true, true])
+  })
+})
+
+describe('readPaste', () => {
+  /** Start reading, write each chunk as the terminal would deliver it, and settle. */
+  async function paste(chunks: string[], gapMs = 0) {
+    const t = terminal()
+    const result = readPaste(t.input, t.output, 'Paste it:').then(
+      (text) => ({ text }),
+      (error: unknown) => ({ error })
+    )
+    for (const chunk of chunks) {
+      t.input.write(chunk)
+      await new Promise((resolve) => setTimeout(resolve, gapMs))
+    }
+    return { ...(await result), ...t }
+  }
+
+  it('reads typed lines up to an empty line, with bracketed paste on while it reads and off after', async () => {
+    const r = await paste(['Hi Sam,\r', 'Quick one.\r', '\r'], 20)
+    expect(r).toMatchObject({ text: 'Hi Sam,\nQuick one.' })
+    expect(r.drawn().startsWith('Paste it:\n\u001b[?2004h')).toBe(true)
+    // No readline prompt: its default "> " would show on lines it redraws.
+    expect(r.drawn()).not.toContain('> ')
+    expect(r.drawn().endsWith('\u001b[?2004l')).toBe(true)
+    expect(r.input.isRaw).toBe(false)
+  })
+
+  it('keeps the empty lines inside a bracketed paste, and ends at the empty line typed after it', async () => {
+    const r = await paste(['\u001b[200~Hi Sam,\r\rSaw your post.\r\rBest,\rDom\r\u001b[201~', '\r'], 200)
+    expect(r).toMatchObject({ text: 'Hi Sam,\n\nSaw your post.\n\nBest,\nDom' })
+  })
+
+  it('keeps a long pasted line whole: no line limit as in a cooked terminal', async () => {
+    const long = 'x'.repeat(3000)
+    const r = await paste([`\u001b[200~${long}\r\u001b[201~`, '\r'], 200)
+    expect(r).toMatchObject({ text: long })
+  })
+
+  it('without bracketed paste, an empty line followed at once by more text is part of the paste', async () => {
+    const r = await paste(['Hi Sam,\r\rSaw your post.\r', '\r'], 300)
+    expect(r).toMatchObject({ text: 'Hi Sam,\n\nSaw your post.' })
+  })
+
+  it('skips empty lines before anything is pasted', async () => {
+    const r = await paste(['\r', '\r', 'draft\r', '\r'], 200)
+    expect(r).toMatchObject({ text: 'draft' })
+  })
+
+  it('Ctrl+D ends it with what was typed', async () => {
+    const r = await paste(['draft\r', '\u0004'], 20)
+    expect(r).toMatchObject({ text: 'draft' })
+  })
+
+  it('Ctrl+C rejects with PromptCancelled and puts the terminal back', async () => {
+    const r = await paste(['half a dr', '\u0003'], 20)
+    expect((r as { error?: unknown }).error).toBeInstanceOf(PromptCancelled)
+    expect(r.drawn().endsWith('\u001b[?2004l')).toBe(true)
+    expect(r.input.isRaw).toBe(false)
+    expect(r.input.listenerCount('keypress')).toBe(0)
   })
 })

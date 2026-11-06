@@ -148,6 +148,19 @@ describe('the loopback answer', () => {
     expect((await noBrowser).code).toBe(0)
   })
 
+  it('ends with the next step: try a pasted message, or set up an AI tool; --json stays one document', async () => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url, npm_command: 'exec' })
+    const r = await cli(io, 'login')
+    expect(r.code).toBe(0)
+    expect(r.stdout.split('\n').filter((line) => line.length > 80)).toEqual([])
+    expect(r.stdout).toBe(
+      'Signed in as dev@example.com to Acme (acme). Profile: acme.\nNext: run `npx -y amdahl optimize` and paste an email,\nor `npx -y amdahl` to add Amdahl to Claude Code, Cursor or Codex.\n'
+    )
+    const json = await cli(io, 'login', '--json')
+    expect(JSON.parse(json.stdout)).toMatchObject({ ok: true, profile: 'acme' })
+  })
+
   it('waits 15 minutes for the browser by default: time to create a workspace on the way', () => {
     expect(realIo().loginTimeoutMs).toBe(900_000)
   })

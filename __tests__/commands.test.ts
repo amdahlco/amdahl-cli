@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import pkg from '../package.json'
 import { parseCommandLine } from '../src/args'
-import { whatAmdahlDid } from '../src/commands/optimize'
+import { PASTE_PROMPT, VERSION_RULE, whatAmdahlDid } from '../src/commands/optimize'
 import { EXIT, exitForHttp } from '../src/errors'
 import { generateKey } from '../src/keygen'
 import { SKILL_TEXT, isShippedSkill } from '../src/skill'
@@ -83,15 +83,15 @@ describe('exit codes', () => {
     expect(await cli(io, 'help')).toMatchObject({ code: 0, stdout: (await cli(io, '--help')).stdout })
   })
 
-  it('under npx, every next step says `npx amdahl`', async () => {
+  it('under npx, every next step says `npx -y amdahl`', async () => {
     for (const env of [{ npm_command: 'exec' }, { npm_lifecycle_event: 'npx' }]) {
       const io = fakeIo(env)
-      expect((await cli(io, 'whoami')).stderr).toBe('Error: Not signed in. Run `npx amdahl login`, or set AMDAHL_KEY.\n')
-      expect((await cli(io, '--bogus')).stderr).toContain('Run `npx amdahl --help`.')
+      expect((await cli(io, 'whoami')).stderr).toBe('Error: Not signed in. Run `npx -y amdahl login`, or set AMDAHL_KEY.\n')
+      expect((await cli(io, '--bogus')).stderr).toContain('Run `npx -y amdahl --help`.')
     }
     const cached = fakeIo()
     cached.scriptPath = '/Users/a/.npm/_npx/0123abcd/node_modules/.bin/amdahl'
-    expect((await cli(cached, 'whoami')).stderr).toContain('Run `npx amdahl login`')
+    expect((await cli(cached, 'whoami')).stderr).toContain('Run `npx -y amdahl login`')
     // Installed, the command is on PATH by its own name.
     const installed = fakeIo()
     installed.scriptPath = '/usr/local/lib/node_modules/@amdahl/cli/bin/amdahl.js'
@@ -127,8 +127,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.3.4\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.3.4\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.3.5\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.3.5\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })
@@ -322,10 +322,79 @@ describe('optimize', () => {
     expect(r.json.error.code).toBe('quota_exceeded')
   })
 
-  it('no file on a TTY is a usage error; a bad flag value too', async () => {
+  it('no file with AMDAHL_NO_PROMPT=1 at a terminal is a usage error; a bad flag value too', async () => {
     const io = await loggedIn()
+    io.env.AMDAHL_NO_PROMPT = '1'
     expect((await cli(io, 'optimize')).code).toBe(2)
     expect((await cli(io, 'optimize', '-', '--channel', 'fax')).code).toBe(2)
+  })
+})
+
+describe('optimize with no file at a terminal', () => {
+  it('asks for a paste, sends it with the flags, and shows Amdahl\'s version, what it did and how to run it next time', async () => {
+    const io = await loggedIn({ optimizeResult: { ok: true, message: 'Hi Sam, short.', summary: 'Tighter.', what_changed: 'Cut the opener' } })
+    io.env.npm_command = 'exec'
+    io.platform = 'darwin'
+    io.answers.push('Hi Sam,\n\nLong draft.')
+    const r = await cli(io, 'optimize', '--channel', 'linkedin')
+    expect(r.code).toBe(0)
+    expect(io.prompts).toEqual([PASTE_PROMPT])
+    expect(r.stdout).toBe('Hi Sam, short.\n')
+    expect(r.stderr).toBe(
+      `Amdahl is rewriting it. This can take a minute.\n${VERSION_RULE}\nCut the opener.\nNext time: npx -y amdahl optimize draft.txt,\nor pbpaste | npx -y amdahl optimize -\n`
+    )
+    const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
+    expect(bodies).toEqual([{ message: 'Hi Sam,\n\nLong draft.', channel: 'linkedin' }])
+  })
+
+  it('not signed in: signs in through the browser first, then asks for the paste', async () => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url })
+    io.answers.push('draft')
+    const r = await cli(io, 'optimize')
+    expect(r.code).toBe(0)
+    expect(io.opened).toHaveLength(1)
+    expect(r.stderr).toContain('Sign in first, then paste your message.\nNew to Amdahl? The sign-in sets up your free workspace.\nOpening your browser…\n✓ Signed in · Acme\n')
+    expect(r.stdout).toBe('better: draft\n')
+    // The sign-in is kept for next time.
+    io.answers.push('again')
+    expect((await cli(io, 'optimize')).stdout).toBe('better: again\n')
+    expect(io.opened).toHaveLength(1)
+  })
+
+  it('nothing pasted sends nothing; Ctrl+C stops (exit 130)', async () => {
+    const io = await loggedIn()
+    io.answers.push('')
+    const r = await cli(io, 'optimize')
+    expect(r).toMatchObject({ code: 0, stdout: '', stderr: 'Nothing pasted, so nothing was sent.\nNext time: amdahl optimize draft.txt\n' })
+    io.answers.push(null)
+    expect(await cli(io, 'optimize')).toMatchObject({ code: 130, stderr: 'Stopped. Nothing changed.\n' })
+    expect(server!.log.filter((l) => l.path.endsWith('/messages/optimize'))).toEqual([])
+  })
+
+  it('with --json: the same JSON as a file run, and no extra lines', async () => {
+    const io = await loggedIn()
+    io.answers.push('draft')
+    const r = await cli(io, 'optimize', '--json')
+    expect(r.json).toMatchObject({ ok: true, file: '-', result: { message: 'better: draft' } })
+    expect(r.stderr).toBe('Amdahl is rewriting it. This can take a minute.\n')
+  })
+
+  it('an ok:false result exits 1 with its reason', async () => {
+    const io = await loggedIn({ optimizeResult: { ok: false, reason: 'optimizer_timeout', detail: 'Took too long.' } })
+    io.answers.push('draft')
+    const r = await cli(io, 'optimize')
+    expect(r.code).toBe(1)
+    expect(r.stderr).toContain('Not optimized (optimizer_timeout): Took too long.\n')
+  })
+
+  it('a piped stdin is still read whole, with no question', async () => {
+    const io = await loggedIn()
+    io.stdinIsTTY = false
+    io.stdinText = 'piped draft'
+    const r = await cli(io, 'optimize')
+    expect(r.stdout).toBe('better: piped draft\n')
+    expect(io.prompts).toEqual([])
   })
 })
 

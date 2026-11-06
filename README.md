@@ -45,93 +45,172 @@ anything, names the version it found, and links the Node.js download page.
 
 ```sh
 # Run once, with no install
-npx @amdahl/cli login
+npx -y amdahl
 
 # Or install the `amdahl` command
 npm i -g @amdahl/cli
-amdahl login
+amdahl
 ```
 
 `amdahl` is also on npm by its short name, so `npx amdahl ...` is the same as
 `npx @amdahl/cli ...`. That package ([packages/amdahl](packages/amdahl)) has no
 code of its own: it depends on `@amdahl/cli` at the same version and runs it.
+npm asks "Ok to proceed? (y)" before every `npx` run of a package you have not
+installed; `npx -y` skips that question, so every example here uses it.
 
-The quickest way to start is `npx amdahl` with nothing after it (or
-`npx amdahl setup`), in a terminal. It walks you through setup:
+The quickest way to start is `npx -y amdahl` with nothing after it (or
+`npx -y amdahl setup`), in a terminal. It asks where Amdahl should work:
 
 ```
-$ npx amdahl
+$ npx -y amdahl
 Amdahl · predictive ML for GTM
 Where should Amdahl work?
 > [x] Claude Code   found on your machine
   [ ] Cursor
   [ ] Codex
-↑↓ move · Space tick/untick · Enter to install
+  [ ] This terminal
+↑↓ move · Space tick/untick · Enter continue
 ```
 
 It finds Claude Code, Cursor and Codex by their command on your PATH
 (`claude`, `cursor`, `codex`) or their files in your home folder (`.claude`
 or `.claude.json`, `.cursor`, `.codex`). Only the ones it finds are ticked
-and tagged "found on your machine" (in dim grey where colour is allowed). If
-it finds none, it says "We didn't find any of these on this computer. Tick
-the ones you use." under the question. The `>` marker starts on the first
-ticked row, and only the marker is coloured, so the row under it never
-looks picked when it is not. Esc, `q` or Ctrl+C stops with nothing changed
-(exit 130). The menu redraws in place in any width, also in a split pane
-narrower than its lines, and `NO_COLOR` or `--no-color` turn the colour off.
-
-After Enter it first checks each client it can set up, so a broken
-`~/.cursor/mcp.json` or `~/.claude.json` is reported before you sign in.
-If you are not signed in, it signs you in through the browser:
+and tagged "found on your machine" (in dim grey where colour is allowed).
+"This terminal" is always there and never ticked for you. If it finds none
+of the three, it says so under the question, points Claude and ChatGPT app
+users to https://amdahl.ai/connect, and the marker starts on "This
+terminal", so Space then Enter picks it:
 
 ```
-Where should Amdahl work? Claude Code
-Opening your browser…
+Where should Amdahl work?
+We didn't find Claude Code, Cursor or Codex on this computer.
+Using the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect
+  [ ] Claude Code
+  [ ] Cursor
+  [ ] Codex
+> [ ] This terminal
+↑↓ move · Space tick/untick · Enter continue
+```
+
+The `>` marker starts on the first ticked row, and only the marker is
+coloured, so the row under it never looks picked when it is not. Esc, `q`
+or Ctrl+C stops with nothing changed (exit 130). The menu redraws in place
+in any width, also in a split pane narrower than its lines, and `NO_COLOR`
+or `--no-color` turn the colour off. Enter with nothing ticked changes
+nothing and says how to try Amdahl: run it again and tick "This terminal",
+or connect the Claude or ChatGPT app at https://amdahl.ai/connect.
+
+### The AI tools: set up first, then one sign-in in the tool
+
+For Claude Code, Cursor and Codex there is no sign-in in the terminal. The
+setup writes each tool's config straight away (as `amdahl install` does), so
+nothing is lost if you stop later, and then prints that tool's next steps.
+Each tool signs in to Amdahl itself, over OAuth, the first time it connects;
+that sign-in is also where a new user creates their free workspace. Each
+screen is six lines or fewer:
+
+```
+✓ Added Amdahl to Claude Code.
+One step left, in Claude Code:
+  1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.
+  2. Paste an email and say: "Use Amdahl to make this sound less like AI"
+New to Amdahl? The sign-in sets up your free workspace.
+```
+
+```
+✓ Added Amdahl to Cursor.
+One step left, in Cursor:
+  1. If it's open, quit and reopen it. In Customize > MCPs, sign in to amdahl.
+  2. In chat, paste an email, say: "Use Amdahl to make this sound less like AI"
+```
+
+Cursor reads `~/.cursor/mcp.json` when it starts and lists its MCP servers
+under Customize, then MCPs.
+
+Codex runs in the same terminal, so with `codex` on your PATH the setup
+offers to run its sign-in for you:
+
+```
+✓ Added Amdahl to Codex.
+Press Enter to sign Codex in to Amdahl (opens your browser).
+✓ Codex is connected.
+Run codex, paste an email and say: "Use Amdahl to make this sound less like AI"
+```
+
+Enter runs `codex mcp login amdahl` on your terminal (it prints the link and
+opens the browser). Ctrl+C there skips it and names the command to run
+later; if the sign-in does not finish, it says so and names the same
+command. Without `codex` on your PATH, the screen lists `codex mcp login
+amdahl` as step 1. With more than one tool, the screens follow one another
+and the "New to Amdahl?" line is printed once. A tool that fails (a broken
+`~/.cursor/mcp.json` or `~/.claude.json`, say) prints its error, the rest
+still run, and the exit code is the first failure's. In a terminal narrower
+than a screen's lines, they break between words, and a numbered step's next
+line starts under its text.
+
+### This terminal: try it on a message
+
+Pick "This terminal" (alone or beside the tools, which are set up first) to
+see Amdahl work right away. It signs you in through the browser if you are
+not signed in yet, then asks for a message:
+
+```
 ✓ Signed in · Acme
-✓ Added to Claude Code
-Try it: say "make this email sound less like AI" in Claude Code.
-Before that, run /mcp once in Claude Code to connect Amdahl.
+Paste an email or LinkedIn message, then press Enter on an empty line:
+<your draft>
+Amdahl is rewriting it. This can take a minute.
+── Amdahl's version ──────────────
+<the rewritten message>
+Cut the opener and 2 sentences nothing backed.
+Next time: npx -y amdahl optimize draft.txt,
+or pbpaste | npx -y amdahl optimize -
 ```
 
-While it waits, it prints one short line under "Opening your browser…". In
-a terminal that shows links (iTerm2, VS Code, Warp, Terminal, WezTerm,
-Ghostty, Windows Terminal, VTE 0.50 or later) it reads "Browser didn't open?
-Open the sign-in page" and the last words are a link; elsewhere it says to
-press Enter for the link. `FORCE_HYPERLINK=1` or `0` overrides the guess,
-and `NO_COLOR` turns the link off. Either way, Enter prints the full sign-in
-link once. Once you are signed in, that line is replaced by `✓ Signed in`.
-If the browser could not be opened, or with `--no-browser`, the full link
-prints at once. It waits up to 15 minutes, so someone new can create their
-workspace on the way and land back in the same setup. If the server rejects
-a key set in `AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`,
-`--api-key`), it says so and skips the browser sign-in, since that key would
-still win.
+Empty lines inside a paste stay in the message: the terminal marks a paste
+(bracketed paste), and where it does not, an empty line that more text
+follows at once counts as pasted. Ctrl+D also ends the message. The lines
+under Amdahl's version say what it did, as `amdahl optimize` does. The
+`pbpaste` line is printed on macOS only.
 
-Then it sets up each client you ticked the way `amdahl install` does, one
-line each. A client that fails prints its error and the rest still run; the
-exit code is the first failure's. Each client then signs in to Amdahl
-itself, once, the first time it connects, and the setup ends with that step
-for every client it set up, on every run: `/mcp` in Claude Code, `codex mcp
-login amdahl` for Codex, and Cursor asks on first use. With more than one:
+While it waits for the browser, it prints one short line under "Opening
+your browser…". In a terminal that shows links (iTerm2, VS Code, Warp,
+Terminal, WezTerm, Ghostty, Windows Terminal, VTE 0.50 or later) it reads
+"Browser didn't open? Open the sign-in page" and the last words are a link;
+elsewhere it says to press Enter for the link. `FORCE_HYPERLINK=1` or `0`
+overrides the guess, and `NO_COLOR` turns the link off. Either way, Enter
+prints the full sign-in link once. Once you are signed in, that line is
+replaced by `✓ Signed in`. If the browser could not be opened, or with
+`--no-browser`, the full link prints at once. It waits up to 15 minutes, so
+someone new can create their workspace on the way and land back in the same
+setup. If the server rejects a key set in `AMDAHL_KEY` (or `AMDAHL_API_KEY`,
+`AMDAHL_ACCESS_TOKEN`, `--api-key`), it says so, skips the browser sign-in
+(that key would still win) and exits 3. Ctrl+C during the sign-in or the
+paste stops with exit 130; if tools were set up first, it says they still
+are.
+
+### Run it again
+
+When every tool it finds already points at Amdahl, it asks nothing, needs no
+network and signs in nowhere. It says so, with the one thing to try and how
+to finish the tool's sign-in if you have not yet:
 
 ```
-Try it: say "make this email sound less like AI" in any of them.
-Before that, connect each one once:
-  Claude Code: run /mcp
-  Cursor: sign in when it asks, on first use
-  Codex: run `codex mcp login amdahl`
+Amdahl is in Claude Code. You're all set.
+Paste an email there and say: "Use Amdahl to make this sound less like AI"
+If you've already run /mcp, you're done.
+If not: quit and reopen Claude Code, type /mcp, pick amdahl, sign in.
+Want to try it here instead? Run: npx -y amdahl optimize
 ```
 
-`npx amdahl --verbose` also prints the files it wrote, the profile and
-where the sign-in is stored. Run it again once you are set up and it says
-`You're set up in Claude Code and Cursor.` with the same closing lines, and
-asks nothing; if it cannot reach Amdahl to check your sign-in, it still
-says so.
+An old copy of the Amdahl skill is brought up to date on the way. A tool it
+finds that does not point at Amdahl yet brings the menu back.
+`npx -y amdahl --verbose` also prints the files it wrote, the profile and
+where the sign-in is stored.
 
 ### Run by an agent, or with no terminal
 
-You can ask Claude Code, Cursor or Codex to run `npx amdahl` for you. With
-no terminal (an agent's shell, a pipe such as `npx amdahl | cat`, or stdin,
+You can ask Claude Code, Cursor or Codex to run `npx -y amdahl` for you. With
+no terminal (an agent's shell, a pipe such as `npx -y amdahl | cat`, or stdin,
 stdout or stderr redirected), and whenever `CLAUDECODE` or `CURSOR_AGENT`
 is set, it sets up without a question and without a browser sign-in:
 
@@ -142,14 +221,22 @@ is set, it sets up without a question and without a browser sign-in:
 In Codex's default sandbox, writes outside the workspace and network access
 are blocked, so the run usually fails (`npx` cannot fetch the package, or
 `Could not update ~/.codex/config.toml`, exit 1) unless you approve the
-escalation Codex asks for, or run `npx amdahl` in your own terminal.
+escalation Codex asks for, or run `npx -y amdahl` in your own terminal.
 
 Each client signs in on its first connect, over OAuth, so the CLI needs no
-sign-in of its own here. The last lines say how to finish, as above. Run
-from inside Claude Code, the step is "restart Claude Code and run /mcp
+sign-in of its own here. The last lines say what to try and the one step
+that connects each client:
+
+```
+✓ Added to Claude Code
+Try it: paste an email and say "Use Amdahl to make this sound less like AI" in Claude Code.
+Before that, restart Claude Code and run /mcp once to connect Amdahl.
+```
+
+Run from inside Claude Code, the step is "restart Claude Code and run /mcp
 once", since a running session may only see the new server after a
 restart. If
-it finds no client, it says so on stderr, names `npx amdahl install
+it finds no client, it says so on stderr, names `npx -y amdahl install
 claude-code`, writes nothing and exits 1.
 
 **Exit code change in 0.3.4.** Before 0.3.4, bare `amdahl` with no terminal
@@ -163,8 +250,8 @@ line that says why and names `amdahl install`. CI means one of `CI`, `JENKINS_UR
 `BUILD_NUMBER` is set together with `JENKINS_HOME`.
 
 When the CLI was started by `npx`, every message that names a command says
-`npx amdahl ...` (for example `npx amdahl login`), since an `npx` user has no
-`amdahl` on their PATH.
+`npx -y amdahl ...` (for example `npx -y amdahl login`), since an `npx` user
+has no `amdahl` on their PATH, and `-y` skips npm's question.
 
 To connect one AI client yourself, run `amdahl install claude-code` (or `codex`,
 `cursor`). It adds the Amdahl MCP server and also installs the Amdahl skill,
@@ -189,7 +276,7 @@ files are also written whole through a temp file. A symbolic link at
 `~/.claude.json` is followed to its target, even one not created yet, and
 stays a link. An `mcpServers` that is not a JSON object (an array, say) in
 `~/.claude.json` or `~/.cursor/mcp.json` is left alone with `invalid_config`,
-found before the sign-in. If it cannot write the client's config file, it
+found before the setup writes anything. If it cannot write the client's config file, it
 exits 1 with `write_failed` and names the file. The skill goes to the
 client's user skills folder:
 
@@ -209,11 +296,11 @@ https://docs.amdahl.ai/skills/amdahl/SKILL.md.
 ## Quick start
 
 ```sh
-amdahl                       # guided setup for Claude Code, Cursor and Codex (an agent can run it too)
+amdahl                       # guided setup for Claude Code, Cursor and Codex, or try it here (an agent can run it too)
 amdahl login                 # sign in through the browser with your console account
 amdahl whoami                # the account, workspace and role you are signed in as
 amdahl status                # can this workspace optimize, and what blocks it
-amdahl optimize draft.md     # rewrite one message (or pipe it in with -)
+amdahl optimize draft.md     # rewrite one message (or pipe it in with -, or run it bare and paste)
 amdahl install claude-code   # connect an AI client and add the Amdahl skill (also codex, cursor)
 amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to this project
 ```
@@ -226,6 +313,15 @@ a subdomain address, "Try again" once you've confirmed your email), and the
 terminal keeps waiting for it. Anything
 else exits 5 with the one next step (ask your company's admins, try again
 tomorrow, and so on). The CLI itself never creates or joins a workspace.
+
+`amdahl login` ends with the next step: `amdahl optimize` to try a pasted
+message, or bare `amdahl` to add Amdahl to Claude Code, Cursor or Codex.
+
+`amdahl optimize` with no file, at a terminal, asks you to paste the message
+(as the setup's "This terminal" does) and signs you in through the browser
+first if you are not signed in ("Sign in first, then paste your message."). With stdin piped, or `-`, it reads stdin
+whole as before. With `AMDAHL_NO_PROMPT=1` at a terminal it still says to
+give a file (exit 2).
 
 On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 
@@ -260,9 +356,9 @@ stderr. An unknown option prints `Unknown option --foo.` and `Run \`amdahl
 It needs no sign-in.
 
 ```sh
-npx amdahl skills add <publisher>/<skill>
+npx -y amdahl skills add <publisher>/<skill>
 # the skill's link works too, with or without .md:
-npx amdahl skills add https://amdahl.ai/skills/<publisher>/<skill>
+npx -y amdahl skills add https://amdahl.ai/skills/<publisher>/<skill>
 ```
 
 In a terminal, it asks one question. It prints `Checking <publisher>/<skill>
@@ -452,7 +548,7 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 | 7 | approval denied, expired or locked out |
 | 8 | network or 5xx |
 | 9 | `skills add` did not install a skill amdahl.ai's security review flagged: no terminal to ask, `-y`, `--json` or an agent ran it, and no `--accept-warning` (nothing was written) |
-| 130 | stopped with Ctrl+C (or Esc or `q` in a menu) at a question: "Stopped. Nothing changed." |
+| 130 | stopped with Ctrl+C (or Esc or `q` in a menu) at a question: "Stopped. Nothing changed." (in the setup, after tools were set up: "Stopped. Amdahl is still set up in …") |
 
 ## Development
 

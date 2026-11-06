@@ -128,9 +128,16 @@ async function npmGlobalPrefix(ctx: Ctx): Promise<string | null> {
  * hold the server's headers, an API key among them.
  */
 async function claudeHasAmdahl(ctx: Ctx, command: string, mcpUrl: string): Promise<boolean> {
-  const res = await ctx.io.run(command, ['mcp', 'get', 'amdahl'])
-  return res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`)
+  // Asked once a run (the setup asks before it installs): `claude mcp get` is slow. `claude mcp add` forgets the answer.
+  let answer = claudeAnswers.get(ctx)
+  if (!answer) {
+    answer = ctx.io.run(command, ['mcp', 'get', 'amdahl']).then((res) => res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`))
+    claudeAnswers.set(ctx, answer)
+  }
+  return answer
 }
+
+const claudeAnswers = new WeakMap<Ctx, Promise<boolean>>()
 
 /** What to do about a settings file the CLI will not change. */
 const CONFIG_HINT = 'Fix the file, or move it away, then run the same command again.'
@@ -259,15 +266,11 @@ function updateConfig<T>(path: string, fn: () => T): T {
 }
 
 /**
- * True when `install <client>` would change nothing: the client already
- * points at Amdahl and its skill is current (or is the person's own edit,
- * which `install` keeps). Writes nothing and never prints what it ran: the
- * output of `claude mcp get` can hold another server's headers.
+ * True when `client` already points at Amdahl: its MCP entry is there, at
+ * this API's URL. Writes nothing and never prints what it ran: the output of
+ * `claude mcp get` can hold another server's headers.
  */
-export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
-  const skill = skillPath(client, ctx.io.homedir)
-  const current = existsSync(skill) ? readFileSync(skill, 'utf8') : null
-  if (current === null || (current !== SKILL_TEXT && isShippedSkill(current))) return false
+export async function hasAmdahl(ctx: Ctx, client: Client): Promise<boolean> {
   const mcpUrl = `${ctx.apiUrl}/mcp`
   if (client === 'claude-code') {
     if (claudeFileHasAmdahl(claudeConfigPath(ctx), mcpUrl)) return true
@@ -284,6 +287,18 @@ export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * True when `install <client>` would change nothing: the client already
+ * points at Amdahl ({@link hasAmdahl}) and its skill is current (or is the
+ * person's own edit, which `install` keeps).
+ */
+export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
+  const skill = skillPath(client, ctx.io.homedir)
+  const current = existsSync(skill) ? readFileSync(skill, 'utf8') : null
+  if (current === null || (current !== SKILL_TEXT && isShippedSkill(current))) return false
+  return hasAmdahl(ctx, client)
 }
 
 /** What one install step did: its JSON, its human lines, and stderr notes. */
@@ -364,6 +379,7 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
     if (claudeFileHasAmdahl(claudeConfigPath(ctx), mcpUrl) || (await claudeHasAmdahl(ctx, route.command, mcpUrl))) {
       return { data: { ok: true, client, action: 'unchanged', command }, human: `Claude Code already has Amdahl at ${mcpUrl}; nothing changed.`, notes: [] }
     }
+    claudeAnswers.delete(ctx)
     const res = await io.run(route.command, args)
     if (res.code !== 0) {
       throw new CliError('install_failed', `\`${command}\` failed: ${res.stderr.trim() || `exit ${res.code}`}`, EXIT.general)

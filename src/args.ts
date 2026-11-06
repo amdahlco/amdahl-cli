@@ -120,7 +120,7 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
       const ref = second && second.includes('/') ? second : '<publisher>/<skill>'
       throw usageError(
         second === undefined ? '`amdahl skills` needs a subcommand.' : `Unknown command \`amdahl skills ${second}\`.`,
-        `To add a skill: npx amdahl skills add ${ref}`
+        `To add a skill: npx -y amdahl skills add ${ref}`
       )
     }
     if (second === undefined) throw usageError(`\`amdahl ${first}\` needs a subcommand.`)
@@ -171,12 +171,14 @@ function parseErrorMessage(err: unknown): [string, string?] {
 export const USAGE = `Usage: amdahl <command> [options]
 
 What you can do:
-  amdahl                         Set up Claude Code, Cursor or Codex. In a
-                                 terminal it asks which and signs you in.
-                                 Run by an agent or with no terminal, it
-                                 sets up that agent, or every client it
-                                 finds, and asks nothing (also: amdahl setup)
+  amdahl                         Set up Claude Code, Cursor or Codex, or try
+                                 Amdahl in this terminal. In a terminal it
+                                 asks which. Run by an agent or with no
+                                 terminal, it sets up that agent, or every
+                                 client it finds, and asks nothing (also:
+                                 amdahl setup)
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
+                                 (with no file, at a terminal, paste it)
   amdahl status                  Check that this workspace can optimize
   amdahl keys create --name ci   Make an API key for a server or CI
   amdahl install claude-code     Connect one AI client (also codex, cursor)

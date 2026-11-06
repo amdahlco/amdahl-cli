@@ -16,6 +16,7 @@
 // creates or joins a workspace and never touches the waitlist.
 
 import type { MeContext } from '../api'
+import { amdahlCommand } from '../command-name'
 import type { StoredWorkspace } from '../config'
 import { apiClient, call, requireOAuthCredential, resolveCredential, str, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
@@ -155,6 +156,9 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
     }
     ctx.config.default_profile = name
     ctx.saveConfig()
+    // The rest of this run (the setup's try-out, `optimize`) uses the new sign-in.
+    ctx.profileName = name
+    ctx.profile = ctx.config.profiles[name] ?? null
     return { profile: name, me, workspace: ws }
   } finally {
     stopKeys()
@@ -165,6 +169,12 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
 /** The sentence `amdahl login` ends with (and `amdahl --verbose` shows). */
 export function signedInLine(ctx: Ctx, { profile, me, workspace }: SignedIn): string {
   return `Signed in as ${printable(me.email ?? me.user_id)} to ${ctx.out.bold(printable(workspace.name))} (${printable(workspace.slug)}). Profile: ${profile}.`
+}
+
+/** What `amdahl login` suggests next: try Amdahl on a pasted message, or set up an AI tool. */
+export function loginNextLine(): string {
+  // Two lines, so it fits 80 columns.
+  return `Next: run \`${amdahlCommand('optimize')}\` and paste an email,\nor \`${amdahlCommand()}\` to add Amdahl to Claude Code, Cursor or Codex.`
 }
 
 /** `amdahl login`. */
@@ -180,7 +190,7 @@ export async function login(ctx: Ctx): Promise<number> {
       scopes: me.scopes,
       api_url: ctx.apiUrl,
     },
-    signedInLine(ctx, signedIn)
+    `${signedInLine(ctx, signedIn)}\n${loginNextLine()}`
   )
   return EXIT.ok
 }

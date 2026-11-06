@@ -19,12 +19,15 @@ export function startedByNpx(io: Pick<Io, 'env' | 'scriptPath'>): boolean {
   return io.env.npm_command === 'exec' || io.env.npm_lifecycle_event === 'npx' || /[\\/]_npx[\\/]/.test(io.scriptPath ?? '')
 }
 
-/** Name the CLI `npx amdahl` or `amdahl` in every message of this run. */
+/**
+ * Name the CLI `npx -y amdahl` or `amdahl` in every message of this run. The
+ * `-y` skips npm's "Ok to proceed?" question, which npm asks on every run.
+ */
 export function setCommandName(io: Pick<Io, 'env' | 'scriptPath'>): void {
-  prefix = startedByNpx(io) ? 'npx amdahl' : 'amdahl'
+  prefix = startedByNpx(io) ? 'npx -y amdahl' : 'amdahl'
 }
 
-/** The command to tell a person to run, for example `amdahlCommand('login')` is `npx amdahl login` under npx. */
+/** The command to tell a person to run, for example `amdahlCommand('login')` is `npx -y amdahl login` under npx. */
 export function amdahlCommand(rest = ''): string {
   return rest ? `${prefix} ${rest}` : prefix
 }
