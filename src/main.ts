@@ -5,11 +5,12 @@
 // instead of exiting, so tests drive the whole CLI in-process.
 
 import { USAGE, parseCommandLine } from './args'
+import { setCommandName } from './command-name'
 import { authToken, login, logout, whoami } from './commands/auth'
 import { install } from './commands/install'
 import { keysCreate, keysList, keysRevoke } from './commands/keys'
 import { optimize } from './commands/optimize'
-import { setup, shouldSetUp } from './commands/setup'
+import { noSetupLine, setup, setupMode } from './commands/setup'
 import { skillsAdd } from './commands/skills'
 import { status, workspaceList, workspaceUse } from './commands/workspace-status'
 import { createCtx, toCliError, type Ctx } from './context'
@@ -37,7 +38,7 @@ const COMMANDS: Record<string, Handler> = {
 }
 
 /** Commands that take no positional arguments. */
-const NO_ARGS = new Set(['login', 'logout', 'whoami', 'auth token', 'status', 'keys create', 'keys list', 'workspace list'])
+const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'keys create', 'keys list', 'workspace list'])
 
 /**
  * Run the CLI.
@@ -47,6 +48,7 @@ const NO_ARGS = new Set(['login', 'logout', 'whoami', 'auth token', 'status', 'k
  * @returns the exit code.
  */
 export async function runCli(argv: string[], io: Io): Promise<number> {
+  setCommandName(io)
   const json = argv.includes('--json')
   let out = createOutput(io, json, argv.includes('--no-color'))
   try {
@@ -56,19 +58,23 @@ export async function runCli(argv: string[], io: Io): Promise<number> {
       io.stdout(`${VERSION}\n`)
       return EXIT.ok
     }
-    if (parsed.flags.help) {
+    if (parsed.flags.help || parsed.command === 'help') {
       io.stdout(USAGE)
       return EXIT.ok
     }
-    if (!parsed.command) {
-      // Bare `amdahl` in a person's terminal is the guided setup; anything else keeps the usage and exit 2.
-      // `--verbose` is the one flag the setup takes.
-      if (argv.every((a) => a === '--verbose') && shouldSetUp(io)) return await setup(createCtx(io, out, parsed.flags))
-      io.stderr(USAGE)
-      return EXIT.usage
-    }
-    if (NO_ARGS.has(parsed.command) && parsed.args.length > 0) {
+    if (NO_ARGS.has(parsed.command ?? '') && parsed.args.length > 0) {
       throw new CliError('usage', `Unexpected argument: ${parsed.args[0]}`, EXIT.usage)
+    }
+    if (!parsed.command || parsed.command === 'setup') {
+      // Bare `amdahl` (or `amdahl setup`) is the guided setup: the menu in a person's terminal, no
+      // question for an agent or a pipe. In CI, with AMDAHL_NO_PROMPT=1 or with --json it says why
+      // not and prints the usage (exit 2).
+      const mode = parsed.flags.json ? { kind: 'usage' as const, reason: 'it has no --json output' } : setupMode(io)
+      if (mode.kind === 'usage') {
+        io.stderr(`${noSetupLine(mode.reason)}${USAGE}`)
+        return EXIT.usage
+      }
+      return await setup(createCtx(io, out, parsed.flags), mode.kind)
     }
     const handler = COMMANDS[parsed.command]
     if (!handler) throw new CliError('usage', `Unknown command ${parsed.command}`, EXIT.usage)

@@ -1,29 +1,35 @@
 // src/commands/setup.ts
 //
-// Bare `amdahl` (for example `npx amdahl`) in a terminal: a guided setup. It
-// asks once which AI clients to set up (the ones it finds on this machine
-// start ticked), signs in through the browser when there is no sign-in yet,
-// then sets up each one ticked the way `install <client>` does. It says one
-// line per step; `--verbose` adds the files, the profile and the notes. When
-// every client it finds is already set up and there is a sign-in, it says so
-// and asks nothing.
+// Bare `amdahl` (for example `npx amdahl`), also `amdahl setup`: a guided
+// setup. In a person's terminal it asks once where Amdahl should work (the
+// clients it finds on this machine start ticked and say so), works out how
+// to set up each one ticked, signs in through the browser when there is no
+// sign-in yet, then sets up each one the way `install <client>` does. It
+// says one line per step; `--verbose` adds the files, the profile and the
+// notes. When every client it finds is already set up and there is a
+// sign-in, it says so and asks nothing.
+//
+// An agent, or any run without a terminal, gets the same setup with no
+// question and no sign-in. When Claude Code or Cursor says it runs the
+// command (CLAUDECODE, CURSOR_AGENT), only that client is set up; otherwise
+// (Codex sets no variable, a pipe sets none either) every client found on
+// the machine. In CI or with AMDAHL_NO_PROMPT=1 nothing is set up: it says
+// why and prints the usage (exit 2).
 //
 // The clients sign in to Amdahl themselves, over OAuth, the first time they
 // connect: the server lets a CLI sign-in open an API key request but never
 // mint one without a person typing a code in the console, so the setup has
-// no key to hand them. The last line names that one step for the client.
-//
-// Only a person at a terminal gets it. When stdin, stdout or stderr (where
-// the menu draws) is not a terminal, in CI, when an agent says it is running
-// (CLAUDECODE, CURSOR_AGENT) or with AMDAHL_NO_PROMPT=1, bare `amdahl` prints
-// the usage and exits 2, as it always has.
+// no key to hand them. The last lines name that one step for each client,
+// every run, since whoever runs the setup again because a client "does not
+// work" is the one who needs it most.
 
+import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT } from '../errors'
 import type { Io } from '../io'
 import { printable } from '../output'
 import { browserSignIn, signedInLine } from './auth'
-import { detectClients, installClient, isInstalled, type Client, type Step } from './install'
+import { detectClients, installClient, isInstalled, preflight, type Client, type Step } from './install'
 import { joinNames } from './skills-guide'
 
 /** The clients in the order the setup shows them, with the names a person reads. */
@@ -33,29 +39,82 @@ const SHOWN: { client: Client; name: string }[] = [
   { client: 'codex', name: 'Codex' },
 ]
 
+/** The menu's question, tag, note for a machine with none of the clients, and hint. */
+export const QUESTION = 'Where should Amdahl work?'
+export const FOUND_TAG = 'found on your machine'
+export const NONE_FOUND = "We didn't find any of these on this computer. Tick the ones you use."
+export const MENU_HINT = '↑↓ move · Space tick/untick · Enter to install'
+
+const ASK = 'say "make this email sound less like AI"'
+
 /**
- * The first thing to ask the client once it is set up. `connect` adds Claude
- * Code's one-time sign-in, for a Claude Code this run just pointed at Amdahl.
- * Codex always gets its login: whether it ran cannot be told from here, and
- * whoever runs the setup again because Codex "does not work" needs it most.
+ * The lines a setup ends with: something to try, then the one step that
+ * connects each client set up, on every run. `inClaudeCode` is a run from a
+ * Claude Code session, which only sees a new server once restarted.
  */
-export function tryItLine(name: string, connect = false): string {
-  const ask = 'say "make this email sound less like AI"'
-  if (connect && name === 'Claude Code') return `Try it: in Claude Code, run /mcp once to connect, then ${ask}`
-  if (name === 'Codex') return `Try it: run \`codex mcp login amdahl\`, then open Codex and ${ask}`
-  return `Try it: open ${name} and ${ask}`
+export function finishLines(names: string[], inClaudeCode = false): string[] {
+  const [only] = names
+  if (only === undefined) return []
+  if (names.length === 1) {
+    const step: Record<string, string> = {
+      'Claude Code': inClaudeCode
+        ? 'Before that, restart Claude Code and run /mcp once to connect Amdahl.'
+        : 'Before that, run /mcp once in Claude Code to connect Amdahl.',
+      Cursor: 'Before that, sign in when Cursor asks, the first time you use Amdahl.',
+      Codex: 'Before that, run `codex mcp login amdahl` once to connect Amdahl.',
+    }
+    return [`Try it: ${ASK} in ${only}.`, step[only] ?? '']
+  }
+  const step: Record<string, string> = {
+    'Claude Code': inClaudeCode ? 'restart it, then run /mcp' : 'run /mcp',
+    Cursor: 'sign in when it asks, on first use',
+    Codex: 'run `codex mcp login amdahl`',
+  }
+  return [`Try it: ${ASK} in any of them.`, 'Before that, connect each one once:', ...names.map((n) => `  ${n}: ${step[n] ?? ''}`)]
+}
+
+/** How bare `amdahl` runs here: the menu, the agent setup, or the usage with the reason. */
+export type SetupMode = { kind: 'menu' } | { kind: 'agent' } | { kind: 'usage'; reason: string }
+
+/** A variable that is set and not `false` or `0`. */
+const isSet = (value: string | undefined) => Boolean(value) && value !== 'false' && value !== '0'
+
+/**
+ * The CI system this runs in, as the variable that says so, or null. `CI`
+ * covers most; Jenkins, Azure Pipelines, AWS CodeBuild and TeamCity do not
+ * set it. BUILD_NUMBER alone is too common a name, so it counts only beside
+ * JENKINS_HOME.
+ */
+export function ciVariable(env: Record<string, string | undefined>): string | null {
+  const named = ['CI', 'JENKINS_URL', 'TF_BUILD', 'CODEBUILD_BUILD_ID', 'TEAMCITY_VERSION', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE', 'CIRCLECI'].find((name) => isSet(env[name]))
+  if (named) return named
+  return isSet(env.BUILD_NUMBER) && isSet(env.JENKINS_HOME) ? 'BUILD_NUMBER with JENKINS_HOME' : null
 }
 
 /**
- * True when bare `amdahl` should run the setup: stdin, stdout and stderr (the
- * menu draws on stderr) are a terminal, it is not CI, no agent says it is running the command, and
- * AMDAHL_NO_PROMPT is not 1. Reads only `io`, so the usage path builds no
- * context and behaves exactly as before.
+ * The menu when stdin, stdout and stderr (the menu draws on stderr) are a
+ * terminal and no agent says it runs the command. In CI (see
+ * {@link ciVariable}) or with AMDAHL_NO_PROMPT=1, the usage. Anything else (an agent, a pipe, no
+ * terminal) is the agent setup. Reads only `io`, so the usage path builds no
+ * context.
  */
-export function shouldSetUp(io: Io): boolean {
+export function setupMode(io: Io): SetupMode {
   const { env } = io
-  const ci = Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0'
-  return io.stdinIsTTY && io.stdoutIsTTY && io.stderrIsTTY && env.AMDAHL_NO_PROMPT !== '1' && !ci && !env.CLAUDECODE && !env.CURSOR_AGENT
+  const ci = ciVariable(env)
+  if (ci) return { kind: 'usage', reason: `${ci} is set` }
+  if (env.AMDAHL_NO_PROMPT === '1') return { kind: 'usage', reason: 'AMDAHL_NO_PROMPT=1 is set' }
+  if (env.CLAUDECODE || env.CURSOR_AGENT) return { kind: 'agent' }
+  return io.stdinIsTTY && io.stdoutIsTTY && io.stderrIsTTY ? { kind: 'menu' } : { kind: 'agent' }
+}
+
+/** The command that sets up one client, for when the setup does not. */
+function installLine(): string {
+  return `To set up a client, run \`${amdahlCommand('install claude-code')}\` (or cursor, codex).`
+}
+
+/** The line before the usage when bare `amdahl` does not set anything up: why, and the command that would. */
+export function noSetupLine(reason: string): string {
+  return `Setup did not run: ${reason}.\n${installLine()}\n\n`
 }
 
 /**
@@ -86,18 +145,64 @@ async function signIn(ctx: Ctx): Promise<SignIn> {
   }
 }
 
-/** Bare `amdahl` in a terminal. */
-export async function setup(ctx: Ctx): Promise<number> {
+/** Print a client's error the way the CLI prints any error. */
+function reportError(io: Io, err: CliError): void {
+  io.stderr(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ''}`)
+}
+
+/**
+ * Set up each client in turn, one line each. A client that fails prints its
+ * error and the rest still run. Returns the names set up and the first
+ * failure's exit code.
+ */
+async function installEach(ctx: Ctx, clients: typeof SHOWN, detail: (text: string) => void): Promise<{ ready: string[]; exit: number }> {
+  let exit: number = EXIT.ok
+  const ready: string[] = []
+  for (const { client, name } of clients) {
+    let steps: { mcp: Step; skill: Step }
+    try {
+      steps = await installClient(ctx, client, false)
+    } catch (raw) {
+      // Report it and go on to the next client; anything unexpected is that client's failure, not a network error.
+      const err = raw instanceof CliError ? raw : new CliError('install_failed', `Could not set up ${name}: ${raw instanceof Error ? raw.message : String(raw)}`, EXIT.general)
+      reportError(ctx.io, err)
+      if (exit === EXIT.ok) exit = err.exit
+      continue
+    }
+    ctx.io.stdout(`${steps.mcp.data.action === 'unchanged' ? `✓ ${name} already has Amdahl` : `✓ Added to ${name}`}\n`)
+    ready.push(name)
+    detail([steps.mcp.human, ...steps.mcp.notes, steps.skill.human, ...steps.skill.notes].filter(Boolean).join('\n'))
+  }
+  return { ready, exit }
+}
+
+/** Bare `amdahl`, or `amdahl setup`, in the menu or agent mode. */
+export async function setup(ctx: Ctx, mode: 'menu' | 'agent'): Promise<number> {
   const { io, out } = ctx
   const verbose = ctx.flags.verbose === true
   const say = (line: string) => io.stdout(`${line}\n`)
   const detail = (text: string) => {
     if (verbose && text) say(text.replace(/^/gm, '  '))
   }
+  const inClaudeCode = Boolean(io.env.CLAUDECODE)
   say(`${out.bold('Amdahl')} · predictive ML for GTM`)
 
   const found = await detectClients(ctx)
   const detected = SHOWN.filter((c) => found[c.client])
+
+  if (mode === 'agent') {
+    // The agent that runs it, when it says so; otherwise every client on the machine.
+    const running = SHOWN.filter((c) => (c.client === 'claude-code' && io.env.CLAUDECODE) || (c.client === 'cursor' && io.env.CURSOR_AGENT))
+    const targets = running.length > 0 ? running : detected
+    if (targets.length === 0) {
+      io.stderr(`Didn't find Claude Code, Cursor or Codex on this computer, so nothing changed.\n${installLine()}\n`)
+      return EXIT.general
+    }
+    const { ready, exit } = await installEach(ctx, targets, detail)
+    for (const line of finishLines(ready, inClaudeCode)) say(line)
+    return exit
+  }
+
   let who: SignIn | undefined
   if (detected.length > 0) {
     const installed = await Promise.all(detected.map((c) => isInstalled(ctx, c.client)))
@@ -112,21 +217,41 @@ export async function setup(ctx: Ctx): Promise<number> {
       }
       if (unreachable || who?.kind === 'in') {
         say(`You're set up in ${joinNames(detected.map((c) => c.name))}.${unreachable ? ' (Could not reach Amdahl to check your sign-in.)' : ''}`)
-        say(tryItLine(detected[0]?.name ?? ''))
+        for (const line of finishLines(detected.map((c) => c.name), inClaudeCode)) say(line)
         return EXIT.ok
       }
     }
   }
 
   const picks = await io.multiSelect(
-    'Set up in:',
+    QUESTION,
     SHOWN.map((c) => c.name),
-    { ticked: SHOWN.map((c) => found[c.client]), color: out.color }
+    {
+      ticked: SHOWN.map((c) => found[c.client]),
+      tags: SHOWN.map((c) => (found[c.client] ? FOUND_TAG : undefined)),
+      note: detected.length === 0 ? NONE_FOUND : undefined,
+      hint: MENU_HINT,
+      color: out.color,
+    }
   )
   if (picks.length === 0) {
     say('Nothing picked, so nothing changed.')
     return EXIT.ok
   }
+
+  // Work out each pick before the sign-in, so nobody signs in only to hear a client cannot be set up.
+  let exit: number = EXIT.ok
+  const chosen: typeof SHOWN = []
+  for (const pick of picks.flatMap((i) => SHOWN[i] ?? [])) {
+    const err = await preflight(ctx, pick.client)
+    if (!err) {
+      chosen.push(pick)
+      continue
+    }
+    reportError(io, err)
+    if (exit === EXIT.ok) exit = err.exit
+  }
+  if (chosen.length === 0) return exit
 
   who ??= await signIn(ctx)
   if (who.kind === 'in') {
@@ -138,33 +263,10 @@ export async function setup(ctx: Ctx): Promise<number> {
     detail(signedInLine(ctx, signedIn))
   } else {
     const name = who.source === 'flag' ? '--api-key' : who.source.slice('env:'.length)
-    out.info(`Amdahl rejected the key in ${name}. Skipping the browser sign-in, because that key would still be used instead. Fix it, or unset it and run \`amdahl login\`.`)
+    out.info(`Amdahl rejected the key in ${name}. Skipping the browser sign-in, because that key would still be used instead. Fix it, or unset it and run \`${amdahlCommand('login')}\`.`)
   }
 
-  let exit: number = EXIT.ok
-  let ready: { name: string; connect: boolean } | null = null
-  for (const { client, name } of picks.flatMap((i) => SHOWN[i] ?? [])) {
-    let steps: { mcp: Step; skill: Step }
-    try {
-      steps = await installClient(ctx, client, false)
-    } catch (raw) {
-      // Report it and go on to the next client; anything unexpected is that client's failure, not a network error.
-      const err = raw instanceof CliError ? raw : new CliError('install_failed', `Could not set up ${name}: ${raw instanceof Error ? raw.message : String(raw)}`, EXIT.general)
-      io.stderr(`Error: ${err.message}\n${err.hint ? `${err.hint}\n` : ''}`)
-      if (exit === EXIT.ok) exit = err.exit
-      continue
-    }
-    const action = steps.mcp.data.action
-    if (action === 'printed') {
-      // Without `claude` on PATH there is only the command to run later.
-      say(`! ${name}: \`claude\` is not on your PATH. Once it is, run:\n  ${String(steps.mcp.data.command)}`)
-    } else {
-      say(action === 'unchanged' ? `✓ ${name} already has Amdahl` : `✓ Added to ${name}`)
-      ready ??= { name, connect: action !== 'unchanged' }
-    }
-    const mcpDetail = action === 'printed' ? [] : [steps.mcp.human, ...steps.mcp.notes]
-    detail([...mcpDetail, steps.skill.human, ...steps.skill.notes].filter(Boolean).join('\n'))
-  }
-  if (ready) say(tryItLine(ready.name, ready.connect))
-  return exit
+  const done = await installEach(ctx, chosen, detail)
+  for (const line of finishLines(done.ready, inClaudeCode)) say(line)
+  return exit === EXIT.ok ? done.exit : exit
 }

@@ -7,9 +7,16 @@
 // (for Claude Code, `claude mcp add` is skipped), and the skill still goes in. `--print` only prints what it would run or write. An
 // existing skill file that an earlier release wrote is upgraded; one the user
 // edited is kept unless `--force`.
+//
+// Claude Code is set up with its own `claude mcp add --scope user`. When
+// `claude` is not on PATH (the desktop app or an IDE extension often leaves
+// none), the usual install folders are tried; when none has it, the CLI
+// writes the same user-scope entry into Claude Code's settings file itself,
+// after a backup. Every config file is written whole to a temp file and
+// renamed into place, so a crash never leaves half a file.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { SKILL_TEXT, SKILL_URL, isShippedSkill, skillPath } from '../skill'
@@ -46,22 +53,73 @@ export async function onPath(ctx: Ctx, command: string): Promise<boolean> {
   return res.code === 0
 }
 
-/** Each client's command on PATH and its folder in the home directory: either one means it is on this machine. */
-const CLIENT_SIGNS: Record<Client, { command: string; dir: string }> = {
-  'claude-code': { command: 'claude', dir: '.claude' },
-  codex: { command: 'codex', dir: '.codex' },
-  cursor: { command: 'cursor', dir: '.cursor' },
+/** Each client's command on PATH and its files in the home directory: any one means it is on this machine. */
+const CLIENT_SIGNS: Record<Client, { command: string; paths: string[] }> = {
+  'claude-code': { command: 'claude', paths: ['.claude', '.claude.json'] },
+  codex: { command: 'codex', paths: ['.codex'] },
+  cursor: { command: 'cursor', paths: ['.cursor'] },
 }
 
-/** Which clients this machine has: the client's command on PATH, or its folder in the home directory. */
+/** Which clients this machine has: the client's command on PATH, or its folder (or settings file) in the home directory. */
 export async function detectClients(ctx: Ctx): Promise<Record<Client, boolean>> {
   const found = await Promise.all(
     CLIENTS.map(async (client) => {
-      const { command, dir } = CLIENT_SIGNS[client]
-      return existsSync(join(ctx.io.homedir, dir)) || (await onPath(ctx, command))
+      const { command, paths } = CLIENT_SIGNS[client]
+      return paths.some((p) => existsSync(join(ctx.io.homedir, p))) || (await onPath(ctx, command))
     })
   )
   return Object.fromEntries(CLIENTS.map((client, i) => [client, found[i]])) as Record<Client, boolean>
+}
+
+/**
+ * The file Claude Code keeps its user settings in, user-scope MCP servers
+ * among them: `.claude.json` in CLAUDE_CONFIG_DIR when that is set, else in
+ * the home directory. `claude mcp add --scope user` writes there.
+ */
+export function claudeConfigPath(ctx: Ctx): string {
+  return join(ctx.io.env.CLAUDE_CONFIG_DIR || ctx.io.homedir, '.claude.json')
+}
+
+/** How this run sets up Claude Code: with its `claude` command, or by writing its settings file. */
+export type ClaudeRoute = { kind: 'command'; command: string } | { kind: 'file'; path: string }
+
+const routes = new WeakMap<Ctx, Promise<ClaudeRoute>>()
+
+/**
+ * How to reach Claude Code, worked out once per run: `claude` on PATH; else
+ * the first `claude` in the folders its installers use (its own installer's
+ * `~/.local/bin` and `~/.claude/local`, Homebrew, /usr/local/bin, npm's
+ * global bin); else its settings file. The setup asks before the sign-in, so
+ * a person never signs in only to hear Claude Code cannot be set up.
+ */
+export function claudeRoute(ctx: Ctx): Promise<ClaudeRoute> {
+  let route = routes.get(ctx)
+  if (!route) {
+    route = findClaude(ctx).then((command): ClaudeRoute => (command ? { kind: 'command', command } : { kind: 'file', path: claudeConfigPath(ctx) }))
+    routes.set(ctx, route)
+  }
+  return route
+}
+
+async function findClaude(ctx: Ctx): Promise<string | null> {
+  const { io } = ctx
+  if (await onPath(ctx, 'claude')) return 'claude'
+  const win = io.platform === 'win32'
+  const local = [join(io.homedir, '.local', 'bin', win ? 'claude.exe' : 'claude'), join(io.homedir, '.claude', 'local', win ? 'claude.exe' : 'claude')]
+  const system = win ? [] : ['/opt/homebrew/bin/claude', '/usr/local/bin/claude']
+  const found = [...local, ...system].find((path) => io.isExecutable(path))
+  if (found) return found
+  // npm's global bin last: finding it may mean running npm. A `.cmd` shim on Windows cannot be spawned without a shell, so not there.
+  if (win) return null
+  const prefix = io.env.npm_config_global_prefix || (await npmGlobalPrefix(ctx))
+  const npmClaude = prefix ? join(prefix, 'bin', 'claude') : null
+  return npmClaude && io.isExecutable(npmClaude) ? npmClaude : null
+}
+
+async function npmGlobalPrefix(ctx: Ctx): Promise<string | null> {
+  const res = await ctx.io.run('npm', ['prefix', '-g'])
+  const prefix = res.code === 0 ? res.stdout.trim() : ''
+  return prefix || null
 }
 
 /**
@@ -69,9 +127,120 @@ export async function detectClients(ctx: Ctx): Promise<Record<Client, boolean>> 
  * `URL:` line of `claude mcp get amdahl`. Its output is never printed: it can
  * hold the server's headers, an API key among them.
  */
-async function claudeHasAmdahl(ctx: Ctx, mcpUrl: string): Promise<boolean> {
-  const res = await ctx.io.run('claude', ['mcp', 'get', 'amdahl'])
+async function claudeHasAmdahl(ctx: Ctx, command: string, mcpUrl: string): Promise<boolean> {
+  const res = await ctx.io.run(command, ['mcp', 'get', 'amdahl'])
   return res.code === 0 && res.stdout.split('\n').some((line) => line.trim() === `URL: ${mcpUrl}`)
+}
+
+/** What to do about a settings file the CLI will not change. */
+const CONFIG_HINT = 'Fix the file, or move it away, then run the same command again.'
+
+/** Parse a JSON settings file that must hold an object. Empty or missing is `{}`; anything else is `invalid_config`. */
+function readJsonObject(path: string): { config: Record<string, unknown>; existed: boolean } {
+  if (!existsSync(path)) return { config: {}, existed: false }
+  const raw = readFileSync(path, 'utf8')
+  if (!raw.trim()) return { config: {}, existed: true }
+  let config: unknown
+  try {
+    config = JSON.parse(raw)
+  } catch {
+    throw new CliError('invalid_config', `${path} is not valid JSON; not changing it.`, EXIT.general, CONFIG_HINT)
+  }
+  if (!config || typeof config !== 'object' || Array.isArray(config)) {
+    throw new CliError('invalid_config', `${path} does not hold a JSON object; not changing it.`, EXIT.general, CONFIG_HINT)
+  }
+  return { config: config as Record<string, unknown>, existed: true }
+}
+
+/**
+ * A settings file that keeps MCP servers under `mcpServers` (Claude Code's,
+ * Cursor's): the parsed file and its servers. An `mcpServers` that is there
+ * but not an object (an array, a string, null) is `invalid_config`: replacing
+ * it would drop whatever the person keeps there.
+ */
+function readMcpConfig(path: string): { config: Record<string, unknown>; servers: Record<string, unknown>; existed: boolean } {
+  const { config, existed } = readJsonObject(path)
+  const servers = config.mcpServers
+  if (servers === undefined) return { config, servers: {}, existed }
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+    throw new CliError('invalid_config', `The "mcpServers" in ${path} is not a JSON object; not changing it.`, EXIT.general, CONFIG_HINT)
+  }
+  return { config, servers: servers as Record<string, unknown>, existed }
+}
+
+/** The `amdahl` user-scope entry in Claude Code's settings file, when it points at `mcpUrl`. Never throws. */
+function claudeFileHasAmdahl(path: string, mcpUrl: string): boolean {
+  try {
+    const servers = readMcpConfig(path).servers as Record<string, { url?: unknown } | undefined>
+    return servers.amdahl?.url === mcpUrl
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The file a write to `path` should land in: `path` itself, or, when it is a
+ * symbolic link, the file at the end of the links, even one that does not
+ * exist yet (a dotfiles link whose target was never created). Renaming onto
+ * the link itself would replace it with a plain file.
+ */
+function writeTarget(path: string): string {
+  let target = path
+  for (let hops = 0; hops < 40; hops++) {
+    let link: boolean
+    try {
+      link = lstatSync(target).isSymbolicLink()
+    } catch {
+      return target
+    }
+    if (!link) return existsSync(target) ? realpathSync(target) : target
+    target = resolve(dirname(target), readlinkSync(target))
+  }
+  throw new CliError('invalid_config', `${path} is a chain of more than 40 symbolic links; not changing it.`, EXIT.general, CONFIG_HINT)
+}
+
+/**
+ * Write `text` to `path` whole: to a temp file beside it, then a rename, so a
+ * crash leaves the old file or the new one and never half of one. A symbolic
+ * link (a dotfiles repo, say) is followed, also to a target not created yet,
+ * and stays a link. Keeps the file's mode; a new file is owner-only.
+ */
+function writeFileAtomic(path: string, text: string): void {
+  const target = writeTarget(path)
+  const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600
+  mkdirSync(dirname(target), { recursive: true })
+  const tmp = join(dirname(target), `.${basename(target)}.amdahl-${process.pid}.tmp`)
+  try {
+    writeFileSync(tmp, text, { mode })
+    chmodSync(tmp, mode)
+    renameSync(tmp, target)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw err
+  }
+}
+
+/** Claude Code's settings file with the `amdahl` user-scope entry, as `claude mcp add --scope user --transport http` writes it. */
+function writeClaudeConfig(ctx: Ctx, path: string, mcpUrl: string, command: string): Step {
+  return updateConfig(path, (): Step => {
+    const { config, servers, existed } = readMcpConfig(path)
+    const data = { ok: true, client: 'claude-code', action: 'unchanged', path, command }
+    if ((servers.amdahl as { url?: unknown } | undefined)?.url === mcpUrl) {
+      return { data, human: `${path} already points Claude Code at ${mcpUrl}; nothing changed.`, notes: [] }
+    }
+    config.mcpServers = { ...servers, amdahl: { type: 'http', url: mcpUrl } }
+    const backup = `${writeTarget(path)}.amdahl-backup`
+    ctx.io.uninterruptible(() => {
+      if (existed) copyFileSync(writeTarget(path), backup)
+      writeFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
+    })
+    const saved = existed ? ` The file as it was is saved at ${backup}.` : ''
+    return {
+      data: { ...data, action: 'wrote', ...(existed ? { backup } : {}) },
+      human: `Added Amdahl to Claude Code for all your projects, in ${path} (\`claude\` was not found).${saved} Run /mcp in Claude Code to sign in. If amdahl is not listed there, restart Claude Code first.`,
+      notes: [],
+    }
+  })
 }
 
 /**
@@ -100,7 +269,11 @@ export async function isInstalled(ctx: Ctx, client: Client): Promise<boolean> {
   const current = existsSync(skill) ? readFileSync(skill, 'utf8') : null
   if (current === null || (current !== SKILL_TEXT && isShippedSkill(current))) return false
   const mcpUrl = `${ctx.apiUrl}/mcp`
-  if (client === 'claude-code') return (await onPath(ctx, 'claude')) && (await claudeHasAmdahl(ctx, mcpUrl))
+  if (client === 'claude-code') {
+    if (claudeFileHasAmdahl(claudeConfigPath(ctx), mcpUrl)) return true
+    const route = await claudeRoute(ctx)
+    return route.kind === 'command' && (await claudeHasAmdahl(ctx, route.command, mcpUrl))
+  }
   if (client === 'codex') {
     const path = codexConfigPath(ctx.io.homedir)
     return existsSync(path) && codexHasAmdahl(readFileSync(path, 'utf8'))
@@ -183,16 +356,15 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
     // command ran from (the default local scope ties it to that one folder).
     const args = ['mcp', 'add', '--scope', 'user', '--transport', 'http', 'amdahl', mcpUrl]
     const command = `claude ${args.join(' ')}`
-    if (print || !(await onPath(ctx, 'claude'))) {
-      const notes = print ? [] : ['`claude` is not on your PATH. Run the command above once it is installed.']
-      return { data: { ok: true, client, action: 'printed', command }, human: command, notes }
-    }
+    if (print) return { data: { ok: true, client, action: 'printed', command }, human: command, notes: [] }
+    const route = await claudeRoute(ctx)
+    if (route.kind === 'file') return writeClaudeConfig(ctx, route.path, mcpUrl, command)
     // `claude mcp add` fails when the server is already there, so check first:
     // otherwise someone with Amdahl in Claude Code but no skill would never get it.
-    if (await claudeHasAmdahl(ctx, mcpUrl)) {
+    if (claudeFileHasAmdahl(claudeConfigPath(ctx), mcpUrl) || (await claudeHasAmdahl(ctx, route.command, mcpUrl))) {
       return { data: { ok: true, client, action: 'unchanged', command }, human: `Claude Code already has Amdahl at ${mcpUrl}; nothing changed.`, notes: [] }
     }
-    const res = await io.run('claude', args)
+    const res = await io.run(route.command, args)
     if (res.code !== 0) {
       throw new CliError('install_failed', `\`${command}\` failed: ${res.stderr.trim() || `exit ${res.code}`}`, EXIT.general)
     }
@@ -210,9 +382,8 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
       if (codexHasAmdahl(current)) {
         return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already has [mcp_servers.amdahl]; nothing changed.`, notes: [] }
       }
-      mkdirSync(dirname(path), { recursive: true })
       const sep = current.length === 0 ? '' : current.endsWith('\n\n') ? '' : current.endsWith('\n') ? '\n' : '\n\n'
-      writeFileSync(path, `${current}${sep}${block}`)
+      writeFileAtomic(path, `${current}${sep}${block}`)
       return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Run \`codex mcp login amdahl\` to sign in.`, notes: [] }
     })
   }
@@ -224,24 +395,36 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
     return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${JSON.stringify({ mcpServers: { amdahl: entry } }, null, 2)}`, notes: [] }
   }
   return updateConfig(path, (): Step => {
-    let config: Record<string, unknown> = {}
-    if (existsSync(path)) {
-      const raw = readFileSync(path, 'utf8')
-      if (raw.trim()) {
-        try {
-          config = JSON.parse(raw) as Record<string, unknown>
-        } catch {
-          throw new CliError('invalid_config', `${path} is not valid JSON; not changing it.`, EXIT.general)
-        }
-      }
-    }
-    const servers = (config.mcpServers && typeof config.mcpServers === 'object' ? config.mcpServers : {}) as Record<string, unknown>
+    const { config, servers } = readMcpConfig(path)
     if (JSON.stringify(servers.amdahl) === JSON.stringify(entry)) {
       return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already points at ${mcpUrl}; nothing changed.`, notes: [] }
     }
     config.mcpServers = { ...servers, amdahl: entry }
-    mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, `${JSON.stringify(config, null, 2)}\n`)
+    writeFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
     return { data: { ok: true, client, action: 'wrote', path }, human: `Added Amdahl to ${path}. Cursor asks you to sign in on first use.`, notes: [] }
   })
+}
+
+/**
+ * Why `client` cannot be set up, found without writing anything, or null:
+ * a settings file the install would have to change is not a JSON object,
+ * or its `mcpServers` is not one.
+ * The setup asks this before the sign-in.
+ */
+export async function preflight(ctx: Ctx, client: Client): Promise<CliError | null> {
+  let path: string | null = null
+  if (client === 'cursor') path = cursorConfigPath(ctx.io.homedir)
+  if (client === 'claude-code') {
+    const route = await claudeRoute(ctx)
+    if (route.kind === 'file') path = route.path
+  }
+  if (!path) return null
+  try {
+    readMcpConfig(path)
+    return null
+  } catch (err) {
+    if (err instanceof CliError) return err
+    const reason = err instanceof Error ? err.message : String(err)
+    return new CliError('write_failed', `Could not read ${path} (${reason}).`, EXIT.general)
+  }
 }

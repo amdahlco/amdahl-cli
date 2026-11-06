@@ -4,6 +4,8 @@
 // are a frozen interface: scripts and end-to-end test harnesses branch on
 // them, so a code never changes meaning.
 
+import { amdahlCommand } from './command-name'
+
 /** Process exit codes. */
 export const EXIT = {
   ok: 0,
@@ -54,7 +56,12 @@ export function usageError(message: string, hint?: string): CliError {
 }
 
 /** The message every command prints when no credential is found. */
-export const NOT_SIGNED_IN = 'Not signed in. Run `amdahl login`, or set AMDAHL_KEY.'
+export function notSignedIn(): string {
+  return `Not signed in. Run \`${amdahlCommand('login')}\`, or set AMDAHL_KEY.`
+}
+
+/** The next step after Amdahl could not be reached. */
+export const NETWORK_HINT = 'Check your internet connection, then run the same command again.'
 
 /** Server codes that always mean a specific exit, whatever the status. */
 const CODE_EXITS: Record<string, ExitCode> = {

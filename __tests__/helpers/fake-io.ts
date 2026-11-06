@@ -2,7 +2,7 @@
 // `project` folder as the working directory), a spy on spawned processes, and a "browser" that follows the authorize redirect to
 // the CLI's loopback listener the way a signed-in browser would.
 
-import { mkdirSync, mkdtempSync } from 'node:fs'
+import { accessSync, constants, mkdirSync, mkdtempSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { vi } from 'vitest'
@@ -20,6 +20,8 @@ export interface FakeIo extends Io {
   prompts: string[]
   /** Whether each menu was asked for colour. */
   selectColor: boolean[]
+  /** The options of each tick menu. */
+  tickOptions: Parameters<Io['multiSelect']>[2][]
   /** The sign-in's wait for Enter while it listens, else null: `enter()` is Enter, `cancel()` is Ctrl+C. */
   keys: { enter: () => void; cancel: () => void } | null
   /** How many times something started listening for Enter. */
@@ -72,6 +74,7 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     multiSelect: async (question, choices, options) => {
       io.prompts.push(`${question} [${choices.map((c, i) => `${options?.ticked?.[i] ? 'x' : ' '} ${c}`).join(' | ')}]`)
       io.selectColor.push(options?.color === true)
+      io.tickOptions.push(options)
       const answer = io.answers.shift()
       if (answer === null) throw new PromptCancelled()
       if (answer === 'none') return []
@@ -79,6 +82,7 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
       return answer.split(',').map((n) => Number(n) - 1)
     },
     selectColor: [],
+    tickOptions: [],
     keys: null,
     listened: 0,
     listenForEnter: (enter, onCancel) => {
@@ -104,6 +108,17 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
       return true
     },
     homedir: dir,
+    columns: () => 80,
+    // Only files under the temp home count: the test machine's own /usr/local/bin and npm folders never leak in.
+    isExecutable: (path) => {
+      if (!path.startsWith(dir)) return false
+      try {
+        accessSync(path, constants.X_OK)
+        return statSync(path).isFile()
+      } catch {
+        return false
+      }
+    },
     cwd,
     platform: 'linux',
     hostname: 'test-host',

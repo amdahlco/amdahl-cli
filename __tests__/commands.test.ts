@@ -61,10 +61,41 @@ describe('exit codes', () => {
     expect((await cli(io, 'whoami', '--bogus')).code).toBe(2)
     expect((await cli(io, 'nope')).code).toBe(2)
     expect((await cli(io, 'keys')).code).toBe(2)
+    io.env.AMDAHL_NO_PROMPT = '1'
     expect((await cli(io)).code).toBe(2)
+    delete io.env.AMDAHL_NO_PROMPT
     const r = await cli(io, 'keys', 'create', '--json')
     expect(r.code).toBe(2)
     expect(r.json.error.code).toBe('usage')
+  })
+
+  it('an unknown option or command says so in one line and points at --help', async () => {
+    const io = fakeIo()
+    const flag = await cli(io, '--foo')
+    expect(flag).toMatchObject({ code: 2, stderr: 'Error: Unknown option --foo.\nRun `amdahl --help`.\n' })
+    expect((await cli(io, 'whoami', '-x')).stderr).toBe('Error: Unknown option -x.\nRun `amdahl --help`.\n')
+    expect((await cli(io, 'login', '--port')).stderr).toBe('Error: --port needs a value.\nRun `amdahl --help`.\n')
+    expect((await cli(io, 'nope')).stderr).toBe('Error: Unknown command `nope`.\nRun `amdahl --help` to see the commands.\n')
+  })
+
+  it('`amdahl help` is --help', async () => {
+    const io = fakeIo()
+    expect(await cli(io, 'help')).toMatchObject({ code: 0, stdout: (await cli(io, '--help')).stdout })
+  })
+
+  it('under npx, every next step says `npx amdahl`', async () => {
+    for (const env of [{ npm_command: 'exec' }, { npm_lifecycle_event: 'npx' }]) {
+      const io = fakeIo(env)
+      expect((await cli(io, 'whoami')).stderr).toBe('Error: Not signed in. Run `npx amdahl login`, or set AMDAHL_KEY.\n')
+      expect((await cli(io, '--bogus')).stderr).toContain('Run `npx amdahl --help`.')
+    }
+    const cached = fakeIo()
+    cached.scriptPath = '/Users/a/.npm/_npx/0123abcd/node_modules/.bin/amdahl'
+    expect((await cli(cached, 'whoami')).stderr).toContain('Run `npx amdahl login`')
+    // Installed, the command is on PATH by its own name.
+    const installed = fakeIo()
+    installed.scriptPath = '/usr/local/lib/node_modules/@amdahl/cli/bin/amdahl.js'
+    expect((await cli(installed, 'whoami')).stderr).toContain('Run `amdahl login`')
   })
 
   it('auth login / logout / status are aliases', () => {
@@ -96,8 +127,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.3.3\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.3.3\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.3.4\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.3.4\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })
@@ -106,8 +137,10 @@ describe('exit codes', () => {
     const io = fakeIo()
     const help = (await cli(io, '--help')).stdout
     expect(help).toMatchSnapshot()
-    expect(help).toContain('For everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md')
+    expect(help).toContain('Everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md')
     expect((await cli(io, '--help', '--json')).stdout).toBe(help)
+    // Every line fits an 80-column terminal.
+    expect(help.split('\n').filter((line) => line.length > 79)).toEqual([])
   })
 })
 
@@ -406,16 +439,17 @@ describe('install', () => {
     expect(existsSync(join(io.homedir, '.cursor'))).toBe(false)
   })
 
-  it('claude-code runs `claude mcp add` when claude is on PATH, else prints it', async () => {
+  it('claude-code runs `claude mcp add` when claude is on PATH, and --print only prints it', async () => {
     const io = fakeIo()
-    const printed = await cli(io, 'install', 'claude-code', '--json')
+    const printed = await cli(io, 'install', 'claude-code', '--print', '--json')
     expect(printed.json).toEqual({
       ok: true,
       client: 'claude-code',
       action: 'printed',
       command: 'claude mcp add --scope user --transport http amdahl https://app.amdahl.ai/mcp',
-      skill: { action: 'wrote', path: join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md') },
+      skill: { action: 'printed', path: join(io.homedir, '.claude', 'skills', 'amdahl', 'SKILL.md') },
     })
+    expect(existsSync(join(io.homedir, '.claude.json'))).toBe(false)
     io.run.mockImplementation(async () => ({ code: 0, stdout: '', stderr: '' }))
     const ran = await cli(io, 'install', 'claude-code', '--json')
     expect(ran.json.action).toBe('ran')

@@ -6,6 +6,7 @@
 // usage error (exit 2).
 
 import { parseArgs, type ParseArgsConfig } from 'node:util'
+import { amdahlCommand } from './command-name'
 import { usageError } from './errors'
 
 type OptionSpec = NonNullable<ParseArgsConfig['options']>
@@ -22,8 +23,13 @@ const GLOBAL_OPTIONS: OptionSpec = {
   verbose: { type: 'boolean' },
 }
 
+/** The flags bare `amdahl` (the guided setup) takes beside the global ones. */
+const SETUP_OPTIONS: OptionSpec = { 'no-browser': { type: 'boolean' } }
+
 /** Each command's own flags, keyed by its canonical name. */
 const COMMAND_OPTIONS: Record<string, OptionSpec> = {
+  setup: SETUP_OPTIONS,
+  help: {},
   login: {
     workspace: { type: 'string' },
     'no-browser': { type: 'boolean' },
@@ -97,12 +103,12 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
   try {
     loose = parseArgs({ args: argv, options: allOptions(), allowPositionals: true, strict: false })
   } catch (err) {
-    throw usageError(err instanceof Error ? err.message : String(err))
+    throw usageError(...parseErrorMessage(err))
   }
   const positionals = loose.positionals
   const first = positionals[0]
   if (first === undefined) {
-    return { command: null, args: [], flags: strictParse(argv, GLOBAL_OPTIONS).values }
+    return { command: null, args: [], flags: strictParse(argv, { ...GLOBAL_OPTIONS, ...SETUP_OPTIONS }).values }
   }
 
   let words = 1
@@ -123,7 +129,7 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
   }
   name = ALIASES[name] ?? name
   const spec = COMMAND_OPTIONS[name]
-  if (!spec) throw usageError(`Unknown command \`${positionals.slice(0, words).join(' ')}\`.`)
+  if (!spec) throw usageError(`Unknown command \`${positionals.slice(0, words).join(' ')}\`.`, `Run \`${amdahlCommand('--help')}\` to see the commands.`)
 
   const strict = strictParse(argv, { ...GLOBAL_OPTIONS, ...spec })
   return { command: name, args: strict.positionals.slice(words), flags: strict.values }
@@ -137,41 +143,69 @@ function strictParse(argv: string[], options: OptionSpec) {
       values: parsed.values as Record<string, string | boolean | undefined>,
     }
   } catch (err) {
-    throw usageError(err instanceof Error ? err.message : String(err))
+    throw usageError(...parseErrorMessage(err))
   }
 }
 
-/** The help text. */
+/**
+ * Node's parseArgs messages, said plainly: "Unknown option --foo." instead of
+ * its advice on positionals that start with '-'.
+ */
+function parseErrorMessage(err: unknown): [string, string?] {
+  const message = err instanceof Error ? err.message : String(err)
+  const code = (err as { code?: string } | null)?.code
+  const help = `Run \`${amdahlCommand('--help')}\`.`
+  if (code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION') {
+    const option = /'(-[^']*)'/.exec(message)?.[1] ?? message
+    return [`Unknown option ${option}.`, help]
+  }
+  if (code === 'ERR_PARSE_ARGS_INVALID_OPTION_VALUE') {
+    const option = /'(--?[\w-]+)/.exec(message)?.[1]
+    if (option && /argument missing/.test(message)) return [`${option} needs a value.`, help]
+    if (option) return [`${option} takes no value.`, help]
+  }
+  return [message, help]
+}
+
+/** The help text. Every line fits an 80-column terminal. */
 export const USAGE = `Usage: amdahl <command> [options]
 
 What you can do:
-  amdahl                         Set up Claude Code, Cursor or Codex, in a terminal: it asks
-                                 which, signs you in, and runs install for each one
-                                 (--verbose shows the files and profile it used)
+  amdahl                         Set up Claude Code, Cursor or Codex. In a
+                                 terminal it asks which and signs you in.
+                                 Run by an agent or with no terminal, it
+                                 sets up that agent, or every client it
+                                 finds, and asks nothing (also: amdahl setup)
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
-  amdahl status                  Check that this workspace is set up to optimize
+  amdahl status                  Check that this workspace can optimize
   amdahl keys create --name ci   Make an API key for a server or CI
-  amdahl install claude-code     Connect your AI client (also codex, cursor)
+  amdahl install claude-code     Connect one AI client (also codex, cursor)
   amdahl skills add <publisher>/<skill>
-                                 Add a skill from https://amdahl.ai/skills to this project:
-                                 its SKILL.md, or its whole folder
-  For everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md
+                                 Add a skill from https://amdahl.ai/skills
+                                 to this project: its SKILL.md, or its folder
+  Everything Amdahl can do: https://docs.amdahl.ai/skills/amdahl/SKILL.md
 
 Commands:
-  login   [--workspace <slug>] [--no-browser] [--port <n>]   Sign in (alias: auth login)
-  logout  [--all]                                           Sign out (alias: auth logout)
-  whoami  [--show-token]                                    Show who you are (alias: auth status)
-  auth token                                                Print a fresh access token
-  status                                                    Check whether this workspace can optimize
-  optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
-           [--on-unsupported flag|remove] [--tries] [--context <file.json>]
-  keys create --name <name> [--preset read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
+  setup   [--no-browser]                     The guided setup (bare amdahl)
+  login   [--workspace <slug>] [--no-browser] [--port <n>]
+                                             Sign in (alias: auth login)
+  logout  [--all]                            Sign out (alias: auth logout)
+  whoami  [--show-token]                     Who you are (alias: auth status)
+  auth token                                 Print a fresh access token
+  status                                     Can this workspace optimize?
+  optimize [<file>... | -] [--channel email|linkedin]
+           [--evidence off|workspace] [--on-unsupported flag|remove]
+           [--tries] [--context <file.json>]
+  keys create --name <name> [--preset read-only|agent|internal|admin]
+              [--expires 30d|90d|365d] [--no-browser]
   keys list
   keys revoke <id|prefix> [--yes] [--no-browser]
   workspace list | workspace use <profile>
   install claude-code|codex|cursor [--print] [--force]
-  skills add <publisher>/<skill> [-y] [-g] [--agents] [--force] [--accept-warning] [--site <origin>]
-           In a terminal it asks one question: this project (Enter) or every project.
+  skills add <publisher>/<skill> [-y] [-g] [--agents] [--force]
+             [--accept-warning] [--site <origin>]
+           In a terminal it asks one question: this project (Enter) or
+           every project.
            -y        add without asking, to this project
            -g        every project (~/.claude/skills), not just this one
            --agents  also .agents/skills, for Codex, Cursor and other agents
@@ -181,14 +215,19 @@ Commands:
                      after printing the warning. Without it, a terminal asks
                      (Cancel or Install anyway); -y, --json or no terminal
                      stops (exit 9)
+  help                                       Show this help
 
 Global options:
-  --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the default profile)
-  --api-url <url>    API host (default: AMDAHL_API_URL, then the profile, then https://app.amdahl.ai)
-  --api-key <key>    Use an API key for this command (prefer AMDAHL_KEY: argv is visible to other users)
+  --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the
+                     default profile)
+  --api-url <url>    API host (default: AMDAHL_API_URL, then the profile,
+                     then https://app.amdahl.ai)
+  --api-key <key>    Use an API key for this command (prefer AMDAHL_KEY: argv
+                     is visible to other users)
   --json             Data on stdout as JSON, messages on stderr
   --no-color         No colour (NO_COLOR is honoured too)
-  --verbose          Say more: files written, the profile, where the sign-in is stored
+  --verbose          Say more: files written, the profile, where the sign-in
+                     is stored
   -h, --help         Show this help
   -v, --version      Show the version
 `

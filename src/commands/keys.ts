@@ -9,6 +9,7 @@
 // never saw. The secret is printed once, on stdout, and stored nowhere.
 
 import type { CliKeyRequestCreated, CliKeyRequestStatus, McpKeyRecord } from '../api'
+import { amdahlCommand } from '../command-name'
 import {
   apiClient,
   call,
@@ -81,7 +82,7 @@ async function waitForDecision(
 /** `amdahl keys create --name <name> [--preset ...] [--expires ...]`. */
 export async function keysCreate(ctx: Ctx): Promise<number> {
   const name = str(ctx.flags.name)?.trim()
-  if (!name) throw usageError('--name is required.', 'Example: amdahl keys create --name "CI pipeline"')
+  if (!name) throw usageError('--name is required.', `Example: ${amdahlCommand('keys create --name "CI pipeline"')}`)
   if (name.length > 80) throw usageError('--name must be at most 80 characters.')
   const preset = str(ctx.flags.preset) ?? 'read-only'
   const bundle = PRESET_BUNDLES[preset as keyof typeof PRESET_BUNDLES]
@@ -164,7 +165,7 @@ function findKey(keys: McpKeyRecord[], ref: string): McpKeyRecord {
   const matches = keys.filter((k) => ref.length >= 8 && k.key_prefix.startsWith(ref))
   if (matches.length === 1 && matches[0]) return matches[0]
   if (matches.length > 1) throw usageError(`"${ref}" matches ${matches.length} keys. Use the key id.`)
-  throw new CliError('key_not_found', `No active key matches "${ref}".`, EXIT.general, 'Run `amdahl keys list`.')
+  throw new CliError('key_not_found', `No active key matches "${ref}".`, EXIT.general, `Run \`${amdahlCommand('keys list')}\`.`)
 }
 
 /** `amdahl keys revoke <id|prefix> [--yes]`. */

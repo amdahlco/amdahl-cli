@@ -5,8 +5,9 @@
 // place server and transport failures become CliErrors with exit codes.
 
 import { AmdahlApiError, createAmdahlClient, type AmdahlClient } from './api'
+import { amdahlCommand } from './command-name'
 import { loadConfig, saveConfig, selectedProfileName, type Config, type Profile } from './config'
-import { CliError, EXIT, NOT_SIGNED_IN, exitForHttp, usageError } from './errors'
+import { CliError, EXIT, NETWORK_HINT, exitForHttp, notSignedIn, usageError } from './errors'
 import { PromptCancelled, type Io } from './io'
 import { refreshTokens } from './oauth'
 import type { Output } from './output'
@@ -121,7 +122,7 @@ export async function requireOAuthCredential(ctx: Ctx): Promise<Credential> {
       'oauth_required',
       `This command needs your own sign-in, but a credential from ${winner === 'flag' ? '--api-key' : winner} takes precedence.`,
       EXIT.forbidden,
-      'Unset it and run `amdahl login`.'
+      `Unset it and run \`${amdahlCommand('login')}\`.`
     )
   }
   return profileCredential(ctx)
@@ -130,7 +131,7 @@ export async function requireOAuthCredential(ctx: Ctx): Promise<Credential> {
 async function profileCredential(ctx: Ctx): Promise<Credential> {
   const { profile, profileName } = ctx
   if (!profile || !profileName) {
-    throw new CliError('not_signed_in', NOT_SIGNED_IN, EXIT.unauthenticated)
+    throw new CliError('not_signed_in', notSignedIn(), EXIT.unauthenticated)
   }
   // A profile's token only ever goes to the host that issued it, so an
   // --api-url / AMDAHL_API_URL pointing elsewhere cannot leak it.
@@ -139,13 +140,13 @@ async function profileCredential(ctx: Ctx): Promise<Credential> {
       'profile_host_mismatch',
       `Profile "${profileName}" is signed in to ${profile.api_url}, not ${ctx.apiUrl}.`,
       EXIT.usage,
-      'Drop --api-url / AMDAHL_API_URL, or run `amdahl login` against that host.'
+      `Drop --api-url / AMDAHL_API_URL, or run \`${amdahlCommand('login')}\` against that host.`
     )
   }
   const account = keychainAccount(profile.api_url, profileName)
   const store = ctx.secrets()
   const secrets = await store.get(account)
-  if (!secrets) throw new CliError('not_signed_in', NOT_SIGNED_IN, EXIT.unauthenticated)
+  if (!secrets) throw new CliError('not_signed_in', notSignedIn(), EXIT.unauthenticated)
 
   const left = Date.parse(secrets.access_expires_at) - ctx.io.now()
   if (Number.isFinite(left) && left >= 60_000) {
@@ -158,7 +159,7 @@ async function profileCredential(ctx: Ctx): Promise<Credential> {
       'invalid_grant',
       'Your sign-in has expired.',
       EXIT.unauthenticated,
-      'Run `amdahl login` again.'
+      `Run \`${amdahlCommand('login')}\` again.`
     )
   }
   await store.set(account, refreshed)
@@ -188,21 +189,21 @@ function errorDetails(body: string | undefined): Record<string, unknown> {
  */
 export function toCliError(err: unknown): CliError {
   if (err instanceof CliError) return err
-  if (err instanceof PromptCancelled) return new CliError('cancelled', 'Stopped.', EXIT.cancelled)
+  if (err instanceof PromptCancelled) return new CliError('cancelled', 'Stopped. Nothing changed.', EXIT.cancelled)
   if (err instanceof AmdahlApiError) {
     const exit = exitForHttp(err.statusCode, err.errorCode)
     const details = errorDetails(err.responseBody)
     const retry = details.retry_after_seconds
     const hint =
       exit === EXIT.unauthenticated
-        ? 'Run `amdahl login`, or check AMDAHL_KEY.'
+        ? `Run \`${amdahlCommand('login')}\`, or check AMDAHL_KEY.`
         : typeof retry === 'number'
           ? `Try again in ${retry} seconds.`
           : undefined
     return new CliError(err.errorCode ?? `http_${err.statusCode}`, err.message, exit, hint)
   }
   const message = err instanceof Error ? err.message : String(err)
-  return new CliError('network_error', `Could not reach the Amdahl API: ${message}`, EXIT.network)
+  return new CliError('network_error', `Could not reach the Amdahl API: ${message}`, EXIT.network, NETWORK_HINT)
 }
 
 /** Run a request and rethrow any failure as a CliError. */
