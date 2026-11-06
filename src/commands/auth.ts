@@ -33,6 +33,7 @@ import {
 } from '../oauth'
 import { hyperlink, printable, supportsHyperlinks } from '../output'
 import { keychainAccount } from '../secrets'
+import { eraseUp, screenLines } from '../select'
 
 export { noBusinessMessage }
 
@@ -95,13 +96,16 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
       out.info(`${lead}\n\n  ${url}\n`)
     }
     let cancelled: Promise<never> | undefined
+    // The "Browser didn't open?" line, while it is the last thing on screen: a finished sign-in erases it.
+    let fallbackLine: string | null = null
     if (flags['no-browser']) {
       showLink('Open this URL in a browser to sign in:')
     } else {
       out.info('Opening your browser…')
       if (!ctx.nonInteractive && io.stderrIsTTY) {
         const fallback = supportsHyperlinks(io.env, out.color) ? hyperlink('Open the sign-in page', url) : 'Press Enter for the link.'
-        out.info(`Browser didn't open? ${fallback}`)
+        fallbackLine = `Browser didn't open? ${fallback}`
+        out.info(fallbackLine)
         cancelled = new Promise<never>((_, reject) => {
           stopKeys = io.listenForEnter(
             () => showLink('Open this link to sign in:'),
@@ -116,6 +120,8 @@ export async function browserSignIn(ctx: Ctx): Promise<SignedIn> {
 
     const callback = await (cancelled ? Promise.race([loopback.result, cancelled]) : loopback.result)
     stopKeys()
+    // Nothing printed under it (no link, no "sign in again"): the line is the last on screen, and done with.
+    if (fallbackLine && !linkShown && callback.kind === 'code') io.stderr(eraseUp(screenLines(fallbackLine, io.columns())))
     linkShown = true
     if (callback.kind === 'no_business') {
       throw new CliError('no_business', noBusinessMessage(consoleUrl, callback.mayCreate, callback.reason), EXIT.noWorkspace)

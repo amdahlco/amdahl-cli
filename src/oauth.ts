@@ -8,7 +8,8 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { CliError, EXIT } from './errors'
+import { amdahlCommand } from './command-name'
+import { CliError, EXIT, NETWORK_HINT } from './errors'
 import type { Io } from './io'
 import type { Secrets } from './secrets'
 
@@ -56,7 +57,7 @@ async function send(url: string, init?: RequestInit): Promise<Response> {
     return await fetch(url, init)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    throw new CliError('network_error', `Could not reach ${new URL(url).host}: ${message}`, EXIT.network)
+    throw new CliError('network_error', `Could not reach ${new URL(url).host}: ${message}`, EXIT.network, NETWORK_HINT)
   }
 }
 
@@ -212,8 +213,8 @@ export function noBusinessMessage(consoleUrl: string, mayCreate: boolean, reason
   switch (reason) {
     case undefined:
       return mayCreate
-        ? `You're signed in, but you don't have a workspace yet. Create one at ${consoleUrl}/new, then run \`amdahl login\` again.`
-        : `You're signed in, but you don't have access yet. Amdahl is in beta: join the waitlist at ${consoleUrl}/new, then run \`amdahl login\` again once you're in.`
+        ? `You're signed in, but you don't have a workspace yet. Create one at ${consoleUrl}/new, then run \`${amdahlCommand('login')}\` again.`
+        : `You're signed in, but you don't have access yet. Amdahl is in beta: join the waitlist at ${consoleUrl}/new, then run \`${amdahlCommand('login')}\` again once you're in.`
     case 'domain_has_workspace':
       return `Your company already has an Amdahl workspace. Ask its admins to let you in at ${consoleUrl}, then try again.`
     case 'invite_only':
@@ -309,7 +310,7 @@ export async function startLoopback(
       res.end(page(body))
     }
     if (url.searchParams.get('state') !== input.state) {
-      send(400, '<p>This sign-in did not match the one your terminal started. Run <code>amdahl login</code> again.</p>')
+      send(400, `<p>This sign-in did not match the one your terminal started. Run <code>${amdahlCommand('login')}</code> again.</p>`)
       fail(new CliError('state_mismatch', 'The sign-in response did not match this login (state mismatch).', EXIT.general))
       return
     }
@@ -358,7 +359,7 @@ export async function startLoopback(
     fail(
       refused
         ? new CliError('no_business', noBusinessMessage(input.consoleUrl, false, refused), EXIT.noWorkspace)
-        : new CliError('login_timeout', 'Timed out waiting for the browser sign-in.', EXIT.general, 'Run `amdahl login` again.')
+        : new CliError('login_timeout', 'Timed out waiting for the browser sign-in.', EXIT.general, `Run \`${amdahlCommand('login')}\` again.`)
     )
   }, input.timeoutMs)
   timer.unref?.()

@@ -5,7 +5,7 @@
 import { PassThrough, Writable } from 'node:stream'
 import { describe, expect, it } from 'vitest'
 import { PromptCancelled } from '../src/io'
-import { listenForEnter, multiSelectMenu, selectMenu } from '../src/select'
+import { listenForEnter, multiSelectMenu, screenLines, selectMenu, type TickMenuOptions } from '../src/select'
 
 const UP = '\u001b[A'
 const DOWN = '\u001b[B'
@@ -49,6 +49,56 @@ async function press(keys: string[], initial = 0, color = false) {
 
 /** What a person sees: the drawing with every escape code removed. */
 const plain = (text: string) => text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '')
+
+/**
+ * The screen a terminal `columns` wide shows after `drawn`, with no bottom
+ * edge: text wraps at the right edge (a line exactly as wide waits to wrap
+ * until the next character, as xterm does), and the cursor moves the way the
+ * menu's escape codes say (up, clear line, clear down, carriage return).
+ */
+function screen(drawn: string, columns: number): string[] {
+  const rows: string[][] = [[]]
+  let row = 0
+  let col = 0
+  let pending = false
+  const line = () => (rows[row] ??= [])
+  for (let i = 0; i < drawn.length; i++) {
+    const c = drawn[i]!
+    if (c === '\u001b') {
+      const csi = /^\u001b\[([0-9;?]*)([A-Za-z])/.exec(drawn.slice(i))
+      if (!csi) throw new Error(`unknown escape at ${i}`)
+      i += csi[0].length - 1
+      const n = Number(csi[1] || '1')
+      if (csi[2] === 'A') row = Math.max(0, row - n)
+      else if (csi[2] === 'K') rows[row] = []
+      else if (csi[2] === 'J') {
+        rows[row] = line().slice(0, col)
+        rows.length = row + 1
+      }
+      pending = false
+    } else if (c === '\r') {
+      col = 0
+      pending = false
+    } else if (c === '\n') {
+      row++
+      col = 0
+      pending = false
+      line()
+    } else {
+      if (pending) {
+        row++
+        col = 0
+        pending = false
+      }
+      line()[col] = c
+      if (col === columns - 1) pending = true
+      else col++
+    }
+  }
+  // A full row is kept whole (it wraps into the next one); a shorter row loses the blanks after it.
+  const text = rows.map((r) => Array.from(r, (ch) => ch ?? ' ').join('')).map((r) => (r.length >= columns ? r : r.trimEnd()))
+  return text.filter((r, i) => r !== '' || i < text.length - 1)
+}
 
 describe('selectMenu', () => {
   it.each<[string, string[], number]>([
@@ -102,6 +152,8 @@ describe('selectMenu', () => {
   it.each<[string, string]>([
     ['Ctrl+C', '\u0003'],
     ['Ctrl+D', '\u0004'],
+    ['Esc', '\u001b'],
+    ['q', 'q'],
   ])('%s rejects with PromptCancelled and restores the terminal', async (_label, key) => {
     const r = await press([DOWN, key])
     expect((r as { error?: unknown }).error).toBeInstanceOf(PromptCancelled)
@@ -144,9 +196,9 @@ describe('selectMenu', () => {
 describe('multiSelectMenu', () => {
   const CLIENTS = ['Claude Code', 'Cursor', 'Codex']
 
-  async function tick(keys: string[], ticked?: boolean[]) {
+  async function tick(keys: string[], ticked?: boolean[], options: TickMenuOptions = {}) {
     const t = terminal()
-    const result = multiSelectMenu(t.input, t.output, 'Set up Amdahl in:', CLIENTS, { ticked }).then(
+    const result = multiSelectMenu(t.input, t.output, 'Set up Amdahl in:', CLIENTS, { ticked, ...options }).then(
       (picks) => ({ picks }),
       (error: unknown) => ({ error })
     )
@@ -177,18 +229,113 @@ describe('multiSelectMenu', () => {
 
   it('draws a box per row, then collapses to the ticked names', async () => {
     const r = await tick([DOWN, ' ', '\r'], [true, false, false])
-    expect(plain(r.drawn())).toContain('Set up Amdahl in:\n> [x] Claude Code\n  [ ] Cursor\n  [ ] Codex\n(Use the arrow keys, Space to tick or untick, then Enter)\n')
+    expect(plain(r.drawn())).toContain('Set up Amdahl in:\n> [x] Claude Code\n  [ ] Cursor\n  [ ] Codex\n↑↓ move · Space tick/untick · Enter to accept\n')
     expect(plain(r.drawn())).toContain('> [x] Cursor\n')
     expect(r.drawn().endsWith('Set up Amdahl in: Claude Code, Cursor\n\u001b[?25h')).toBe(true)
+    expect(screen(r.drawn(), 80)).toEqual(['Set up Amdahl in: Claude Code, Cursor'])
     const none = await tick(['\r'])
     expect(none.drawn().endsWith('Set up Amdahl in: none\n\u001b[?25h')).toBe(true)
   })
 
-  it('Ctrl+C rejects with PromptCancelled and restores the terminal', async () => {
-    const r = await tick([' ', '\u0003'])
+  it('starts the marker on the first ticked row', async () => {
+    const r = await tick([' ', '\r'], [false, true, false])
+    expect(plain(r.drawn())).toContain('Set up Amdahl in:\n  [ ] Claude Code\n> [x] Cursor\n')
+    // Space on the marked row unticks Cursor.
+    expect(r).toMatchObject({ picks: [] })
+  })
+
+  it('colours only the marker, so an unticked row under it does not look picked; tags are dim grey', async () => {
+    const r = await tick(['\r'], [false, true, false], { color: true, tags: [undefined, 'found on your machine', undefined] })
+    const drawn = r.drawn()
+    expect(drawn).toContain('\u001b[1;38;5;202m>\u001b[0m [x] Cursor        \u001b[90mfound on your machine\u001b[39m\n')
+    expect(drawn).toContain('  [ ] Claude Code\n')
+    // No colour (NO_COLOR, --no-color): the marker is bold, the tag plain words.
+    const plainRun = await tick(['\r'], [false, true, false], { tags: [undefined, 'found on your machine', undefined] })
+    expect(plainRun.drawn()).toContain('\u001b[1m>\u001b[0m [x] Cursor        found on your machine\n')
+    expect(plainRun.drawn()).not.toMatch(/\u001b\[(?:9\d|3\d|38)[;m]/)
+  })
+
+  it('shows a note under the question and the hint it is given', async () => {
+    const r = await tick(['\r'], undefined, { note: "We didn't find any of these on this computer. Tick the ones you use.", hint: '↑↓ move · Space tick/untick · Enter to install' })
+    expect(plain(r.drawn())).toContain(
+      "Set up Amdahl in:\nWe didn't find any of these on this computer. Tick the ones you use.\n> [ ] Claude Code\n  [ ] Cursor\n  [ ] Codex\n↑↓ move · Space tick/untick · Enter to install\n"
+    )
+    expect(screen(r.drawn(), 80)).toEqual(['Set up Amdahl in: none'])
+  })
+
+  it.each([20, 30, 40, 56, 57, 80])('redraws in place at %i columns: one menu on screen after every key, and one line after Enter', async (columns) => {
+    const note = "We didn't find any of these on this computer. Tick the ones you use."
+    const t = terminal()
+    const done = multiSelectMenu(t.input, t.output, 'Where should Amdahl work?', CLIENTS, {
+      note,
+      tags: ['found on your machine', undefined, undefined],
+      columns: () => columns,
+    })
+    const keys = [DOWN, ' ', DOWN, ' ', UP, UP, ' ', 'j', ' ']
+    for (const key of keys) {
+      t.input.write(key)
+      await new Promise((resolve) => setImmediate(resolve))
+      // Rows that wrap join up again: exactly one copy of each row and of the question.
+      const shown = screen(t.drawn(), columns).join('')
+      for (const text of ['Where should Amdahl work?', '] Claude Code', '] Cursor', '] Codex']) {
+        expect(shown.split(text).length - 1, `${text} at ${columns} columns`).toBe(1)
+      }
+    }
+    expect(screen(t.drawn(), columns).join('')).toContain('> [ ] Cursor')
+    t.input.write('\r')
+    expect(await done).toEqual([0, 2])
+    expect(screen(t.drawn(), columns).join('')).toBe('Where should Amdahl work? Claude Code, Codex')
+  })
+
+  it('in a narrow window, the tag moves closer, then goes, and the hint wraps at its separators', async () => {
+    const draw = async (columns: number) => {
+      const t = terminal()
+      const done = multiSelectMenu(t.input, t.output, 'Where?', CLIENTS, {
+        tags: ['found on your machine', undefined, undefined],
+        hint: '↑↓ move · Space tick/untick · Enter to install',
+        columns: () => columns,
+      })
+      t.input.write('\u0003')
+      await done.catch(() => {})
+      return plain(t.drawn())
+    }
+    expect(await draw(80)).toContain('> [ ] Claude Code   found on your machine\n  [ ] Cursor\n')
+    expect(await draw(40)).toContain('> [ ] Claude Code found on your machine\n')
+    expect(await draw(40)).toContain('↑↓ move · Space tick/untick\nEnter to install\n')
+    expect(await draw(30)).toContain('> [ ] Claude Code\n')
+    expect(await draw(30)).toContain('↑↓ move · Space tick/untick\nEnter to install\n')
+    expect(await draw(20)).toContain('↑↓ move\nSpace tick/untick\nEnter to install\n')
+  })
+
+  it('in a narrow window, the note wraps between words', async () => {
+    const t = terminal()
+    const done = multiSelectMenu(t.input, t.output, 'Where?', CLIENTS, { note: "We didn't find any of these on this computer. Tick the ones you use.", columns: () => 30 })
+    t.input.write('\r')
+    await done
+    expect(plain(t.drawn())).toContain("Where?\nWe didn't find any of these on\nthis computer. Tick the ones\nyou use.\n> [ ] Claude Code\n")
+    expect(screen(t.drawn(), 30)).toEqual(['Where? none'])
+  })
+
+  it('counts the screen lines a row takes', () => {
+    expect(screenLines('abc', 80)).toBe(1)
+    expect(screenLines('x'.repeat(40), 40)).toBe(1)
+    expect(screenLines('x'.repeat(41), 40)).toBe(2)
+    expect(screenLines('↑↓ move · Space tick/untick · Enter to install', 20)).toBe(3)
+    expect(screenLines('\u001b[1;38;5;202m>\u001b[0m [ ] Codex', 11)).toBe(1)
+    expect(screenLines('', 40)).toBe(1)
+    expect(screenLines('x'.repeat(200), undefined)).toBe(1)
+  })
+
+  it.each<[string, string]>([
+    ['Ctrl+C', '\u0003'],
+    ['Esc', '\u001b'],
+    ['q', 'q'],
+  ])('%s rejects with PromptCancelled, leaves only the question, and restores the terminal', async (_label, key) => {
+    const r = await tick([' ', key])
     expect((r as { error?: unknown }).error).toBeInstanceOf(PromptCancelled)
     expect(r.input.rawCalls).toEqual([true, false])
     expect(r.drawn().endsWith('\u001b[?25h')).toBe(true)
+    expect(screen(r.drawn(), 80)).toEqual(['Set up Amdahl in:'])
   })
 })
 

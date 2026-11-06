@@ -56,66 +56,129 @@ amdahl login
 `npx @amdahl/cli ...`. That package ([packages/amdahl](packages/amdahl)) has no
 code of its own: it depends on `@amdahl/cli` at the same version and runs it.
 
-The quickest way to start is `npx amdahl` with nothing after it, in a
-terminal. It walks you through setup:
+The quickest way to start is `npx amdahl` with nothing after it (or
+`npx amdahl setup`), in a terminal. It walks you through setup:
 
 ```
 $ npx amdahl
 Amdahl · predictive ML for GTM
-Set up in:
-> [x] Claude Code
+Where should Amdahl work?
+> [x] Claude Code   found on your machine
   [ ] Cursor
   [ ] Codex
-(Use the arrow keys, Space to tick or untick, then Enter)
-Opening your browser…
-Browser didn't open? Press Enter for the link.
-✓ Signed in · Acme
-✓ Added to Claude Code
-Try it: in Claude Code, run /mcp once to connect, then say "make this email sound less like AI"
+↑↓ move · Space tick/untick · Enter to install
 ```
 
 It finds Claude Code, Cursor and Codex by their command on your PATH
-(`claude`, `cursor`, `codex`) or their folder in your home folder (`.claude`,
-`.cursor`, `.codex`), and ticks the ones it finds. Enter accepts. If you are
-not signed in, it signs you in through the browser first. Under "Opening
-your browser…" it prints one short line. In a terminal that shows links
-(iTerm2, VS Code, Warp, Terminal, WezTerm, Ghostty, Windows Terminal, VTE 0.50
-or later) it reads "Browser didn't open? Open the sign-in page" and the last
-words are a link; elsewhere it says to press Enter for the link.
-`FORCE_HYPERLINK=1` or `0` overrides the guess, and `NO_COLOR` turns the link
-off. Either way, Enter prints the full sign-in link once. If the browser
-could not be opened, or with `--no-browser`, the full link prints at once.
-It waits up to 15 minutes, so someone new can create their workspace on the
-way and land back in the same setup. If the server
-rejects a key set in
-`AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`, `--api-key`), it says
-so and skips the browser sign-in, since that key would still win. Then it
-sets up each client you ticked the way `amdahl install` does, one line each.
-A client that fails prints
-its error and the rest still run; the exit code is the first failure's. It
-ends with something to try in the first client it set up. Each client then
-signs in to Amdahl itself, once, the first time it connects: `/mcp` in
-Claude Code, `codex mcp login amdahl` for Codex (always named, since the CLI
-cannot tell whether it ran), and Cursor asks on first use.
-`npx amdahl --verbose` also prints the files it wrote, the profile and where
-the sign-in is stored.
-Run it again once you are set up and it says `You're set up in Claude Code
-and Cursor.` with a line to try, and asks nothing; if it cannot reach
-Amdahl to check your sign-in, it still says so. Ctrl+C at the question stops
-it with nothing written (exit 130).
+(`claude`, `cursor`, `codex`) or their files in your home folder (`.claude`
+or `.claude.json`, `.cursor`, `.codex`). Only the ones it finds are ticked
+and tagged "found on your machine" (in dim grey where colour is allowed). If
+it finds none, it says "We didn't find any of these on this computer. Tick
+the ones you use." under the question. The `>` marker starts on the first
+ticked row, and only the marker is coloured, so the row under it never
+looks picked when it is not. Esc, `q` or Ctrl+C stops with nothing changed
+(exit 130). The menu redraws in place in any width, also in a split pane
+narrower than its lines, and `NO_COLOR` or `--no-color` turn the colour off.
 
-It only does this for a person at a terminal. When stdin, stdout or stderr
-(where the menu draws) is not a terminal, `CI` is set, an agent runs it (`CLAUDECODE` or `CURSOR_AGENT` is
-set), `AMDAHL_NO_PROMPT=1` is set, or any flag other than `--verbose` is given
-(such as `--json`), bare `amdahl` prints the usage to stderr and exits 2, as
-before.
+After Enter it first checks each client it can set up, so a broken
+`~/.cursor/mcp.json` or `~/.claude.json` is reported before you sign in.
+If you are not signed in, it signs you in through the browser:
+
+```
+Where should Amdahl work? Claude Code
+Opening your browser…
+✓ Signed in · Acme
+✓ Added to Claude Code
+Try it: say "make this email sound less like AI" in Claude Code.
+Before that, run /mcp once in Claude Code to connect Amdahl.
+```
+
+While it waits, it prints one short line under "Opening your browser…". In
+a terminal that shows links (iTerm2, VS Code, Warp, Terminal, WezTerm,
+Ghostty, Windows Terminal, VTE 0.50 or later) it reads "Browser didn't open?
+Open the sign-in page" and the last words are a link; elsewhere it says to
+press Enter for the link. `FORCE_HYPERLINK=1` or `0` overrides the guess,
+and `NO_COLOR` turns the link off. Either way, Enter prints the full sign-in
+link once. Once you are signed in, that line is replaced by `✓ Signed in`.
+If the browser could not be opened, or with `--no-browser`, the full link
+prints at once. It waits up to 15 minutes, so someone new can create their
+workspace on the way and land back in the same setup. If the server rejects
+a key set in `AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`,
+`--api-key`), it says so and skips the browser sign-in, since that key would
+still win.
+
+Then it sets up each client you ticked the way `amdahl install` does, one
+line each. A client that fails prints its error and the rest still run; the
+exit code is the first failure's. Each client then signs in to Amdahl
+itself, once, the first time it connects, and the setup ends with that step
+for every client it set up, on every run: `/mcp` in Claude Code, `codex mcp
+login amdahl` for Codex, and Cursor asks on first use. With more than one:
+
+```
+Try it: say "make this email sound less like AI" in any of them.
+Before that, connect each one once:
+  Claude Code: run /mcp
+  Cursor: sign in when it asks, on first use
+  Codex: run `codex mcp login amdahl`
+```
+
+`npx amdahl --verbose` also prints the files it wrote, the profile and
+where the sign-in is stored. Run it again once you are set up and it says
+`You're set up in Claude Code and Cursor.` with the same closing lines, and
+asks nothing; if it cannot reach Amdahl to check your sign-in, it still
+says so.
+
+### Run by an agent, or with no terminal
+
+You can ask Claude Code, Cursor or Codex to run `npx amdahl` for you. With
+no terminal (an agent's shell, a pipe such as `npx amdahl | cat`, or stdin,
+stdout or stderr redirected), and whenever `CLAUDECODE` or `CURSOR_AGENT`
+is set, it sets up without a question and without a browser sign-in:
+
+- `CLAUDECODE` set (Claude Code runs it): Claude Code only.
+- `CURSOR_AGENT` set (Cursor runs it): Cursor only.
+- Anything else (Codex sets no variable): every client it finds.
+
+Each client signs in on its first connect, over OAuth, so the CLI needs no
+sign-in of its own here. The last lines say how to finish, as above. Run
+from inside Claude Code, the step is "restart Claude Code and run /mcp
+once", since a running session may only see the new server after a
+restart. If
+it finds no client, it says so on stderr, names `npx amdahl install
+claude-code`, writes nothing and exits 1.
+
+**Exit code change in 0.3.4.** Before 0.3.4, bare `amdahl` with no terminal
+or with `CLAUDECODE` or `CURSOR_AGENT` set printed the usage and exited 2.
+It now sets up as above and exits 0 (1 when nothing was found or a client
+failed). With `CI` set (other than `false` or `0`), with
+`AMDAHL_NO_PROMPT=1`, or with `--json`, bare `amdahl` still changes nothing,
+exits 2 and prints the usage to stderr, now after one line that says why and
+names `amdahl install`.
+
+When the CLI was started by `npx`, every message that names a command says
+`npx amdahl ...` (for example `npx amdahl login`), since an `npx` user has no
+`amdahl` on their PATH.
 
 To connect one AI client yourself, run `amdahl install claude-code` (or `codex`,
 `cursor`). It adds the Amdahl MCP server and also installs the Amdahl skill,
 a map of everything Amdahl can do, so your agent knows which tool fits each
 job. If the client already points at Amdahl, `install` leaves that as it is
-(for Claude Code it skips `claude mcp add` when `claude mcp get amdahl`
-shows the same URL) and still installs the skill. If it cannot write the
+(for Claude Code it skips `claude mcp add` when `~/.claude.json` or `claude
+mcp get amdahl` shows the same URL) and still installs the skill.
+
+For Claude Code it runs `claude mcp add --scope user --transport http amdahl
+https://app.amdahl.ai/mcp`. The desktop app and the IDE extensions often
+leave no `claude` on your PATH, so it also looks in `~/.local/bin`,
+`~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` and npm's global
+bin. If none has `claude`, it writes the same entry into Claude Code's user
+settings itself: `mcpServers.amdahl` set to `{"type": "http", "url":
+"https://app.amdahl.ai/mcp"}` at the top level of `~/.claude.json` (in
+`CLAUDE_CONFIG_DIR` when that is set). It keeps every other key, saves the
+file as it was to `~/.claude.json.amdahl-backup` first, writes the new file
+to a temp file and renames it into place (following a symbolic link), and
+changes nothing when the entry is already there. A file that is not a JSON
+object is left alone (exit 1, `invalid_config`). Cursor's and Codex's config
+files are also written whole through a temp file. If it cannot write the
 client's config file, it exits 1 with `write_failed` and names the file. The skill goes to the client's user skills folder:
 
 | client | skill file |
@@ -134,7 +197,7 @@ https://docs.amdahl.ai/skills/amdahl/SKILL.md.
 ## Quick start
 
 ```sh
-amdahl                       # in a terminal: guided setup for Claude Code, Cursor and Codex
+amdahl                       # guided setup for Claude Code, Cursor and Codex (an agent can run it too)
 amdahl login                 # sign in through the browser with your console account
 amdahl whoami                # the account, workspace and role you are signed in as
 amdahl status                # can this workspace optimize, and what blocks it
@@ -157,7 +220,8 @@ On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 ## Commands
 
 ```
-amdahl                                                           (guided setup, in a terminal)
+amdahl  [--no-browser]                                           (guided setup; also: amdahl setup)
+amdahl help                                                      (same as --help)
 amdahl login   [--workspace <slug>] [--no-browser] [--port <n>]   (alias: auth login)
 amdahl logout  [--all]                                           (alias: auth logout)
 amdahl whoami  [--show-token]                                    (alias: auth status)
@@ -174,7 +238,9 @@ amdahl skills add <publisher>/<skill> [-g] [--agents] [--force] [--accept-warnin
 ```
 
 Global flags: `--profile`, `--api-url`, `--api-key`, `--json`, `--no-color`,
-`-h`, `-v`. With `--json`, data goes to stdout and messages to stderr.
+`--verbose`, `-h`, `-v`. With `--json`, data goes to stdout and messages to
+stderr. An unknown option prints `Unknown option --foo.` and `Run \`amdahl
+--help\`.` (exit 2).
 
 ## Skills
 
@@ -365,8 +431,8 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 | code | meaning |
 |---|---|
 | 0 | ok |
-| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a `skills add` refusal) |
-| 2 | usage |
+| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
+| 2 | usage (also bare `amdahl` in CI, with `AMDAHL_NO_PROMPT=1` or with `--json`) |
 | 3 | not signed in (401, `invalid_grant`, no credential) |
 | 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`) |
 | 5 | no workspace |
@@ -374,7 +440,7 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 | 7 | approval denied, expired or locked out |
 | 8 | network or 5xx |
 | 9 | `skills add` did not install a skill amdahl.ai's security review flagged: no terminal to ask, `-y`, `--json` or an agent ran it, and no `--accept-warning` (nothing was written) |
-| 130 | stopped with Ctrl+C at a question (nothing was written) |
+| 130 | stopped with Ctrl+C (or Esc or `q` in a menu) at a question: "Stopped. Nothing changed." |
 
 ## Development
 

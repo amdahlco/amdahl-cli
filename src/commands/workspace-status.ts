@@ -5,14 +5,15 @@
 // never calls the workspace or waitlist endpoints.
 
 import type { CliSetupStatus } from '../api'
+import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 
 /** What to do about each optimize blocker. */
-const BLOCKER_FIX: Record<string, string> = {
-  missing_scope: 'This credential cannot optimize. Use a Customer agent key, or run `amdahl login` again.',
-  role_too_low: 'Your role cannot optimize. Ask a workspace admin to raise it.',
-  quota_exhausted: 'The monthly optimize quota is used up.',
+const BLOCKER_FIX: Record<string, () => string> = {
+  missing_scope: () => `This credential cannot optimize. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`,
+  role_too_low: () => 'Your role cannot optimize. Ask a workspace admin to raise it.',
+  quota_exhausted: () => 'The monthly optimize quota is used up.',
 }
 
 /** Human summary of a setup status. */
@@ -26,8 +27,9 @@ function describe(status: CliSetupStatus): string {
   if (opt.quota) {
     lines.push(`Quota:      ${opt.quota.used} of ${opt.quota.limit} used, resets ${opt.quota.resets_at}`)
   }
-  if (!opt.allowed && opt.blocker && BLOCKER_FIX[opt.blocker]) {
-    lines.push(`            ${BLOCKER_FIX[opt.blocker]}`)
+  const fix = opt.blocker ? BLOCKER_FIX[opt.blocker] : undefined
+  if (!opt.allowed && fix) {
+    lines.push(`            ${fix()}`)
   }
   const conns = status.connections
   if ('omitted' in conns) {
@@ -64,7 +66,7 @@ export async function workspaceList(ctx: Ctx): Promise<number> {
   }))
   const human =
     profiles.length === 0
-      ? 'No profiles. Run `amdahl login`.'
+      ? `No profiles. Run \`${amdahlCommand('login')}\`.`
       : profiles
           .map(
             (p) =>
@@ -80,7 +82,7 @@ export async function workspaceUse(ctx: Ctx, args: string[]): Promise<number> {
   const name = args[0]
   if (!name || args.length > 1) throw usageError('Usage: amdahl workspace use <profile>')
   if (!ctx.config.profiles[name]) {
-    throw usageError(`No profile named "${name}".`, 'Run `amdahl workspace list` to see your profiles.')
+    throw usageError(`No profile named "${name}".`, `Run \`${amdahlCommand('workspace list')}\` to see your profiles.`)
   }
   ctx.config.default_profile = name
   ctx.saveConfig()

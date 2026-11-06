@@ -15,6 +15,7 @@
 
 import { chmodSync, existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { amdahlCommand } from './command-name'
 import { configDir, writePrivateJson } from './config'
 import { CliError, EXIT } from './errors'
 import type { Io, RunProcess } from './io'
@@ -166,7 +167,7 @@ export function fileStore(io: Io, note: boolean): SecretStore {
       return
     }
     io.stderr(
-      `Warning: ${path} was readable by other users on this machine. It is private now; to be safe, run \`amdahl logout\` and sign in again.\n`
+      `Warning: ${path} was readable by other users on this machine. It is private now; to be safe, run \`${amdahlCommand('logout')}\` and sign in again.\n`
     )
   }
   return {

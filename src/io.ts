@@ -5,9 +5,10 @@
 // captured output, a temp home directory and a spy on spawned processes.
 
 import { spawn } from 'node:child_process'
+import { accessSync, constants, statSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
-import { listenForEnter, multiSelectMenu, selectMenu } from './select'
+import { listenForEnter, multiSelectMenu, selectMenu, type TickMenuOptions } from './select'
 
 /** Result of running a child process to completion. */
 export interface ProcessResult {
@@ -58,9 +59,11 @@ export interface Io {
   /**
    * Show a menu of rows to tick on the terminal (Space ticks, Enter accepts)
    * and return the ticked rows in order, maybe none. `ticked` says which
-   * start ticked. Rejects with PromptCancelled on Ctrl+C or Ctrl+D.
+   * start ticked, `tags` adds dim words after a row, `note` is a line under
+   * the question and `hint` the line under the rows. Rejects with
+   * PromptCancelled on Ctrl+C, Ctrl+D, Esc or q.
    */
-  multiSelect: (question: string, choices: string[], options?: { ticked?: boolean[]; color?: boolean }) => Promise<number[]>
+  multiSelect: (question: string, choices: string[], options?: Omit<TickMenuOptions, 'trueColor' | 'columns'>) => Promise<number[]>
   /**
    * Call `onEnter` at each Enter on the terminal until the returned function
    * is called; other keys do nothing. Ctrl+C stops listening and calls
@@ -73,6 +76,12 @@ export interface Io {
   /** Open a URL in the default browser. Never throws; false when the opener failed. */
   openUrl: (url: string) => Promise<boolean>
   homedir: string
+  /** The path the CLI was started from (process.argv[1]): under npx it is in npx's `_npx` cache folder. */
+  scriptPath?: string
+  /** The terminal's width in columns, when stderr is a terminal. */
+  columns: () => number | undefined
+  /** True when `path` is a file this user may run. */
+  isExecutable: (path: string) => boolean
   /** The working directory: where a project's skills go. */
   cwd: string
   platform: NodeJS.Platform
@@ -151,6 +160,17 @@ function uninterruptible<T>(fn: () => T): T {
   }
 }
 
+/** True when `path` is a file (following links) this user may run. */
+function isExecutable(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /** The browser opener for each platform. The URL is not a secret. */
 function openerFor(platform: NodeJS.Platform, url: string): [string, string[]] {
   if (platform === 'darwin') return ['open', [url]]
@@ -173,11 +193,13 @@ export function realIo(): Io {
       selectMenu(process.stdin, process.stderr, question, choices, {
         ...options,
         trueColor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
+        columns: () => process.stderr.columns,
       }),
     multiSelect: (question, choices, options) =>
       multiSelectMenu(process.stdin, process.stderr, question, choices, {
         ...options,
         trueColor: /^(truecolor|24bit)$/i.test(process.env.COLORTERM ?? ''),
+        columns: () => process.stderr.columns,
       }),
     listenForEnter: (onEnter, onCancel) => listenForEnter(process.stdin, onEnter, onCancel),
     uninterruptible,
@@ -187,6 +209,9 @@ export function realIo(): Io {
       return (await runProcess(cmd, args)).code === 0
     },
     homedir: homedir(),
+    scriptPath: process.argv[1],
+    columns: () => process.stderr.columns,
+    isExecutable,
     cwd: process.cwd(),
     platform: process.platform,
     hostname: hostname(),
