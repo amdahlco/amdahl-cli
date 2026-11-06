@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process'
 import { accessSync, constants, statSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { createInterface } from 'node:readline'
-import { listenForEnter, multiSelectMenu, selectMenu, type TickMenuOptions } from './select'
+import { listenForEnter, multiSelectMenu, readPaste, selectMenu, type TickMenuOptions } from './select'
 
 /** Result of running a child process to completion. */
 export interface ProcessResult {
@@ -48,6 +48,12 @@ export interface Io {
   /** True when stderr is a terminal (colour is allowed). */
   stderrIsTTY: boolean
   readStdin: () => Promise<string>
+  /**
+   * Print `question` on stderr and read a pasted message from the terminal,
+   * up to an empty line typed after it (or Ctrl+D). Empty lines inside a paste
+   * stay in the message. Rejects with PromptCancelled on Ctrl+C.
+   */
+  readPaste: (question: string) => Promise<string>
   /** Ask one question on the terminal and return the answer line. Rejects with PromptCancelled on Ctrl+C or Ctrl+D. */
   prompt: (question: string) => Promise<string>
   /**
@@ -73,6 +79,12 @@ export interface Io {
   /** Run synchronous file writes that Ctrl+C must not cut off half way. */
   uninterruptible: <T>(fn: () => T) => T
   run: RunProcess
+  /**
+   * Run a command on this terminal (its input and output are the person's)
+   * and resolve its exit code, -1 when it could not start. Ctrl+C goes to the
+   * command, not to the CLI.
+   */
+  runInteractive: (command: string, args: string[]) => Promise<number>
   /** Open a URL in the default browser. Never throws; false when the opener failed. */
   openUrl: (url: string) => Promise<boolean>
   homedir: string
@@ -144,6 +156,23 @@ function promptLine(question: string): Promise<string> {
   })
 }
 
+/** Run a command on this terminal; the CLI ignores Ctrl+C meanwhile, so it reaches only the command. */
+function runOnTerminal(command: string, args: string[]): Promise<number> {
+  const hold = () => {}
+  process.on('SIGINT', hold)
+  return new Promise<number>((resolve) => {
+    let child
+    try {
+      child = spawn(command, args, { stdio: 'inherit' })
+    } catch {
+      resolve(-1)
+      return
+    }
+    child.on('error', () => resolve(-1))
+    child.on('close', (code) => resolve(code ?? -1))
+  }).finally(() => process.off('SIGINT', hold))
+}
+
 /**
  * Hold Ctrl+C while `fn` runs. `fn` is synchronous, so a SIGINT that arrives
  * meanwhile is handled (and dropped) only after it has finished: an install
@@ -188,6 +217,7 @@ export function realIo(): Io {
     stdoutIsTTY: Boolean(process.stdout.isTTY),
     stderrIsTTY: Boolean(process.stderr.isTTY),
     readStdin: readAllStdin,
+    readPaste: (question) => readPaste(process.stdin, process.stderr, question),
     prompt: promptLine,
     select: (question, choices, options) =>
       selectMenu(process.stdin, process.stderr, question, choices, {
@@ -204,6 +234,7 @@ export function realIo(): Io {
     listenForEnter: (onEnter, onCancel) => listenForEnter(process.stdin, onEnter, onCancel),
     uninterruptible,
     run: runProcess,
+    runInteractive: runOnTerminal,
     openUrl: async (url) => {
       const [cmd, args] = openerFor(process.platform, url)
       return (await runProcess(cmd, args)).code === 0

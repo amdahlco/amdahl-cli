@@ -10,9 +10,9 @@
 // scrollback stays short; a cancel leaves only the question. A row wider
 // than the terminal takes more than one screen line, and every redraw counts
 // those lines, so a narrow window does not pile up copies of the menu. Also a
-// quiet wait for Enter, for the sign-in link.
+// quiet wait for Enter, for the sign-in link, and the read of a pasted message.
 
-import { emitKeypressEvents } from 'node:readline'
+import { createInterface, emitKeypressEvents } from 'node:readline'
 import { PromptCancelled } from './io'
 
 /** The input side: a terminal that can switch raw mode. */
@@ -35,11 +35,11 @@ export interface MenuOptions {
 
 /** How the tick menu looks, beyond {@link MenuOptions}. */
 export interface TickMenuOptions extends MenuOptions {
-  /** Which rows start ticked. The marker starts on the first of them. */
+  /** Which rows start ticked. The marker starts on the first of them, or on `initial` when none is. */
   ticked?: boolean[]
   /** Words after a row's name, dim grey when colour is allowed (for example "found on your machine"). */
   tags?: (string | undefined)[]
-  /** A line between the question and the rows. */
+  /** Lines between the question and the rows, split at newlines. */
   note?: string
   /** The line under the rows. */
   hint?: string
@@ -153,7 +153,7 @@ function runMenu<T>(
       emitKeypressEvents(input)
       input.setRawMode?.(true)
       const cols = width()
-      const top = [question, ...(note ? wrapWords(note, cols) : [])]
+      const top = [question, ...(note ? note.split('\n').flatMap((line) => wrapWords(line, cols)) : [])]
       headLines = top.reduce((n, line) => n + screenLines(line, cols), 0)
       output.write(`${HIDE_CURSOR}${top.map((line) => `${line}\n`).join('')}${frame()}`)
       input.on('keypress', onKeypress)
@@ -236,7 +236,7 @@ export function selectMenu(
  * the marker, Space ticks or unticks its row, a digit ticks or unticks that
  * row, Enter accepts. Resolves the ticked rows in order, which may be none.
  * `ticked` says which rows start ticked, and the marker starts on the first
- * of them. Only the marker is coloured: a coloured row would look picked
+ * of them (with none ticked, on `initial`). Only the marker is coloured: a coloured row would look picked
  * when it is not ticked. Cancels and restores the terminal like
  * {@link selectMenu}.
  */
@@ -248,7 +248,8 @@ export function multiSelectMenu(
   options: TickMenuOptions = {}
 ): Promise<number[]> {
   const ticked = choices.map((_, i) => options.ticked?.[i] === true)
-  let current = Math.max(ticked.indexOf(true), 0)
+  const start = Math.min(Math.max(options.initial ?? 0, 0), choices.length - 1)
+  let current = ticked.includes(true) ? ticked.indexOf(true) : start
   const pointer = `${marker(options)}>${OFF}`
   const pad = Math.max(...choices.map((c) => c.length))
   // In a narrow window the tag moves closer, then goes, rather than break mid-word.
@@ -327,4 +328,67 @@ export function listenForEnter(input: MenuInput, onEnter: () => void, onCancel: 
     stop()
   }
   return stop
+}
+
+// Bracketed paste: the terminal wraps a paste in ESC[200~ and ESC[201~, so an
+// empty line inside a pasted email does not end it.
+const PASTE_ON = '\u001b[?2004h'
+const PASTE_OFF = '\u001b[?2004l'
+/** How long an empty line waits for more input: a paste in a terminal without bracketed paste arrives at once. */
+const PASTE_SETTLE_MS = 150
+
+/**
+ * Print `question`, then read a pasted message from `input` up to an empty
+ * line the person types (or Ctrl+D); readline echoes and edits the lines.
+ * Leading empty lines are skipped. An empty line inside a paste is kept: the
+ * terminal marks the paste, and where it does not, more input arriving right
+ * after the empty line means it was pasted too.
+ */
+export function readPaste(input: MenuInput, output: NodeJS.WritableStream, question: string): Promise<string> {
+  output.write(`${question}\n`)
+  // No prompt: readline's default "> " would show up again on lines it redraws.
+  const rl = createInterface({ input, output, terminal: true, prompt: '' })
+  output.write(PASTE_ON)
+  return new Promise((resolve, reject) => {
+    const lines: string[] = []
+    let pasting = false
+    let settle: NodeJS.Timeout | undefined
+    let settled = false
+    const finish = (outcome: { text: string } | { error: Error }) => {
+      if (settled) return
+      settled = true
+      clearTimeout(settle)
+      input.removeListener('keypress', onKeypress)
+      output.write(PASTE_OFF)
+      rl.close()
+      if ('text' in outcome) resolve(outcome.text)
+      else reject(outcome.error)
+    }
+    const done = () => finish({ text: lines.join('\n').trim() })
+    const onKeypress = (_text: string | undefined, key: { name?: string } | undefined) => {
+      if (key?.name === 'paste-start') pasting = true
+      else if (key?.name === 'paste-end') pasting = false
+      else if (settle && key?.name !== 'return' && key?.name !== 'enter') {
+        // More came right after the empty line: it was part of a paste.
+        clearTimeout(settle)
+        settle = undefined
+      }
+    }
+    input.on('keypress', onKeypress)
+    rl.on('line', (line) => {
+      if (line.trim() || pasting) {
+        lines.push(line)
+        return
+      }
+      if (lines.length === 0) return
+      lines.push(line)
+      clearTimeout(settle)
+      settle = setTimeout(done, PASTE_SETTLE_MS)
+    })
+    rl.on('SIGINT', () => {
+      output.write('\n')
+      finish({ error: new PromptCancelled() })
+    })
+    rl.on('close', done)
+  })
 }

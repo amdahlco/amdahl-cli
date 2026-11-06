@@ -26,7 +26,10 @@ export interface FakeIo extends Io {
   keys: { enter: () => void; cancel: () => void } | null
   /** How many times something started listening for Enter. */
   listened: number
+  /** Keys pressed at the next waits for Enter, in order: true is Enter, false is Ctrl+C. With none queued, a test presses them through `keys`. */
+  enters: boolean[]
   run: Io['run'] & ReturnType<typeof vi.fn>
+  runInteractive: Io['runInteractive'] & ReturnType<typeof vi.fn>
 }
 
 /** A browser that follows one redirect from the authorize URL. */
@@ -55,6 +58,13 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     stdoutIsTTY: false,
     stderrIsTTY: false,
     readStdin: async () => io.stdinText,
+    // A paste answers from the same queue as the prompts: the text pasted, or null for Ctrl+C.
+    readPaste: async (question) => {
+      io.prompts.push(question)
+      const answer = io.answers.shift()
+      if (answer === null) throw new PromptCancelled()
+      return (answer ?? '').trim()
+    },
     prompt: async (question) => {
       io.prompts.push(question)
       const answer = io.answers.shift()
@@ -85,6 +95,7 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
     tickOptions: [],
     keys: null,
     listened: 0,
+    enters: [],
     listenForEnter: (enter, onCancel) => {
       io.listened++
       const stop = () => {
@@ -98,10 +109,14 @@ export function fakeIo(env: Record<string, string | undefined> = {}, home?: stri
         },
       }
       io.keys = keys
+      // A queued answer presses its key once the caller is listening.
+      const next = io.enters.shift()
+      if (next !== undefined) queueMicrotask(() => (next ? enter() : keys.cancel()))
       return stop
     },
     uninterruptible: (fn) => fn(),
     run: vi.fn(async (): Promise<ProcessResult> => ({ code: -1, stdout: '', stderr: 'not found' })),
+    runInteractive: vi.fn(async () => 0),
     openUrl: async (url) => {
       io.opened.push(url)
       await followAuthorize(url)

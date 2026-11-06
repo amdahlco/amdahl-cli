@@ -6,11 +6,20 @@
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
 // summary and up to three lines on what Amdahl did go to stderr.
+//
+// With no file at a terminal it asks for the message to be pasted instead
+// (the setup's "This terminal" does the same), and shows Amdahl's version
+// under a rule, then what Amdahl did and how to run it next time.
 
 import { readFileSync } from 'node:fs'
-import { apiClient, resolveCredential, toCliError, str, type Ctx } from '../context'
+import { amdahlCommand } from '../command-name'
+import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { printable } from '../output'
+import { browserSignIn } from './auth'
+
+/** Said before a first sign-in: it is also where a new user's workspace is made. */
+export const NEW_USER = 'New to Amdahl? The sign-in sets up your free workspace.'
 
 /** Per-file request timeout. */
 export const OPTIMIZE_TIMEOUT_MS = 180_000
@@ -213,21 +222,22 @@ export function whatAmdahlDid(result: Record<string, unknown>): string[] {
   return lines.filter((l) => kept.has(l)).map((l) => l.line)
 }
 
-/** `amdahl optimize [<file>... | -]`. */
-export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
-  const { io, out, flags } = ctx
-  let files = args
-  if (files.length === 0) {
-    if (io.stdinIsTTY) {
-      throw usageError(
-        'Give a file to optimize, or pipe the message on stdin.',
-        'Usage: amdahl optimize <file>... | - [--channel email|linkedin]'
-      )
-    }
-    files = ['-']
-  }
-  if (files.filter((f) => f === '-').length > 1) throw usageError('Stdin (-) can be read only once.')
+/** What a person is asked when the message is pasted at the terminal. */
+export const PASTE_PROMPT = 'Paste an email or LinkedIn message, then press Enter on an empty line:'
+/** The rule above Amdahl's version of a pasted message. */
+export const VERSION_RULE = "── Amdahl's version ──────────────"
 
+/** The line a pasted run ends with: how to optimize a draft without the paste. */
+export function nextTimeLine(ctx: Ctx): string {
+  const file = amdahlCommand('optimize draft.txt')
+  // pbpaste is macOS's; elsewhere the file is the one way that works everywhere.
+  // Two lines, so it fits 80 columns.
+  return ctx.io.platform === 'darwin' ? `Next time: ${file},\nor pbpaste | ${amdahlCommand('optimize -')}` : `Next time: ${file}`
+}
+
+/** The request body's options from the flags: channel, evidence, context and the rest. */
+function requestOptions(ctx: Ctx): Record<string, unknown> {
+  const { flags } = ctx
   const base: Record<string, unknown> = {}
   const channel = oneOf('channel', str(flags.channel), CHANNELS)
   const evidence = oneOf('evidence', str(flags.evidence), EVIDENCE)
@@ -238,6 +248,93 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   if (flags.tries === true) base.include_tries = true
   const contextPath = str(flags.context)
   if (contextPath) base.context = readContext(contextPath)
+  return base
+}
+
+/** One optimize request, with the timeout, any failure as a CliError. */
+async function optimizeOne(ctx: Ctx, credential: Credential, message: string, base: Record<string, unknown>, file: string): Promise<Record<string, unknown>> {
+  try {
+    return await withTimeout(
+      apiClient(ctx, credential).request<Record<string, unknown>>('/api/platform/v1/messages/optimize', {
+        method: 'POST',
+        body: { message, ...base },
+      }),
+      OPTIMIZE_TIMEOUT_MS,
+      file
+    )
+  } catch (err) {
+    throw toCliError(err)
+  }
+}
+
+/**
+ * The credential for a pasted run. With no sign-in (or an expired one), signs
+ * in through the browser first, so nobody pastes a draft only to hear they
+ * are not signed in.
+ */
+async function credentialOrSignIn(ctx: Ctx): Promise<Credential> {
+  try {
+    return await resolveCredential(ctx)
+  } catch (err) {
+    if (!(err instanceof CliError && err.exit === EXIT.unauthenticated)) throw err
+  }
+  ctx.out.info(`Sign in first, then paste your message.\n${NEW_USER}`)
+  const signedIn = await browserSignIn(ctx)
+  ctx.out.info(`✓ Signed in · ${printable(signedIn.workspace.name)}`)
+  return resolveCredential(ctx)
+}
+
+/**
+ * Ask for a message to be pasted at the terminal, optimize it, and show
+ * Amdahl's version (stdout) under a rule, what Amdahl did, and how to run it
+ * next time (stderr). Signs in first when there is no sign-in. Nothing pasted
+ * sends nothing (exit 0).
+ */
+export async function optimizePasted(ctx: Ctx): Promise<number> {
+  const { io, out } = ctx
+  const base = requestOptions(ctx)
+  const credential = await credentialOrSignIn(ctx)
+  const message = await io.readPaste(PASTE_PROMPT)
+  if (!message.trim()) {
+    out.info(`Nothing pasted, so nothing was sent.\n${nextTimeLine(ctx)}`)
+    return EXIT.ok
+  }
+  out.info('Amdahl is rewriting it. This can take a minute.')
+  const result = await optimizeOne(ctx, credential, message, base, 'your message')
+  if (result.ok === false) {
+    if (out.json) out.result({ ok: false, file: '-', result })
+    out.info(`Not optimized (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)
+    return EXIT.general
+  }
+  if (out.json) {
+    out.result({ ok: true, file: '-', result })
+    return EXIT.ok
+  }
+  out.info(VERSION_RULE)
+  if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
+  out.result({}, String(result.message ?? ''))
+  const did = whatAmdahlDid(result)
+  out.info([...did, nextTimeLine(ctx)].join('\n'))
+  return EXIT.ok
+}
+
+/** `amdahl optimize [<file>... | -]`. */
+export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
+  const { io, out } = ctx
+  let files = args
+  if (files.length === 0) {
+    if (io.stdinIsTTY && !ctx.nonInteractive) return optimizePasted(ctx)
+    if (io.stdinIsTTY) {
+      throw usageError(
+        'Give a file to optimize, or pipe the message on stdin.',
+        'Usage: amdahl optimize <file>... | - [--channel email|linkedin]'
+      )
+    }
+    files = ['-']
+  }
+  if (files.filter((f) => f === '-').length > 1) throw usageError('Stdin (-) can be read only once.')
+
+  const base = requestOptions(ctx)
 
   // Read every input before the first request, so a typo in the third file
   // fails before the first one is spent.
@@ -254,23 +351,10 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   }
 
   const credential = await resolveCredential(ctx)
-  const client = apiClient(ctx, credential)
   const results: FileResult[] = []
   let exit: number = EXIT.ok
   for (const { file, message } of inputs) {
-    let result: Record<string, unknown>
-    try {
-      result = await withTimeout(
-        client.request<Record<string, unknown>>('/api/platform/v1/messages/optimize', {
-          method: 'POST',
-          body: { message, ...base },
-        }),
-        OPTIMIZE_TIMEOUT_MS,
-        file
-      )
-    } catch (err) {
-      throw toCliError(err)
-    }
+    const result = await optimizeOne(ctx, credential, message, base, file)
     const ok = result.ok !== false
     results.push({ ok, file, result })
     if (!ok) {
