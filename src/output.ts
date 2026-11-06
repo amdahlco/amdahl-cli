@@ -20,6 +20,28 @@ export function printable(text: string): string {
   return text.replace(CONTROL_RE, '')
 }
 
+/** Terminals that make an OSC 8 hyperlink clickable, by TERM_PROGRAM. */
+const HYPERLINK_TERMINALS = new Set(['iTerm.app', 'vscode', 'WarpTerminal', 'Apple_Terminal', 'WezTerm', 'ghostty'])
+
+/**
+ * Whether stderr likely shows an OSC 8 hyperlink as a link: FORCE_HYPERLINK=1
+ * or 0 decides; otherwise only where colour is allowed (`color`, which
+ * honours NO_COLOR), in a terminal known to support it.
+ */
+export function supportsHyperlinks(env: Record<string, string | undefined>, color: boolean): boolean {
+  if (env.FORCE_HYPERLINK === '0') return false
+  if (env.FORCE_HYPERLINK === '1') return true
+  if (!color) return false
+  if (HYPERLINK_TERMINALS.has(env.TERM_PROGRAM ?? '')) return true
+  if (Number(env.VTE_VERSION) >= 5000) return true
+  return Boolean(env.WT_SESSION)
+}
+
+/** `text` as an OSC 8 terminal hyperlink to `url`. */
+export function hyperlink(text: string, url: string): string {
+  return `\u001b]8;;${printable(url)}\u001b\\${text}\u001b]8;;\u001b\\`
+}
+
 /** Writers bound to one invocation's flags. */
 export interface Output {
   /** True under `--json`. */

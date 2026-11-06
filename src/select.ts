@@ -7,7 +7,7 @@
 // keypress listener and the cursor are restored on every way out: a pick,
 // a cancel, an input error, and a SIGINT sent to the process. After a pick
 // the menu collapses into one line, "<question> <choice>", so the scrollback
-// stays short.
+// stays short. Also a quiet wait for Enter, for the sign-in link.
 
 import { emitKeypressEvents } from 'node:readline'
 import { PromptCancelled } from './io'
@@ -192,4 +192,48 @@ export function multiSelectMenu(
     current = next
     return 'redraw'
   })
+}
+
+/**
+ * Call `onEnter` at each Enter on `input` until the returned function is
+ * called. Other keys do nothing and do not echo. Ctrl+C, or a SIGINT sent to
+ * the process, stops listening and calls `onCancel`. Raw mode and the
+ * keypress listener are restored on every way out.
+ */
+export function listenForEnter(input: MenuInput, onEnter: () => void, onCancel: () => void): () => void {
+  const wasRaw = input.isRaw === true
+  let done = false
+  const stop = () => {
+    if (done) return
+    done = true
+    input.removeListener('keypress', onKeypress)
+    input.removeListener('error', stop)
+    process.removeListener('SIGINT', cancel)
+    try {
+      input.setRawMode?.(wasRaw)
+    } catch {
+      // The terminal is already gone; nothing to restore.
+    }
+    input.pause()
+  }
+  const cancel = () => {
+    if (done) return
+    stop()
+    onCancel()
+  }
+  const onKeypress = (_text: string | undefined, key: Key | undefined) => {
+    if (key?.ctrl && key.name === 'c') cancel()
+    else if (key?.name === 'return' || key?.name === 'enter') onEnter()
+  }
+  try {
+    emitKeypressEvents(input)
+    input.setRawMode?.(true)
+    input.on('keypress', onKeypress)
+    input.on('error', stop)
+    process.on('SIGINT', cancel)
+    input.resume()
+  } catch {
+    stop()
+  }
+  return stop
 }

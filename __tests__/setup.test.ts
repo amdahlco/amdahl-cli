@@ -4,7 +4,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { USAGE } from '../src/args'
 import { SKILL_TEXT } from '../src/skill'
 import { cli, fakeIo, followAuthorize, type FakeIo } from './helpers/fake-io'
@@ -54,6 +54,7 @@ const OLD_SKILL = readFileSync(join(__dirname, 'fixtures', 'skill-0.1.3.md'), 'u
 const CODEX_TRY = 'Try it: run `codex mcp login amdahl`, then open Codex and say "make this email sound less like AI"'
 const CLAUDE_TRY = 'Try it: in Claude Code, run /mcp once to connect, then say "make this email sound less like AI"'
 const TITLE = 'Amdahl · predictive ML for GTM\n'
+const HINT = "Browser didn't open? Press Enter for the link.\n"
 const lastLine = (text: string) => text.trimEnd().split('\n').pop()
 const ran = (io: FakeIo, command: string) => io.run.mock.calls.filter((c) => c[0] === command).map((c) => (c[1] as string[]).join(' '))
 
@@ -170,8 +171,11 @@ describe('bare amdahl: setting up', () => {
     expect(r.code).toBe(0)
     expect(io.opened).toHaveLength(1)
     expect(io.opened[0]).toContain('/oauth/authorize')
-    expect(r.stderr).toBe('Opening your browser…\n')
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}`)
     expect(r.stdout).toBe(`${TITLE}✓ Signed in · Acme\n✓ Added to Codex\n${CODEX_TRY}\n`)
+    // The wait for Enter ended with the sign-in.
+    expect(io.listened).toBe(1)
+    expect(io.keys).toBeNull()
   })
 
   it('without `claude` on PATH, prints the Claude Code command and tries the next client', async () => {
@@ -393,25 +397,71 @@ describe('bare amdahl: the browser sign-in', () => {
     io.answers.push('3')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stderr).toMatch(/^Opening your browser…\nYour browser did not open\. Open this link to sign in:\n\n {2}http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)
+    expect(r.stderr).toMatch(/^Opening your browser…\nBrowser didn't open\? Press Enter for the link\.\nYour browser did not open\. Open this link to sign in:\n\n {2}http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/)
     expect(r.stdout).toContain('✓ Signed in · Acme\n')
   })
 
-  it('prints the link once the browser has not answered for a while, and keeps waiting', async () => {
+  it('Enter prints the link once, and it keeps waiting', async () => {
     const io = await atServer(false)
-    io.browserGraceMs = 20
     slowBrowser(io, 200)
     io.answers.push('3')
-    const r = await cli(io)
+    const run = cli(io)
+    await vi.waitFor(() => expect(io.keys).not.toBeNull())
+    io.keys!.enter()
+    io.keys!.enter()
+    const r = await run
     expect(r.code).toBe(0)
-    expect(r.stderr.match(/Finish in your browser, or open this link:\n\n {2}http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?/g)).toHaveLength(1)
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}Open this link to sign in:\n\n  ${io.opened[0]}\n`)
     expect(r.stdout).toContain('✓ Signed in · Acme\n')
+    expect(io.keys).toBeNull()
+  })
+
+  it('Ctrl+C while it waits stops (exit 130), sets nothing up, and lets go of the terminal', async () => {
+    const io = await atServer(false)
+    slowBrowser(io, 0, true, async () => {})
+    io.answers.push('3')
+    const run = cli(io)
+    await vi.waitFor(() => expect(io.keys).not.toBeNull())
+    io.keys!.cancel()
+    const r = await run
+    expect(r.code).toBe(130)
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}Stopped.\n`)
+    expect(r.stdout).toBe(TITLE)
+    expect(io.keys).toBeNull()
+    expect(ran(io, 'codex')).toEqual([])
+  })
+
+  it('in a terminal that shows hyperlinks, the line links the sign-in page, and Enter still prints the link', async () => {
+    server = await startMockServer()
+    const io = terminal({ AMDAHL_API_URL: server.url, NO_COLOR: undefined, TERM_PROGRAM: 'iTerm.app' })
+    slowBrowser(io, 200)
+    io.answers.push('3')
+    const run = cli(io)
+    await vi.waitFor(() => expect(io.keys).not.toBeNull())
+    const url = io.opened[0]!
+    io.keys!.enter()
+    const r = await run
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe(
+      `Opening your browser…\nBrowser didn't open? \u001b]8;;${url}\u001b\\Open the sign-in page\u001b]8;;\u001b\\\nOpen this link to sign in:\n\n  ${url}\n`
+    )
+  })
+
+  it('--no-browser prints the link at once and waits for no key', async () => {
+    const io = await atServer(false)
+    const run = cli(io, 'login', '--no-browser')
+    await vi.waitFor(() => expect(io.err.join('')).toContain('/oauth/authorize?'))
+    const url = /(http:\/\/127\.0\.0\.1:\d+\/oauth\/authorize\?\S+)/.exec(io.err.join(''))![1]!
+    await followAuthorize(url)
+    const r = await run
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe(`Open this URL in a browser to sign in:\n\n  ${url}\n`)
+    expect(io.listened).toBe(0)
   })
 
   it('a new user creates their workspace in the browser and lands back in the same setup', async () => {
     server = await startMockServer({ selfServe: true })
     const io = terminal({ AMDAHL_API_URL: server.url })
-    io.browserGraceMs = 20
     // The person signs in, sees the create page, clicks Create, and the server returns to the same authorize request.
     slowBrowser(io, 100, true, async (url) => {
       const page = await fetch(url).then((res) => res.text())
@@ -427,7 +477,7 @@ describe('bare amdahl: the browser sign-in', () => {
     io.answers.push('3')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stderr).toContain('Finish in your browser, or open this link:')
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}`)
     expect(r.stdout).toBe(`${TITLE}✓ Signed in · Acme\n✓ Added to Codex\n${CODEX_TRY}\n`)
   })
 

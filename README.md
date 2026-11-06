@@ -68,6 +68,7 @@ Set up in:
   [ ] Codex
 (Use the arrow keys, Space to tick or untick, then Enter)
 Opening your browser…
+Browser didn't open? Press Enter for the link.
 ✓ Signed in · Acme
 ✓ Added to Claude Code
 Try it: in Claude Code, run /mcp once to connect, then say "make this email sound less like AI"
@@ -76,10 +77,16 @@ Try it: in Claude Code, run /mcp once to connect, then say "make this email soun
 It finds Claude Code, Cursor and Codex by their command on your PATH
 (`claude`, `cursor`, `codex`) or their folder in your home folder (`.claude`,
 `.cursor`, `.codex`), and ticks the ones it finds. Enter accepts. If you are
-not signed in, it signs you in through the browser first. It prints the
-sign-in link only if the browser could not be opened, or nothing came back
-within a minute, and it waits up to 15 minutes, so someone new can create
-their workspace on the way and land back in the same setup. If the server
+not signed in, it signs you in through the browser first. Under "Opening
+your browser…" it prints one short line. In a terminal that shows links
+(iTerm2, VS Code, Warp, Terminal, WezTerm, Ghostty, Windows Terminal, VTE 0.50
+or later) it reads "Browser didn't open? Open the sign-in page" and the last
+words are a link; elsewhere it says to press Enter for the link.
+`FORCE_HYPERLINK=1` or `0` overrides the guess, and `NO_COLOR` turns the link
+off. Either way, Enter prints the full sign-in link once. If the browser
+could not be opened, or with `--no-browser`, the full link prints at once.
+It waits up to 15 minutes, so someone new can create their workspace on the
+way and land back in the same setup. If the server
 rejects a key set in
 `AMDAHL_KEY` (or `AMDAHL_API_KEY`, `AMDAHL_ACCESS_TOKEN`, `--api-key`), it says
 so and skips the browser sign-in, since that key would still win. Then it
