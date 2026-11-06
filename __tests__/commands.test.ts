@@ -127,8 +127,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.3.5\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.3.5\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.3.6\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.3.6\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })
@@ -327,6 +327,22 @@ describe('optimize', () => {
     io.env.AMDAHL_NO_PROMPT = '1'
     expect((await cli(io, 'optimize')).code).toBe(2)
     expect((await cli(io, 'optimize', '-', '--channel', 'fax')).code).toBe(2)
+  })
+
+  it.each<[string, Record<string, string>]>([
+    ['Claude Code runs it', { CLAUDECODE: '1' }],
+    ['Cursor runs it', { CURSOR_AGENT: '1' }],
+    ['CI is set', { CI: 'true' }],
+    ['Jenkins (no CI variable)', { JENKINS_URL: 'https://ci.example' }],
+  ])('no file at a terminal when %s: the usage (exit 2), no paste prompt, no browser', async (_label, env) => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url, ...env })
+    const r = await cli(io, 'optimize')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Give a file to optimize, or pipe the message on stdin.')
+    expect(io.prompts).toEqual([])
+    expect(io.opened).toEqual([])
+    expect(server.log.filter((l) => l.path.endsWith('/messages/optimize'))).toEqual([])
   })
 })
 

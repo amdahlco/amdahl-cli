@@ -8,8 +8,9 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { USAGE } from '../src/args'
+import { ciVariable } from '../src/ci'
 import { PASTE_PROMPT, VERSION_RULE } from '../src/commands/optimize'
-import { FOUND_TAG, MENU_HINT, NEW_USER, NONE_FOUND, QUESTION, TERMINAL, ciVariable, noSetupLine, wrapLine } from '../src/commands/setup'
+import { FOUND_TAG, MENU_HINT, NEW_USER, NONE_FOUND, QUESTION, TERMINAL, noSetupLine, wrapLine } from '../src/commands/setup'
 import { SKILL_TEXT } from '../src/skill'
 import { cli, fakeIo, followAuthorize, type FakeIo } from './helpers/fake-io'
 import { startMockServer, type MockServer } from './helpers/mock-server'
@@ -317,6 +318,17 @@ describe('bare amdahl: setting up the AI tools', () => {
     expect(io.runInteractive).not.toHaveBeenCalled()
     expect(r.stdout).toContain(`Skipped. To connect it later, run: codex mcp login amdahl\nRun codex, paste an email and say: ${ASK}\n`)
     expect(readFileSync(join(io.homedir, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.amdahl]')
+  })
+
+  it('Codex on PATH on Windows: no Enter offer (its `.cmd` shim cannot be spawned), the login step to run by hand', async () => {
+    const io = await atServer(false)
+    io.platform = 'win32'
+    io.run.mockImplementation(async (command: string, args: string[]) => ({ code: command === 'where' && args[0] === 'codex' ? 0 : 1, stdout: '', stderr: '' }))
+    io.answers.push('')
+    const r = await cli(io)
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(io.runInteractive).not.toHaveBeenCalled()
   })
 
   it('Codex found by its folder only: the login step to run by hand', async () => {

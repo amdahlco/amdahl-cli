@@ -140,8 +140,9 @@ Run codex, paste an email and say: "Use Amdahl to make this sound less like AI"
 Enter runs `codex mcp login amdahl` on your terminal (it prints the link and
 opens the browser). Ctrl+C there skips it and names the command to run
 later; if the sign-in does not finish, it says so and names the same
-command. Without `codex` on your PATH, the screen lists `codex mcp login
-amdahl` as step 1. With more than one tool, the screens follow one another
+command. Without `codex` on your PATH, and always on Windows (where `codex`
+is a `.cmd` file the CLI cannot start without a shell), the screen lists
+`codex mcp login amdahl` as step 1. With more than one tool, the screens follow one another
 and the "New to Amdahl?" line is printed once. A tool that fails (a broken
 `~/.cursor/mcp.json` or `~/.claude.json`, say) prints its error, the rest
 still run, and the exit code is the first failure's. In a terminal narrower
@@ -320,8 +321,10 @@ message, or bare `amdahl` to add Amdahl to Claude Code, Cursor or Codex.
 `amdahl optimize` with no file, at a terminal, asks you to paste the message
 (as the setup's "This terminal" does) and signs you in through the browser
 first if you are not signed in ("Sign in first, then paste your message."). With stdin piped, or `-`, it reads stdin
-whole as before. With `AMDAHL_NO_PROMPT=1` at a terminal it still says to
-give a file (exit 2).
+whole as before. At a terminal it still says to give a file (exit 2) when
+an agent runs it (`CLAUDECODE` or `CURSOR_AGENT` set), in CI (the same
+variables bare `amdahl` checks) or with `AMDAHL_NO_PROMPT=1`: none of them
+can paste.
 
 On a server or in CI, skip `login` and set an API key in `AMDAHL_KEY`.
 

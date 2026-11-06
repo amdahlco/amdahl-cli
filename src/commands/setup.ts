@@ -19,6 +19,7 @@
 // the machine. In CI or with AMDAHL_NO_PROMPT=1 nothing is set up: it says
 // why and prints the usage (exit 2).
 
+import { ciVariable } from '../ci'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT } from '../errors'
@@ -27,9 +28,9 @@ import { printable } from '../output'
 import { browserSignIn, signedInLine } from './auth'
 import { detectClients, hasAmdahl, installClient, isInstalled, onPath, preflight, type Client, type Step } from './install'
 import { NEW_USER, optimizePasted } from './optimize'
+import { joinNames } from './skills-guide'
 
 export { NEW_USER }
-import { joinNames } from './skills-guide'
 
 /** An AI tool the setup can set up, with the name a person reads. */
 interface Tool {
@@ -175,21 +176,6 @@ export function finishLines(names: string[], inClaudeCode = false): string[] {
 /** How bare `amdahl` runs here: the menu, the agent setup, or the usage with the reason. */
 export type SetupMode = { kind: 'menu' } | { kind: 'agent' } | { kind: 'usage'; reason: string }
 
-/** A variable that is set and not `false` or `0`. */
-const isSet = (value: string | undefined) => Boolean(value) && value !== 'false' && value !== '0'
-
-/**
- * The CI system this runs in, as the variable that says so, or null. `CI`
- * covers most; Jenkins, Azure Pipelines, AWS CodeBuild and TeamCity do not
- * set it. BUILD_NUMBER alone is too common a name, so it counts only beside
- * JENKINS_HOME.
- */
-export function ciVariable(env: Record<string, string | undefined>): string | null {
-  const named = ['CI', 'JENKINS_URL', 'TF_BUILD', 'CODEBUILD_BUILD_ID', 'TEAMCITY_VERSION', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE', 'CIRCLECI'].find((name) => isSet(env[name]))
-  if (named) return named
-  return isSet(env.BUILD_NUMBER) && isSet(env.JENKINS_HOME) ? 'BUILD_NUMBER with JENKINS_HOME' : null
-}
-
 /**
  * The menu when stdin, stdout and stderr (the menu draws on stderr) are a
  * terminal and no agent says it runs the command. In CI (see
@@ -296,13 +282,15 @@ function enterOrSkip(io: Io): Promise<boolean> {
 /**
  * Codex's screen: it runs in this terminal, so with `codex` on PATH the setup
  * offers to run its sign-in (`codex mcp login amdahl`, which opens the
- * browser) on Enter. Ctrl+C skips it. Without `codex` on PATH, the steps.
+ * browser) on Enter. Ctrl+C skips it. Without `codex` on PATH, or on Windows
+ * (where `codex` is a `.cmd` shim that cannot be spawned without a shell),
+ * the steps.
  */
 async function codexScreen(ctx: Ctx, tool: Ready, say: (line: string) => void, detail: (text: string) => void, lead: string[]): Promise<void> {
   say(tool.already ? '✓ Codex already has Amdahl.' : '✓ Added Amdahl to Codex.')
   detail(tool.detail)
   for (const line of lead) say(line)
-  if (!(await onPath(ctx, 'codex'))) {
+  if (ctx.io.platform === 'win32' || !(await onPath(ctx, 'codex'))) {
     say('One step left, in your terminal:')
     say(`  1. Run: ${CODEX_LOGIN}`)
     say(`  2. ${TRY_IN.Codex ?? ''}`)
@@ -361,13 +349,15 @@ export async function setup(ctx: Ctx, mode: 'menu' | 'agent'): Promise<number> {
     const there = await Promise.all(detected.map((c) => hasAmdahl(ctx, c.client)))
     if (there.every(Boolean)) {
       // Every tool here points at Amdahl already. Bring an old skill up to date quietly, and ask nothing.
+      let exit: number = EXIT.ok
       for (const tool of detected) {
         if (await isInstalled(ctx, tool.client)) continue
-        const { ready } = await installEach(ctx, [tool])
-        for (const r of ready) detail(r.detail)
+        const refreshed = await installEach(ctx, [tool])
+        for (const r of refreshed.ready) detail(r.detail)
+        if (exit === EXIT.ok) exit = refreshed.exit
       }
       for (const line of allSetLines(detected.map((c) => c.name))) say(line)
-      return EXIT.ok
+      return exit
     }
   }
 

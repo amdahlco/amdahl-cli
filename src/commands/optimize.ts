@@ -9,14 +9,17 @@
 //
 // With no file at a terminal it asks for the message to be pasted instead
 // (the setup's "This terminal" does the same), and shows Amdahl's version
-// under a rule, then what Amdahl did and how to run it next time.
+// under a rule, then what Amdahl did and how to run it next time. An agent
+// (CLAUDECODE, CURSOR_AGENT), CI or AMDAHL_NO_PROMPT=1 gets the usage (exit 2).
 
 import { readFileSync } from 'node:fs'
+import { ciVariable } from '../ci'
 import { amdahlCommand } from '../command-name'
 import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { printable } from '../output'
 import { browserSignIn } from './auth'
+import { runningAgent } from './skills-guide'
 
 /** Said before a first sign-in: it is also where a new user's workspace is made. */
 export const NEW_USER = 'New to Amdahl? The sign-in sets up your free workspace.'
@@ -323,7 +326,8 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   const { io, out } = ctx
   let files = args
   if (files.length === 0) {
-    if (io.stdinIsTTY && !ctx.nonInteractive) return optimizePasted(ctx)
+    // An agent may run commands in a terminal, and so may a CI job: neither can paste, so they get the usage.
+    if (io.stdinIsTTY && !ctx.nonInteractive && runningAgent(ctx) === null && !ciVariable(io.env)) return optimizePasted(ctx)
     if (io.stdinIsTTY) {
       throw usageError(
         'Give a file to optimize, or pipe the message on stdin.',
