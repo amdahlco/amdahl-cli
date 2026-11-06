@@ -15,8 +15,8 @@
 // after a backup. Every config file is written whole to a temp file and
 // renamed into place, so a crash never leaves half a file.
 
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { basename, dirname, join } from 'node:path'
+import { chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve } from 'node:path'
 import type { Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { SKILL_TEXT, SKILL_URL, isShippedSkill, skillPath } from '../skill'
@@ -152,24 +152,61 @@ function readJsonObject(path: string): { config: Record<string, unknown>; existe
   return { config: config as Record<string, unknown>, existed: true }
 }
 
+/**
+ * A settings file that keeps MCP servers under `mcpServers` (Claude Code's,
+ * Cursor's): the parsed file and its servers. An `mcpServers` that is there
+ * but not an object (an array, a string, null) is `invalid_config`: replacing
+ * it would drop whatever the person keeps there.
+ */
+function readMcpConfig(path: string): { config: Record<string, unknown>; servers: Record<string, unknown>; existed: boolean } {
+  const { config, existed } = readJsonObject(path)
+  const servers = config.mcpServers
+  if (servers === undefined) return { config, servers: {}, existed }
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) {
+    throw new CliError('invalid_config', `The "mcpServers" in ${path} is not a JSON object; not changing it.`, EXIT.general, CONFIG_HINT)
+  }
+  return { config, servers: servers as Record<string, unknown>, existed }
+}
+
 /** The `amdahl` user-scope entry in Claude Code's settings file, when it points at `mcpUrl`. Never throws. */
 function claudeFileHasAmdahl(path: string, mcpUrl: string): boolean {
   try {
-    const servers = readJsonObject(path).config.mcpServers as Record<string, { url?: unknown }> | undefined
-    return servers?.amdahl?.url === mcpUrl
+    const servers = readMcpConfig(path).servers as Record<string, { url?: unknown } | undefined>
+    return servers.amdahl?.url === mcpUrl
   } catch {
     return false
   }
 }
 
 /**
+ * The file a write to `path` should land in: `path` itself, or, when it is a
+ * symbolic link, the file at the end of the links, even one that does not
+ * exist yet (a dotfiles link whose target was never created). Renaming onto
+ * the link itself would replace it with a plain file.
+ */
+function writeTarget(path: string): string {
+  let target = path
+  for (let hops = 0; hops < 40; hops++) {
+    let link: boolean
+    try {
+      link = lstatSync(target).isSymbolicLink()
+    } catch {
+      return target
+    }
+    if (!link) return existsSync(target) ? realpathSync(target) : target
+    target = resolve(dirname(target), readlinkSync(target))
+  }
+  throw new CliError('invalid_config', `${path} is a chain of more than 40 symbolic links; not changing it.`, EXIT.general, CONFIG_HINT)
+}
+
+/**
  * Write `text` to `path` whole: to a temp file beside it, then a rename, so a
  * crash leaves the old file or the new one and never half of one. A symbolic
- * link (a dotfiles repo, say) is followed and stays a link. Keeps the file's
- * mode; a new file is owner-only.
+ * link (a dotfiles repo, say) is followed, also to a target not created yet,
+ * and stays a link. Keeps the file's mode; a new file is owner-only.
  */
 function writeFileAtomic(path: string, text: string): void {
-  const target = existsSync(path) ? realpathSync(path) : path
+  const target = writeTarget(path)
   const mode = existsSync(target) ? statSync(target).mode & 0o777 : 0o600
   mkdirSync(dirname(target), { recursive: true })
   const tmp = join(dirname(target), `.${basename(target)}.amdahl-${process.pid}.tmp`)
@@ -186,16 +223,15 @@ function writeFileAtomic(path: string, text: string): void {
 /** Claude Code's settings file with the `amdahl` user-scope entry, as `claude mcp add --scope user --transport http` writes it. */
 function writeClaudeConfig(ctx: Ctx, path: string, mcpUrl: string, command: string): Step {
   return updateConfig(path, (): Step => {
-    const { config, existed } = readJsonObject(path)
-    const servers = (config.mcpServers && typeof config.mcpServers === 'object' && !Array.isArray(config.mcpServers) ? config.mcpServers : {}) as Record<string, unknown>
+    const { config, servers, existed } = readMcpConfig(path)
     const data = { ok: true, client: 'claude-code', action: 'unchanged', path, command }
     if ((servers.amdahl as { url?: unknown } | undefined)?.url === mcpUrl) {
       return { data, human: `${path} already points Claude Code at ${mcpUrl}; nothing changed.`, notes: [] }
     }
     config.mcpServers = { ...servers, amdahl: { type: 'http', url: mcpUrl } }
-    const backup = `${existsSync(path) ? realpathSync(path) : path}.amdahl-backup`
+    const backup = `${writeTarget(path)}.amdahl-backup`
     ctx.io.uninterruptible(() => {
-      if (existed) copyFileSync(realpathSync(path), backup)
+      if (existed) copyFileSync(writeTarget(path), backup)
       writeFileAtomic(path, `${JSON.stringify(config, null, 2)}\n`)
     })
     const saved = existed ? ` The file as it was is saved at ${backup}.` : ''
@@ -359,8 +395,7 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
     return { data: { ok: true, client, action: 'printed', path }, human: `# ${path}\n${JSON.stringify({ mcpServers: { amdahl: entry } }, null, 2)}`, notes: [] }
   }
   return updateConfig(path, (): Step => {
-    const { config } = readJsonObject(path)
-    const servers = (config.mcpServers && typeof config.mcpServers === 'object' ? config.mcpServers : {}) as Record<string, unknown>
+    const { config, servers } = readMcpConfig(path)
     if (JSON.stringify(servers.amdahl) === JSON.stringify(entry)) {
       return { data: { ok: true, client, action: 'unchanged', path }, human: `${path} already points at ${mcpUrl}; nothing changed.`, notes: [] }
     }
@@ -372,7 +407,8 @@ async function installMcp(ctx: Ctx, client: Client, print: boolean): Promise<Ste
 
 /**
  * Why `client` cannot be set up, found without writing anything, or null:
- * a settings file the install would have to change is not a JSON object.
+ * a settings file the install would have to change is not a JSON object,
+ * or its `mcpServers` is not one.
  * The setup asks this before the sign-in.
  */
 export async function preflight(ctx: Ctx, client: Client): Promise<CliError | null> {
@@ -384,7 +420,7 @@ export async function preflight(ctx: Ctx, client: Client): Promise<CliError | nu
   }
   if (!path) return null
   try {
-    readJsonObject(path)
+    readMcpConfig(path)
     return null
   } catch (err) {
     if (err instanceof CliError) return err

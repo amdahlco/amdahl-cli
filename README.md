@@ -139,6 +139,11 @@ is set, it sets up without a question and without a browser sign-in:
 - `CURSOR_AGENT` set (Cursor runs it): Cursor only.
 - Anything else (Codex sets no variable): every client it finds.
 
+In Codex's default sandbox, writes outside the workspace and network access
+are blocked, so the run usually fails (`npx` cannot fetch the package, or
+`Could not update ~/.codex/config.toml`, exit 1) unless you approve the
+escalation Codex asks for, or run `npx amdahl` in your own terminal.
+
 Each client signs in on its first connect, over OAuth, so the CLI needs no
 sign-in of its own here. The last lines say how to finish, as above. Run
 from inside Claude Code, the step is "restart Claude Code and run /mcp
@@ -150,10 +155,12 @@ claude-code`, writes nothing and exits 1.
 **Exit code change in 0.3.4.** Before 0.3.4, bare `amdahl` with no terminal
 or with `CLAUDECODE` or `CURSOR_AGENT` set printed the usage and exited 2.
 It now sets up as above and exits 0 (1 when nothing was found or a client
-failed). With `CI` set (other than `false` or `0`), with
-`AMDAHL_NO_PROMPT=1`, or with `--json`, bare `amdahl` still changes nothing,
-exits 2 and prints the usage to stderr, now after one line that says why and
-names `amdahl install`.
+failed). In CI, with `AMDAHL_NO_PROMPT=1`, or with `--json`, bare `amdahl`
+still changes nothing, exits 2 and prints the usage to stderr, now after one
+line that says why and names `amdahl install`. CI means one of `CI`, `JENKINS_URL`, `TF_BUILD`,
+`CODEBUILD_BUILD_ID`, `TEAMCITY_VERSION`, `GITHUB_ACTIONS`, `GITLAB_CI`,
+`BUILDKITE` or `CIRCLECI` is set (other than `false` or `0`), or
+`BUILD_NUMBER` is set together with `JENKINS_HOME`.
 
 When the CLI was started by `npx`, every message that names a command says
 `npx amdahl ...` (for example `npx amdahl login`), since an `npx` user has no
@@ -178,8 +185,13 @@ file as it was to `~/.claude.json.amdahl-backup` first, writes the new file
 to a temp file and renames it into place (following a symbolic link), and
 changes nothing when the entry is already there. A file that is not a JSON
 object is left alone (exit 1, `invalid_config`). Cursor's and Codex's config
-files are also written whole through a temp file. If it cannot write the
-client's config file, it exits 1 with `write_failed` and names the file. The skill goes to the client's user skills folder:
+files are also written whole through a temp file. A symbolic link at
+`~/.claude.json` is followed to its target, even one not created yet, and
+stays a link. An `mcpServers` that is not a JSON object (an array, say) in
+`~/.claude.json` or `~/.cursor/mcp.json` is left alone with `invalid_config`,
+found before the sign-in. If it cannot write the client's config file, it
+exits 1 with `write_failed` and names the file. The skill goes to the
+client's user skills folder:
 
 | client | skill file |
 |---|---|

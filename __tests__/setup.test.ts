@@ -8,7 +8,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { USAGE } from '../src/args'
-import { FOUND_TAG, MENU_HINT, NONE_FOUND, QUESTION, noSetupLine } from '../src/commands/setup'
+import { FOUND_TAG, MENU_HINT, NONE_FOUND, QUESTION, ciVariable, noSetupLine } from '../src/commands/setup'
 import { SKILL_TEXT } from '../src/skill'
 import { cli, fakeIo, followAuthorize, type FakeIo } from './helpers/fake-io'
 import { startMockServer, type MockServer } from './helpers/mock-server'
@@ -103,6 +103,41 @@ describe('bare amdahl: when it guides', () => {
     expect(io.prompts).toEqual([])
     expect(io.run).not.toHaveBeenCalled()
     expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(false)
+  })
+
+  it.each<[Record<string, string>, string]>([
+    [{ JENKINS_URL: 'https://jenkins.example.com/' }, 'JENKINS_URL'],
+    [{ BUILD_NUMBER: '42', JENKINS_HOME: '/var/jenkins_home' }, 'BUILD_NUMBER with JENKINS_HOME'],
+    [{ TF_BUILD: 'True' }, 'TF_BUILD'],
+    [{ CODEBUILD_BUILD_ID: 'proj:0b1c' }, 'CODEBUILD_BUILD_ID'],
+    [{ TEAMCITY_VERSION: '2025.07' }, 'TEAMCITY_VERSION'],
+    [{ GITHUB_ACTIONS: 'true' }, 'GITHUB_ACTIONS'],
+    [{ GITLAB_CI: 'true' }, 'GITLAB_CI'],
+    [{ BUILDKITE: 'true' }, 'BUILDKITE'],
+    [{ CIRCLECI: 'true' }, 'CIRCLECI'],
+  ])('a CI system that may not set CI (%o) is CI: usage, exit 2, nothing written', async (vars, name) => {
+    expect(ciVariable(vars)).toBe(name)
+    // With no terminal, as on a build agent: without the check this would set up every client found.
+    const io = noTerminal(vars)
+    for (const dir of ['.claude', '.cursor', '.codex']) mkdirSync(join(io.homedir, dir))
+    const r = await cli(io)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`${noSetupLine(`${name} is set`)}${USAGE}`)
+    expect(r.stdout).toBe('')
+    expect(io.run).not.toHaveBeenCalled()
+    expect(existsSync(join(io.homedir, '.claude.json'))).toBe(false)
+    expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(false)
+    expect(existsSync(join(io.homedir, '.codex', 'config.toml'))).toBe(false)
+  })
+
+  it('is not CI for BUILD_NUMBER alone, or a CI variable set to false or 0', async () => {
+    for (const env of [{ BUILD_NUMBER: '42' }, { GITHUB_ACTIONS: 'false' }, { TF_BUILD: '0' }, { CI: 'false' }, {}]) {
+      expect(ciVariable(env)).toBeNull()
+    }
+    const io = noTerminal({ BUILD_NUMBER: '42', AMDAHL_API_URL: 'http://127.0.0.1:9' })
+    mkdirSync(join(io.homedir, '.cursor'))
+    expect((await cli(io)).code).toBe(0)
+    expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(true)
   })
 
   it('keeps the usage for --json, takes --no-color, and --help is as it was', async () => {
@@ -805,6 +840,68 @@ describe('Claude Code without `claude` on PATH', () => {
     expect(readFileSync(join(io.homedir, '.claude.json'), 'utf8')).toBe(readFileSync(real, 'utf8'))
     expect(lstatSync(join(io.homedir, '.claude.json')).isSymbolicLink()).toBe(true)
     expect(existsSync(`${real}.amdahl-backup`)).toBe(true)
+  })
+
+  it('writes through a dangling symbolic link to the file it names, and keeps the link', async () => {
+    const io = agent()
+    const real = join(io.homedir, 'dotfiles', 'claude.json')
+    symlinkSync(real, join(io.homedir, '.claude.json'))
+    const r = await cli(io)
+    expect(r.code).toBe(0)
+    expect(JSON.parse(readFileSync(real, 'utf8'))).toEqual({ mcpServers: { amdahl: { type: 'http', url } } })
+    expect(lstatSync(join(io.homedir, '.claude.json')).isSymbolicLink()).toBe(true)
+    expect(statSync(real).mode & 0o777).toBe(0o600)
+    expect(existsSync(`${real}.amdahl-backup`)).toBe(false)
+    expect((await cli(io)).stdout).toContain('✓ Claude Code already has Amdahl\n')
+  })
+
+  it('follows a chain of links, relative ones too, to a target not created yet', async () => {
+    const io = agent()
+    mkdirSync(join(io.homedir, 'a'))
+    symlinkSync('a/link2', join(io.homedir, '.claude.json'))
+    symlinkSync('../real.json', join(io.homedir, 'a', 'link2'))
+    expect((await cli(io)).code).toBe(0)
+    expect(JSON.parse(readFileSync(join(io.homedir, 'real.json'), 'utf8')).mcpServers.amdahl.url).toBe(url)
+    expect(lstatSync(join(io.homedir, '.claude.json')).isSymbolicLink()).toBe(true)
+    expect(lstatSync(join(io.homedir, 'a', 'link2')).isSymbolicLink()).toBe(true)
+  })
+
+  it.each([['an array', '[{"name":"x"}]'], ['a string', '"x"'], ['null', 'null']])('leaves a ~/.claude.json whose mcpServers is %s alone (exit 1)', async (_label, value) => {
+    const io = agent()
+    const path = join(io.homedir, '.claude.json')
+    const text = `{"theme":"dark","mcpServers":${value}}`
+    writeFileSync(path, text)
+    const r = await cli(io)
+    expect(r.code).toBe(1)
+    expect(r.stderr).toBe(`Error: The "mcpServers" in ${path} is not a JSON object; not changing it.\nFix the file, or move it away, then run the same command again.\n`)
+    expect(readFileSync(path, 'utf8')).toBe(text)
+    expect(existsSync(`${path}.amdahl-backup`)).toBe(false)
+  })
+
+  it.each<[string, string, string, string]>([
+    ['Claude Code', '.claude.json', '{"mcpServers":[{"name":"keep me"}]}', ''],
+    ['Cursor', join('.cursor', 'mcp.json'), '{"mcpServers":[{"name":"keep me"}]}', '2'],
+  ])('in the menu, %s with a non-object mcpServers is found before the sign-in', async (_label, file, text, pick) => {
+    const io = await atServer(false)
+    mkdirSync(join(io.homedir, '.cursor'), { recursive: true })
+    writeFileSync(join(io.homedir, file), text)
+    io.answers.push(pick || '1')
+    const r = await cli(io)
+    expect(r.code).toBe(1)
+    expect(io.opened).toEqual([])
+    expect(r.stderr).toContain(`Error: The "mcpServers" in ${join(io.homedir, file)} is not a JSON object; not changing it.\n`)
+    expect(readFileSync(join(io.homedir, file), 'utf8')).toBe(text)
+  })
+
+  it('install cursor refuses a non-object mcpServers instead of dropping it', async () => {
+    const io = fakeIo()
+    mkdirSync(join(io.homedir, '.cursor'))
+    const path = join(io.homedir, '.cursor', 'mcp.json')
+    writeFileSync(path, '{"mcpServers":["keep me"]}')
+    const r = await cli(io, 'install', 'cursor', '--json')
+    expect(r.code).toBe(1)
+    expect(r.json.error.code).toBe('invalid_config')
+    expect(readFileSync(path, 'utf8')).toBe('{"mcpServers":["keep me"]}')
   })
 
   it.each([['not JSON', '{oops'], ['not an object', '[1,2]']])('leaves a ~/.claude.json that is %s alone (exit 1)', async (_label, text) => {

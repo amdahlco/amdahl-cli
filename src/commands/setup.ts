@@ -76,16 +76,32 @@ export function finishLines(names: string[], inClaudeCode = false): string[] {
 /** How bare `amdahl` runs here: the menu, the agent setup, or the usage with the reason. */
 export type SetupMode = { kind: 'menu' } | { kind: 'agent' } | { kind: 'usage'; reason: string }
 
+/** A variable that is set and not `false` or `0`. */
+const isSet = (value: string | undefined) => Boolean(value) && value !== 'false' && value !== '0'
+
+/**
+ * The CI system this runs in, as the variable that says so, or null. `CI`
+ * covers most; Jenkins, Azure Pipelines, AWS CodeBuild and TeamCity do not
+ * set it. BUILD_NUMBER alone is too common a name, so it counts only beside
+ * JENKINS_HOME.
+ */
+export function ciVariable(env: Record<string, string | undefined>): string | null {
+  const named = ['CI', 'JENKINS_URL', 'TF_BUILD', 'CODEBUILD_BUILD_ID', 'TEAMCITY_VERSION', 'GITHUB_ACTIONS', 'GITLAB_CI', 'BUILDKITE', 'CIRCLECI'].find((name) => isSet(env[name]))
+  if (named) return named
+  return isSet(env.BUILD_NUMBER) && isSet(env.JENKINS_HOME) ? 'BUILD_NUMBER with JENKINS_HOME' : null
+}
+
 /**
  * The menu when stdin, stdout and stderr (the menu draws on stderr) are a
- * terminal and no agent says it runs the command. In CI or with
- * AMDAHL_NO_PROMPT=1, the usage. Anything else (an agent, a pipe, no
+ * terminal and no agent says it runs the command. In CI (see
+ * {@link ciVariable}) or with AMDAHL_NO_PROMPT=1, the usage. Anything else (an agent, a pipe, no
  * terminal) is the agent setup. Reads only `io`, so the usage path builds no
  * context.
  */
 export function setupMode(io: Io): SetupMode {
   const { env } = io
-  if (Boolean(env.CI) && env.CI !== 'false' && env.CI !== '0') return { kind: 'usage', reason: 'CI is set' }
+  const ci = ciVariable(env)
+  if (ci) return { kind: 'usage', reason: `${ci} is set` }
   if (env.AMDAHL_NO_PROMPT === '1') return { kind: 'usage', reason: 'AMDAHL_NO_PROMPT=1 is set' }
   if (env.CLAUDECODE || env.CURSOR_AGENT) return { kind: 'agent' }
   return io.stdinIsTTY && io.stdoutIsTTY && io.stderrIsTTY ? { kind: 'menu' } : { kind: 'agent' }
