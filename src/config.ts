@@ -32,8 +32,9 @@ export interface Config {
   default_profile: string | null
   profiles: Record<string, Profile>
   /**
-   * Print each optimize run's id and a feedback link to its run page. Absent
-   * means on. `AMDAHL_FEEDBACK_LINK` overrides it (see {@link feedbackLinkOn}).
+   * Print a feedback link to each optimize run's page in the console. The page
+   * is for Amdahl staff, so absent means off. `AMDAHL_FEEDBACK_LINK` overrides
+   * it (see {@link feedbackLinkOn}).
    */
   feedbackLink?: boolean
 }
@@ -111,13 +112,13 @@ export function selectedProfileName(
 }
 
 /**
- * Whether `optimize` prints the run id and feedback link: `AMDAHL_FEEDBACK_LINK`
+ * Whether `optimize` prints the feedback link: `AMDAHL_FEEDBACK_LINK`
  * (`0`/`false`/`off` or `1`/`true`/`on`) wins, then the config's `feedbackLink`,
- * then on.
+ * then off. The link opens an internal run page, so only Amdahl staff turn it on.
  */
 export function feedbackLinkOn(io: Io, config: Config): boolean {
   const env = io.env.AMDAHL_FEEDBACK_LINK?.trim().toLowerCase()
   if (env === '0' || env === 'false' || env === 'off') return false
   if (env === '1' || env === 'true' || env === 'on') return true
-  return config.feedbackLink ?? true
+  return config.feedbackLink ?? false
 }

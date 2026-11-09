@@ -505,25 +505,26 @@ origin must be `https`; `http` is allowed only for localhost.
 
 ## Feedback link
 
-Without `--json`, `amdahl optimize` ends each run with the run id and a link to
-the run's page in the console, where the Amdahl team reviews runs:
+Without `--json`, `amdahl optimize` ends each run with its run id:
 
 ```
 Run: 3f2c8a1e-...
-Feedback: https://console.amdahl.ai/admin/optimizer/runs/3f2c8a1e-...
 ```
 
-The link uses the console for your API host (see
-[Targeting staging](#targeting-staging)). Under `--json` no link prints; the
-run id is in `result.run_id`.
+Under `--json` the run id is in `result.run_id` and nothing extra prints.
 
-It is on by default. To turn it off:
+Amdahl staff can opt in to a feedback link after the run id. The link opens the
+run's internal page in the Amdahl console, which only staff can see. It is off
+by default. To turn it on:
 
-- Set `"feedbackLink": false` at the top level of the config file
+- Set `"feedbackLink": true` at the top level of the config file
   (`${XDG_CONFIG_HOME:-~/.config}/amdahl/config.json`, or
   `%APPDATA%\amdahl\config.json` on Windows).
-- Or set `AMDAHL_FEEDBACK_LINK=0` for one command or shell.
-  `AMDAHL_FEEDBACK_LINK=1` turns it on even when the config turns it off.
+- Or set `AMDAHL_FEEDBACK_LINK=1` for one command or shell.
+  `AMDAHL_FEEDBACK_LINK=0` turns it off even when the config turns it on.
+
+The link uses the console for your API host (see
+[Targeting staging](#targeting-staging)).
 
 Every request to the Amdahl API sends the header
 `X-Amdahl-Client: cli/<version>`, so Amdahl can tell which runs came from the

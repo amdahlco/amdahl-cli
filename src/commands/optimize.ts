@@ -6,8 +6,8 @@
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
 // summary and up to three lines on what Amdahl did go to stderr, then the run
-// id and a feedback link to its run page unless `feedbackLink` is off (config,
-// or AMDAHL_FEEDBACK_LINK=0).
+// id. A feedback link to the run's internal page follows only for Amdahl staff
+// who turn it on (`feedbackLink` in the config, or AMDAHL_FEEDBACK_LINK=1).
 //
 // With no file at a terminal it asks for the message to be pasted instead
 // (the setup's "This terminal" does the same), and shows Amdahl's version
@@ -230,12 +230,14 @@ export function whatAmdahlDid(result: Record<string, unknown>): string[] {
 }
 
 /**
- * The run id and a link to its run page in the console, where Amdahl reviews
- * runs. Empty when the run has no id, or when `feedbackLink` is off.
+ * The run id, then a link to the run's page in the console when `feedbackLink`
+ * is on. That page is staff-only, so the link is off unless turned on. Empty
+ * when the run has no id.
  */
 export function feedbackLines(ctx: Ctx, result: Record<string, unknown>): string[] {
   const runId = text(result.run_id)
-  if (!runId || !feedbackLinkOn(ctx.io, ctx.config)) return []
+  if (!runId) return []
+  if (!feedbackLinkOn(ctx.io, ctx.config)) return [`Run: ${runId}`]
   const url = `${consoleUrlFor(ctx.io, ctx.apiUrl)}/admin/optimizer/runs/${encodeURIComponent(runId)}`
   return [`Run: ${runId}`, `Feedback: ${url}`]
 }
