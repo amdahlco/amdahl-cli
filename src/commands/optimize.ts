@@ -5,7 +5,9 @@
 // retry and a 180 s timeout. A result of `ok: false` (the optimizer was
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
-// summary and up to three lines on what Amdahl did go to stderr.
+// summary and up to three lines on what Amdahl did go to stderr, then the run
+// id and a feedback link to its run page unless `feedbackLink` is off (config,
+// or AMDAHL_FEEDBACK_LINK=0).
 //
 // With no file at a terminal it asks for the message to be pasted instead
 // (the setup's "This terminal" does the same), and shows Amdahl's version
@@ -15,8 +17,10 @@
 import { readFileSync } from 'node:fs'
 import { ciVariable } from '../ci'
 import { amdahlCommand } from '../command-name'
+import { feedbackLinkOn } from '../config'
 import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
+import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
 import { browserSignIn } from './auth'
 import { runningAgent } from './skills-guide'
@@ -225,6 +229,17 @@ export function whatAmdahlDid(result: Record<string, unknown>): string[] {
   return lines.filter((l) => kept.has(l)).map((l) => l.line)
 }
 
+/**
+ * The run id and a link to its run page in the console, where Amdahl reviews
+ * runs. Empty when the run has no id, or when `feedbackLink` is off.
+ */
+export function feedbackLines(ctx: Ctx, result: Record<string, unknown>): string[] {
+  const runId = text(result.run_id)
+  if (!runId || !feedbackLinkOn(ctx.io, ctx.config)) return []
+  const url = `${consoleUrlFor(ctx.io, ctx.apiUrl)}/admin/optimizer/runs/${encodeURIComponent(runId)}`
+  return [`Run: ${runId}`, `Feedback: ${url}`]
+}
+
 /** What a person is asked when the message is pasted at the terminal. */
 export const PASTE_PROMPT = 'Paste an email or LinkedIn message, then press Enter on an empty line:'
 /** The rule above Amdahl's version of a pasted message. */
@@ -317,7 +332,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
-  out.info([...did, nextTimeLine(ctx)].join('\n'))
+  out.info([...did, ...feedbackLines(ctx, result), nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
 
@@ -371,8 +386,8 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
       else if (typeof result.summary === 'string') out.info(result.summary)
       out.result({}, String(result.message ?? ''))
-      const did = whatAmdahlDid(result)
-      if (did.length) out.info(did.join('\n'))
+      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result)]
+      if (lines.length) out.info(lines.join('\n'))
     }
   }
   if (out.json) out.result(results.length === 1 ? (results[0] as unknown as Record<string, unknown>) : (results as unknown as Record<string, unknown>[]))

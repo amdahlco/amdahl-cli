@@ -503,6 +503,32 @@ nothing. `--site <origin>` sends both requests to another origin, for
 example a local copy of the site (`--site http://localhost:6782`). The
 origin must be `https`; `http` is allowed only for localhost.
 
+## Feedback link
+
+Without `--json`, `amdahl optimize` ends each run with the run id and a link to
+the run's page in the console, where the Amdahl team reviews runs:
+
+```
+Run: 3f2c8a1e-...
+Feedback: https://console.amdahl.ai/admin/optimizer/runs/3f2c8a1e-...
+```
+
+The link uses the console for your API host (see
+[Targeting staging](#targeting-staging)). Under `--json` no link prints; the
+run id is in `result.run_id`.
+
+It is on by default. To turn it off:
+
+- Set `"feedbackLink": false` at the top level of the config file
+  (`${XDG_CONFIG_HOME:-~/.config}/amdahl/config.json`, or
+  `%APPDATA%\amdahl\config.json` on Windows).
+- Or set `AMDAHL_FEEDBACK_LINK=0` for one command or shell.
+  `AMDAHL_FEEDBACK_LINK=1` turns it on even when the config turns it off.
+
+Every request to the Amdahl API sends the header
+`X-Amdahl-Client: cli/<version>`, so Amdahl can tell which runs came from the
+CLI. The header is only a label. It never changes what a credential can do.
+
 ## Targeting staging
 
 ```sh

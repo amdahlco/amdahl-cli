@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import pkg from '../package.json'
 import { parseCommandLine } from '../src/args'
+import { configPath } from '../src/config'
 import { PASTE_PROMPT, VERSION_RULE, whatAmdahlDid } from '../src/commands/optimize'
 import { EXIT, exitForHttp } from '../src/errors'
 import { generateKey } from '../src/keygen'
@@ -209,6 +210,52 @@ describe('optimize', () => {
     const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
     expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
     expect(json.stderr).not.toContain('Flagged')
+  })
+
+  it('sends X-Amdahl-Client: cli/<version> on every request to the API', async () => {
+    const io = await loggedIn()
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    expect((await cli(io, 'optimize', join(io.homedir, 'a.md'))).code).toBe(0)
+    expect(server!.log.some((l) => l.path.endsWith('/messages/optimize'))).toBe(true)
+    expect(server!.log.some((l) => l.path === '/oauth/token')).toBe(true)
+    // The browser, not the CLI, opens the authorize page.
+    const fromCli = server!.log.filter((l) => !l.path.startsWith('/oauth/authorize'))
+    for (const l of fromCli) expect(l.headers['x-amdahl-client'], l.path).toBe(`cli/${VERSION}`)
+  })
+
+  it('ends each run with its run id and a feedback link, unless feedbackLink is off', async () => {
+    const io = await loggedIn()
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    const link = 'Run: r1\nFeedback: http://localhost:4000/admin/optimizer/runs/r1\n'
+
+    expect((await cli(io, 'optimize', file)).stderr).toBe(`Tighter opener.\n${link}`)
+    expect((await cli(io, 'optimize', file, '--json')).stderr).toBe('')
+
+    io.env.AMDAHL_CONSOLE_URL = 'https://console.example.test/'
+    expect((await cli(io, 'optimize', file)).stderr).toContain(
+      'Feedback: https://console.example.test/admin/optimizer/runs/r1\n'
+    )
+    delete io.env.AMDAHL_CONSOLE_URL
+
+    io.env.AMDAHL_FEEDBACK_LINK = '0'
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\n')
+
+    delete io.env.AMDAHL_FEEDBACK_LINK
+    const config = JSON.parse(readFileSync(configPath(io), 'utf8'))
+    writeFileSync(configPath(io), JSON.stringify({ ...config, feedbackLink: false }))
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\n')
+
+    io.env.AMDAHL_FEEDBACK_LINK = '1'
+    expect((await cli(io, 'optimize', file)).stderr).toBe(`Tighter opener.\n${link}`)
+  })
+
+  it('keeps feedbackLink in the config when a sign-in rewrites the file', async () => {
+    const io = await loggedIn()
+    const config = JSON.parse(readFileSync(configPath(io), 'utf8'))
+    writeFileSync(configPath(io), JSON.stringify({ ...config, feedbackLink: false }))
+    expect((await cli(io, 'login', '--json')).code).toBe(0)
+    expect(JSON.parse(readFileSync(configPath(io), 'utf8')).feedbackLink).toBe(false)
   })
 
   it('what Amdahl did: steps and omitted reasons fill the lines left, at most three', () => {
