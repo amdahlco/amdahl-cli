@@ -31,6 +31,12 @@ export interface Config {
   version: 1
   default_profile: string | null
   profiles: Record<string, Profile>
+  /**
+   * Print a feedback link to each optimize run's page in the console. The page
+   * is for Amdahl staff, so absent means off. `AMDAHL_FEEDBACK_LINK` overrides
+   * it (see {@link feedbackLinkOn}).
+   */
+  feedbackLink?: boolean
 }
 
 /**
@@ -63,6 +69,7 @@ export function loadConfig(io: Io): Config {
       version: 1,
       default_profile: typeof parsed.default_profile === 'string' ? parsed.default_profile : null,
       profiles: parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {},
+      ...(typeof parsed.feedbackLink === 'boolean' ? { feedbackLink: parsed.feedbackLink } : {}),
     }
   } catch {
     return emptyConfig()
@@ -102,4 +109,16 @@ export function selectedProfileName(
   flag: string | undefined
 ): string | null {
   return flag || io.env.AMDAHL_PROFILE || config.default_profile || null
+}
+
+/**
+ * Whether `optimize` prints the feedback link: `AMDAHL_FEEDBACK_LINK`
+ * (`0`/`false`/`off` or `1`/`true`/`on`) wins, then the config's `feedbackLink`,
+ * then off. The link opens an internal run page, so only Amdahl staff turn it on.
+ */
+export function feedbackLinkOn(io: Io, config: Config): boolean {
+  const env = io.env.AMDAHL_FEEDBACK_LINK?.trim().toLowerCase()
+  if (env === '0' || env === 'false' || env === 'off') return false
+  if (env === '1' || env === 'true' || env === 'on') return true
+  return config.feedbackLink ?? false
 }

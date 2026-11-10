@@ -549,7 +549,7 @@ describe('bare amdahl: this terminal', () => {
     expect(io.prompts).toEqual([menu('  Claude Code |   Cursor |   Codex'), PASTE_PROMPT])
     expect(PASTE_PROMPT).toBe('Paste an email or LinkedIn message, then press Enter on an empty line:')
     expect(r.stdout).toBe(`${TITLE}${NEW}✓ Signed in · Acme\nbetter: Hi Sam,\n\nQuick question about Q3.\n`)
-    expect(r.stderr).toBe(`Opening your browser…\n${HINT}${ERASE}${REWRITING}${VERSION_RULE}\n${NEXT_TIME}`)
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}${ERASE}${REWRITING}${VERSION_RULE}\nRun: r1\n${NEXT_TIME}`)
     const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
     expect(bodies).toEqual([{ message: 'Hi Sam,\n\nQuick question about Q3.' }])
   })

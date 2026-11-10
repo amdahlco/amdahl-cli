@@ -11,12 +11,24 @@
 //   GET  /api/team/:businessId/mcp-keys                  mcpKeys.list
 //   POST /api/platform/v1/messages/optimize              via request()
 //
+// Every request also sends `X-Amdahl-Client: cli/<version>` and
+// `User-Agent: amdahl-cli/<version>`, so the server can record that a run came
+// from the CLI.
+//
 // The server owns this contract. `__tests__/helpers/mock-server.ts` mirrors
 // it, so a change to a route or a response shape belongs in both places.
 //
 // A CLI OAuth token can only OPEN a key request. Approving it, which mints or
 // revokes the key, happens in the console. The secret never reaches the
 // server: the CLI sends only its sha256 hash and display prefix.
+
+import { VERSION } from './version'
+
+/** Sent on every request to the Amdahl API, so the server can tell a CLI call apart. */
+export const CLIENT_HEADER = {
+  'X-Amdahl-Client': `cli/${VERSION}`,
+  'User-Agent': `amdahl-cli/${VERSION}`,
+} as const
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -294,7 +306,7 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
     options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
   ): Promise<T> {
     const { method = 'GET', body, headers = {} } = options
-    const allHeaders: Record<string, string> = { ...headers, Authorization: `Bearer ${token}` }
+    const allHeaders: Record<string, string> = { ...headers, ...CLIENT_HEADER, Authorization: `Bearer ${token}` }
     if (body && !allHeaders['Content-Type']) allHeaders['Content-Type'] = 'application/json'
 
     const response = await fetch(`${baseUrl}${path}`, {

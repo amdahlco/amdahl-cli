@@ -8,6 +8,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { CLIENT_HEADER } from './api'
 import { amdahlCommand } from './command-name'
 import { CliError, EXIT, NETWORK_HINT } from './errors'
 import type { Io } from './io'
@@ -51,10 +52,10 @@ interface TokenResponse {
   expires_in: number
 }
 
-/** Fetch with transport failures mapped to exit 8. */
+/** Fetch with the client header, and transport failures mapped to exit 8. */
 async function send(url: string, init?: RequestInit): Promise<Response> {
   try {
-    return await fetch(url, init)
+    return await fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...CLIENT_HEADER } })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new CliError('network_error', `Could not reach ${new URL(url).host}: ${message}`, EXIT.network, NETWORK_HINT)
