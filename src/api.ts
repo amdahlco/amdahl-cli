@@ -11,8 +11,9 @@
 //   GET  /api/team/:businessId/mcp-keys                  mcpKeys.list
 //   POST /api/platform/v1/messages/optimize              via request()
 //
-// Every request also sends `X-Amdahl-Client: cli/<version>`, so the server can
-// record that a run came from the CLI.
+// Every request also sends `X-Amdahl-Client: cli/<version>` and
+// `User-Agent: amdahl-cli/<version>`, so the server can record that a run came
+// from the CLI.
 //
 // The server owns this contract. `__tests__/helpers/mock-server.ts` mirrors
 // it, so a change to a route or a response shape belongs in both places.
@@ -24,7 +25,10 @@
 import { VERSION } from './version'
 
 /** Sent on every request to the Amdahl API, so the server can tell a CLI call apart. */
-export const CLIENT_HEADER = { 'X-Amdahl-Client': `cli/${VERSION}` } as const
+export const CLIENT_HEADER = {
+  'X-Amdahl-Client': `cli/${VERSION}`,
+  'User-Agent': `amdahl-cli/${VERSION}`,
+} as const
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

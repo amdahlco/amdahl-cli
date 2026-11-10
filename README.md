@@ -526,9 +526,9 @@ by default. To turn it on:
 The link uses the console for your API host (see
 [Targeting staging](#targeting-staging)).
 
-Every request to the Amdahl API sends the header
-`X-Amdahl-Client: cli/<version>`, so Amdahl can tell which runs came from the
-CLI. The header is only a label. It never changes what a credential can do.
+Every request to the Amdahl API sends the headers
+`X-Amdahl-Client: cli/<version>` and `User-Agent: amdahl-cli/<version>`, so
+Amdahl can tell which runs came from the CLI. The headers are only labels. It never changes what a credential can do.
 
 ## Targeting staging
 

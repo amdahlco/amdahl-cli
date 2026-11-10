@@ -212,7 +212,7 @@ describe('optimize', () => {
     expect(json.stderr).not.toContain('Flagged')
   })
 
-  it('sends X-Amdahl-Client: cli/<version> on every request to the API', async () => {
+  it('sends X-Amdahl-Client: cli/<version> and User-Agent: amdahl-cli/<version> on every request to the API', async () => {
     const io = await loggedIn()
     writeFileSync(join(io.homedir, 'a.md'), 'draft')
     expect((await cli(io, 'optimize', join(io.homedir, 'a.md'))).code).toBe(0)
@@ -220,7 +220,10 @@ describe('optimize', () => {
     expect(server!.log.some((l) => l.path === '/oauth/token')).toBe(true)
     // The browser, not the CLI, opens the authorize page.
     const fromCli = server!.log.filter((l) => !l.path.startsWith('/oauth/authorize'))
-    for (const l of fromCli) expect(l.headers['x-amdahl-client'], l.path).toBe(`cli/${VERSION}`)
+    for (const l of fromCli) {
+      expect(l.headers['x-amdahl-client'], l.path).toBe(`cli/${VERSION}`)
+      expect(l.headers['user-agent'], l.path).toBe(`amdahl-cli/${VERSION}`)
+    }
   })
 
   it('ends each run with its run id; the staff-only feedback link prints only when turned on', async () => {
