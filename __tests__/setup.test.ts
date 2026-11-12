@@ -568,19 +568,19 @@ describe('bare amdahl: this terminal', () => {
     expect(io.prompts).toEqual([menu('  Claude Code |   Cursor |   Codex'), PASTE_PROMPT])
     expect(PASTE_PROMPT).toBe('Paste an email or LinkedIn message, then press Enter on an empty line:')
     expect(r.stdout).toBe(`${TITLE}${NEW}✓ Signed in · Acme\nbetter: Hi Sam,\n\nQuick question about Q3.\n`)
-    expect(r.stderr).toBe(`Opening your browser…\n${HINT}${ERASE}${REWRITING}${VERSION_RULE}\nRun: r1\n${NEXT_TIME}`)
+    expect(r.stderr).toBe(`Opening your browser…\n${HINT}${ERASE}${REWRITING}${VERSION_RULE}\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\n${NEXT_TIME}`)
     const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
     expect(bodies).toEqual([{ message: 'Hi Sam,\n\nQuick question about Q3.' }])
   })
 
   it('prints what Amdahl did under the message, and the pbpaste line on a Mac', async () => {
-    server = await startMockServer({ optimizeResult: { ok: true, message: 'Hi Sam, short one.', what_changed: 'Cut the opener and 2 sentences nothing backed' } })
+    server = await startMockServer({ optimizeResult: { ok: true, message: 'Hi Sam, short one.', what_changed: 'Wrote this message from the context you sent.', omitted: [{ what: 'a', why: 'Nothing you sent backs it.' }] } })
     const io = terminal({ AMDAHL_API_URL: server.url, npm_command: 'exec' })
     io.platform = 'darwin'
     io.answers.push('4', 'draft')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stderr.endsWith(`${VERSION_RULE}\nCut the opener and 2 sentences nothing backed.\nNext time: npx -y amdahl optimize draft.txt,\nor pbpaste | npx -y amdahl optimize -\n`)).toBe(true)
+    expect(r.stderr.endsWith(`${VERSION_RULE}\nLeft out 1 thing: Nothing you sent backs it.\nNext time: npx -y amdahl optimize draft.txt,\nor pbpaste | npx -y amdahl optimize -\n`)).toBe(true)
   })
 
   it('already signed in: says so, and asks for the paste with no browser', async () => {

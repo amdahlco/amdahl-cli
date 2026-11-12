@@ -44,9 +44,8 @@ Full steps: https://amdahl.ai/connect
 ## Install
 
 Needs Node.js 22 or later. Node.js 20 reached end of life in April 2026 and
-gets no security fixes. `amdahl` still starts on it, but npm warns when it
-installs. On a Node older than 20, `amdahl` stops before it does anything,
-names the version it found, and links the Node.js download page.
+gets no security fixes. On a Node older than 22, `amdahl` stops before it does
+anything, names the version it found, and links the Node.js download page.
 
 ```sh
 # Run once, with no install
@@ -372,7 +371,7 @@ amdahl open [--no-browser]
 amdahl feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
                 [--outcome used|used_with_edits|not_used|unsure] [--sent-text <file>|-] [--comment <text>]
 amdahl sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited
-                (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+                [--provider-send-id <id>] [--recipient <email|url> | --recipient-key-hash <sha256>]
                 [--sent-at <time>] [--provider-campaign-id <id>] [--sequence-step <n>]
                 [--provider-variant-id <id>] [--provider-lead-id <id>] [--thread-id <id>]
                 [--sent-text <file>|-]
@@ -399,9 +398,20 @@ amdahl search "What objections came up in lost deals last quarter?"
 (`POST /search/query`, with `answer: true`). It prints a short answer, with
 each citation said in plain words, and the rows it came from under `From:`,
 at most five. With no written answer it prints up to ten rows. Each row is
-one line (its title, who and when) and up to three lines of its text, in 80
-columns. `--limit <n>` asks for at most `n` rows, and `--json` prints the
-server's whole answer, every row included.
+one line (its title, who and when) and up to three lines of its quote (the
+row's `content_preview`, or its text), in 80 columns. `--limit <n>` asks for
+at most `n` rows, and `--json` prints the server's whole answer, every row
+included.
+
+When the server found rows but wrote no answer over them (`not_enough_data`),
+the CLI says so plainly before the rows: "Amdahl couldn't answer that from
+these rows. Try rephrasing the question, or run `amdahl connections` to see
+whether your data is synced." The rows follow under `Rows it read:`. A
+failed answer says it found rows but could not write an answer.
+
+The CLI sends the question as you typed it. A window such as "last month" is
+read by the server from the words (the previous calendar month, in UTC); the
+request has no separate field for a time window.
 
 Research is something search starts, never a command of its own. Search
 hands a statistical or long question to a research job by itself, and
@@ -422,11 +432,11 @@ theme blocks print as plain text (an `<unverified>` figure is marked
 type this version does not know: both point to `--json`, where the whole block
 is. Starting research needs
 `conversations:write` and reading it back `conversations:read`. A CLI
-sign-in has neither, so the server runs the search instead and the CLI adds
-one line:
+sign-in has neither, so the server runs the search instead. The CLI says so
+first, before any row:
 
 ```
-A deeper answer needs a Customer agent key: amdahl keys create --name research --preset agent
+Research needs a Customer agent key: amdahl keys create --name research --preset agent. Here is the search answer instead.
 ```
 
 A workspace with nothing connected answers with `setup_needed`: the CLI
@@ -459,7 +469,10 @@ console's add page,
 `<console>/<workspace>/settings/connections?add=1&connector=hubspot`. The
 `connector` only fills the search box on that page: you pick HubSpot there and
 sign in to it. With no connector it opens the add page with an empty search
-box. The CLI never creates a connection itself. An unknown connector exits 2
+box. If that connector is already connected and healthy, the CLI says so
+first ("HubSpot is already connected and healthy (last sync 2026-11-11).")
+and prints the add page instead of opening it; one that needs attention gets
+its own console page. The CLI never creates a connection itself. An unknown connector exits 2
 and lists the ones you can connect; one that is not offered yet exits 1 and
 says it is coming soon. It opens the browser only for a person at a terminal:
 stdin and stdout are terminals, `AMDAHL_NO_PROMPT=1` is not set, no agent runs
@@ -494,18 +507,23 @@ The list is a CSV file with a header row, or a JSONL file (`.jsonl` or
 `.ndjson`) with one batch item, a JSON object, per line. A CSV has a
 `message` column and may have `item_id`, `channel`, `evidence`,
 `on_unsupported`, `facts` and `rules`; facts and rules take one per line
-inside the cell. Any other column is refused by name before anything is
-sent, so a misspelled column is never dropped without a word (use JSONL for
-any other field a single optimize takes). The optimize flags (`--channel`,
+inside the cell. Any other column (a CRM export has many) is not sent: one
+line names it, and it is copied to the results file in its place. Only a
+missing `message` column, or a column Amdahl reads that appears twice (a
+doubled `message`, say), is refused. A JSONL item takes any field a single
+optimize takes, and the server refuses a key it does not know. The optimize flags (`--channel`,
 `--evidence`, `--on-unsupported`, `--tries`, `--context`) apply to every
 item that does not set its own; a row's facts and a `--context` file's rules
 and voice examples are both sent.
 
-The whole file is read and checked first. A header the CLI does not read, or a
-missing `message` column, says which headers it expects. Progress goes to
-stderr, in place at a terminal. When the batch completes, the results go next
-to the list: `drafts.csv` gets `drafts.optimized.csv` (every input column,
-then `optimized_message`, `status`, `what_changed`, `run_id` and `error`), and
+The whole file is read and checked first. A missing `message` column says
+which columns it reads. Progress goes to stderr, in place at a terminal: a
+queued batch says it is queued, and each line after that says where it stands
+once. When the batch completes, the results go next to the list: `drafts.csv`
+gets `drafts.optimized.csv` (every input column in its original order, then
+`optimized_message`, `status`, `summary`, `run_id` and `error`; a column of
+yours with one of those names keeps it, and Amdahl's takes `amdahl_` in
+front), and
 `x.jsonl` gets `x.optimized.jsonl` (one batch item per line, its `result`
 what a single optimize returns). With `--json`, the batch and every item go
 to stdout and no file is written. A failed item exits 1. A refused list
@@ -513,7 +531,10 @@ names the line of the first item the server refused.
 
 A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula,
 so in the results CSV such a cell (and one that starts with a tab or a
-carriage return) starts with a `'`. The CLI does not replace a results file
+carriage return) starts with a `'`. That includes the cells copied through
+from your own columns: a phone number such as `+1 555 0100` or a negative
+number gets the `'` too, and you delete it to use the value. The `'` is the
+guard, so it stays. The CLI does not replace a results file
 that already exists: it exits 2 before it queues anything, and `--force`
 replaces the file.
 
@@ -527,7 +548,7 @@ here. `--no-wait` with `--batch` exits 2: it only queues a new list.
 
 ```sh
 amdahl feedback <run-id> --evidence did_it_myself --outcome used_with_edits --sent-text sent.txt
-amdahl sent <run-id> --provider gmail --channel email --sent-as edited --provider-send-id "<msg-id@mail.gmail.com>"
+amdahl sent <run-id> --provider gmail --channel email --sent-as edited --sent-text sent.txt --provider-send-id "<msg-id@mail.gmail.com>"
 ```
 
 `feedback` says what happened to the message one optimize run returned
@@ -543,16 +564,23 @@ stores two.
 (`POST /messages/report_send`). A report from a CLI sign-in is stored as
 `reported_via: cli`. The flags are the report's fields: `--provider`
 (`lemlist`, `instantly`, `outreach`, `salesloft`, `hubspot`, `salesforce`,
-`gmail`, `heyreach`, `apollo`, `linkedin_manual`, `other`), `--channel`
-(`email`, `linkedin_invite`, `linkedin_message`, `linkedin_inmail`),
+`gmail`, `heyreach`, `apollo`, `linkedin_manual`, `other`; the server's
+list, so use `other` for a sender that is not on it), `--channel` (`email`,
+`linkedin_invite`, `linkedin_message`, `linkedin_inmail`; `linkedin` is
+accepted and means `linkedin_message`, as in `amdahl optimize --channel`),
 `--sent-as` (`returned` or `edited`) and `--sent-at` (a time with a time
-zone; the current time when left out), then the optional ids.
+zone; the current time when left out), then the optional ids. `--sent-as
+edited` needs `--sent-text`, the message as you sent it (Amdahl keeps only a
+hash of it), and the file must not be empty. That is the CLI's rule, not the
+server's. A run id given twice, or two run ids, exits 2.
 
-The server stores a report only when it can tell which send it is, so one of
-`--provider-send-id`, `--recipient` (an email address, or a LinkedIn profile
-URL for a LinkedIn channel) or `--recipient-key-hash` (a SHA-256) is required.
-A campaign, a lead and a step are not enough. Without one, the CLI exits 2
-before it sends anything. The id is the provider's own: for gmail, the
+The server stores a report only when it can tell which send it is, so you give
+at least one of `--provider-send-id` and a recipient: `--recipient` (an email
+address, or a LinkedIn profile URL for a LinkedIn channel) or
+`--recipient-key-hash` (a SHA-256), never both. A send id with a recipient is
+fine, and the server then counts a report with and one without the id as one
+send. A campaign, a lead and a step are not enough. Without a send id or a
+recipient, the CLI exits 2 before it sends anything. The id is the provider's own: for gmail, the
 `Message-ID` header with its angle brackets; never an email address (give that
 as `--recipient`; Amdahl stores only a hash of it). The command reports one
 send, so give one run id. To report many at once, call
@@ -580,6 +608,39 @@ lines; `--json` never carries them.
   a connection that needs attention, its console page; a used-up quota, the
   day it resets; a role too low, ask a workspace admin.
 - Bare `amdahl`, signed in, with every tool set up: what to try here.
+- After an optimize (one file, a pasted message, or a list) a line says what
+  to do once the message is sent: two lines, each a command to paste, with
+  the run's own id and the flags it needs as placeholders (`amdahl sent
+  <run-id> --provider <provider> --channel <channel> --sent-as returned
+  --provider-send-id <id>`, then `amdahl feedback <run-id> --evidence
+  did_it_myself --outcome used`). A list prints the first run id of its
+  results. Replace each `<placeholder>` before you run it.
+- `amdahl optimize` no longer prints the server's `what_changed` line. It is
+  the same sentence on every run. It is still in `--json`.
+
+## Help and errors
+
+`amdahl <command> --help` (also `-h`, or `amdahl help <command>`) prints that
+command's usage and nothing else: its flags, what it prints, and its exit
+codes where they matter. `amdahl keys --help` lists the `keys` commands. For
+`optimize --json`, the help says where the message is: `.result.message`, and
+the run id is `.result.run_id`.
+
+Three failures print a plain sentence each. Only the sentence changed from
+0.4.0: the `--json` error `code` is still the server's (or `http_<status>`) and
+its `hint` is the same, because scripts and agents branch on them.
+
+- A credential that lacks a scope says what it cannot do and what to use: `This
+  credential cannot optimize. Use a Customer agent key, or run \`amdahl
+  login\` again.` (exit 4). It never prints the server's `Missing required
+  scope(s)`.
+- A key the server will not take (revoked or expired): `This key isn't valid
+  (revoked or expired).` and the hint, `Run amdahl login, or check
+  AMDAHL_KEY.` (exit 3). An OAuth access token in `AMDAHL_ACCESS_TOKEN` says
+  `This token isn't valid (revoked or expired).` A saved sign-in the server
+  will not take: `Your sign-in is no longer valid.`
+- A file that is not there: `Can't find <file>.` (exit 2), for a draft, a
+  list, `--context` and `--sent-text`.
 
 ## Skills
 

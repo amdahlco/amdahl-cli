@@ -6,7 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { asciiTable, blockLines, wrapCell } from '../src/blocks'
-import { neutralise, parseCsv, progressLine, resultsPath, shellWord, toCsv } from '../src/commands/batch'
+import { neutralise, parseCsv, progressKey, progressLine, resultColumnNames, resultsPath, shellWord, toCsv } from '../src/commands/batch'
 import { plainMarkdown, wrap } from '../src/text'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { API_KEY, KNOWN_RUN, UNKNOWN_RUN, batchRun, startMockServer, type MockServer } from './helpers/mock-server'
@@ -61,13 +61,20 @@ describe('search', () => {
     expect(json.stderr).toBe('')
   })
 
-  it('--research with a sign-in: the search answer, and one line on the key that gives a deeper one', async () => {
+  it('--research with a sign-in: says research needs a Customer agent key FIRST, then the search answer', async () => {
     const io = await signedIn()
+    const order: string[] = []
+    const [out, err] = [io.stdout, io.stderr]
+    io.stdout = (t) => (order.push('rows'), out(t))
+    io.stderr = (t) => (order.push('key'), err(t))
     const r = await cli(io, 'search', 'why do we lose?', '--research')
     expect(r.code).toBe(0)
     expect(sentBody('/api/platform/v1/search/query')).toMatchObject({ query: 'why do we lose?', route: 'research' })
     expect(r.stdout).toContain('1. Discovery call, Dana, 2026-10-01')
-    expect(r.stderr).toBe('A deeper answer needs a Customer agent key: amdahl keys create --name research --preset agent\n')
+    expect(r.stderr).toBe('Research needs a Customer agent key: amdahl keys create --name research --preset\nagent. Here is the search answer instead.\n')
+    // The sentence about the key is written before any row.
+    expect(order[0]).toBe('key')
+    expect(order.indexOf('key')).toBeLessThan(order.indexOf('rows'))
     expect(requests('/research/66666666-6666-4666-8666-666666666666')).toEqual([])
   })
 
@@ -177,7 +184,7 @@ describe('search', () => {
     expect(human.stderr).toBe(
       'Amdahl started research on it. This can take a few minutes.\n' +
         "Error: Research 66666666-6666-4666-8666-666666666666 started, but this credential can't read it.\n" +
-        'A deeper answer needs a Customer agent key: amdahl keys create --name research --preset agent\n'
+        'Research needs a Customer agent key: amdahl keys create --name research --preset agent\n'
     )
     const json = await cli(io, 'search', 'why do we lose?', '--research', '--json')
     expect(json.code).toBe(4)
@@ -256,7 +263,7 @@ describe('connections, connect and open', () => {
   })
 
   it('connect checks the connector in the catalog, then opens the console add page for it', async () => {
-    const io = await signedIn()
+    const io = await signedIn({ connections: [] })
     const r = await cli(io, 'connect', 'HubSpot')
     expect(r.code).toBe(0)
     expect(io.opened).toEqual(['http://localhost:4000/acme/settings/connections?add=1&connector=hubspot'])
@@ -267,7 +274,7 @@ describe('connections, connect and open', () => {
   })
 
   it('connect --no-browser prints the link; bare connect opens the add page without a catalog read', async () => {
-    const io = await signedIn()
+    const io = await signedIn({ connections: [] })
     const r = await cli(io, 'connect', 'gong', '--no-browser')
     expect(io.opened).toEqual([])
     expect(r.stdout).toBe('http://localhost:4000/acme/settings/connections?add=1&connector=gong\n')
@@ -315,7 +322,7 @@ describe('connect and open launch a browser only for a person at a terminal', ()
     ['no terminal on stdout (connect | cat)', (io) => void (io.stdoutIsTTY = false)],
     ['AMDAHL_NO_PROMPT=1', (io) => void (io.env.AMDAHL_NO_PROMPT = '1')],
   ])('%s: connect and open print the link and open nothing', async (label, setup) => {
-    const io = await signedIn()
+    const io = await signedIn({ connections: [] })
     setup(io)
     const json = label === '--json'
     const connect = await cli(io, 'connect', 'hubspot', ...(json ? ['--json'] : []))
@@ -332,7 +339,7 @@ describe('connect and open launch a browser only for a person at a terminal', ()
   })
 
   it('a person at a terminal still gets the browser', async () => {
-    const io = await signedIn()
+    const io = await signedIn({ connections: [] })
     expect((await cli(io, 'connect', 'hubspot')).code).toBe(0)
     expect(io.opened).toEqual([url])
   })
@@ -356,18 +363,20 @@ describe('optimize --list', () => {
       [
         `Queued 2 messages as batch ${id}.`,
         `Ctrl+C stops waiting, not the batch. To pick it up later: amdahl optimize --list ${list} --batch ${id}`,
-        'Queued behind 3 items: 0 of 2 done, about 5 min left',
+        'Queued behind 3 items, about 5 min left',
         '2 of 2 done',
         '2 of 2 messages optimized.',
+        `Sent one? amdahl sent ${batchRun(0)} --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>`,
+        `Or say how it went: amdahl feedback ${batchRun(0)} --evidence did_it_myself --outcome used`,
         '',
       ].join('\n')
     )
     const out = join(io.cwd, 'drafts.optimized.csv')
     expect(r.stdout).toBe(`Results: ${out}\n`)
     expect(parseCsv(readFileSync(out, 'utf8')).rows).toEqual([
-      ['item_id', 'message', 'facts', 'optimized_message', 'status', 'what_changed', 'run_id', 'error'],
-      ['dana', 'Hi Dana, quick one', 'Dana runs ops', 'better: Hi Dana, quick one', 'done', 'Cut the opener.', batchRun(0), ''],
-      ['sam', 'Hi Sam\nsecond line', 'Sam is new\nSam likes golf', 'better: Hi Sam\nsecond line', 'done', 'Cut the opener.', batchRun(1), ''],
+      ['item_id', 'message', 'facts', 'optimized_message', 'status', 'summary', 'run_id', 'error'],
+      ['dana', 'Hi Dana, quick one', 'Dana runs ops', 'better: Hi Dana, quick one', 'done', 'Tighter opener.', batchRun(0), ''],
+      ['sam', 'Hi Sam\nsecond line', 'Sam is new\nSam likes golf', 'better: Hi Sam\nsecond line', 'done', 'Tighter opener.', batchRun(1), ''],
     ])
   })
 
@@ -405,13 +414,9 @@ describe('optimize --list', () => {
     expect(parseCsv(readFileSync(join(io.cwd, 'd.optimized.csv'), 'utf8')).rows[2]).toEqual(['b', '', 'failed', '', '', 'optimizer_error: It failed.'])
   })
 
-  it('refuses a column it does not read, a bad line and an empty list, before sending anything', async () => {
+  it('refuses a bad line and an empty list before sending anything', async () => {
     const io = await signedIn()
     const list = join(io.cwd, 'd.csv')
-    writeFileSync(list, 'message,email\nhi,a@b.c\n')
-    const r = await cli(io, 'optimize', '--list', list)
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain(`${list} has a column Amdahl doesn't read: "email".`)
     writeFileSync(list, 'message,channel\nhi\n')
     expect((await cli(io, 'optimize', '--list', list)).stderr).toContain('Line 2 of')
     writeFileSync(list, 'message\n')
@@ -419,6 +424,60 @@ describe('optimize --list', () => {
     writeFileSync(join(io.cwd, 'x.jsonl'), '{"message":"a"}\nnot json\n')
     expect((await cli(io, 'optimize', '--list', join(io.cwd, 'x.jsonl'))).stderr).toContain('Line 2 of')
     expect(requests('/messages/optimize/batch')).toEqual([])
+  })
+
+  it('ignores columns it does not read, names them in one line, and copies them to the results in their original place', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'crm.csv')
+    writeFileSync(list, 'Company,Message,Email,facts,Notes\nAcme,"Hi Dana, quick one",dana@acme.com,Dana runs ops,"call back, Friday"\nBeta,Hi Sam,sam@beta.io,,\n')
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.code).toBe(0)
+    // Only what Amdahl reads is sent: the CRM's own columns are not.
+    expect(sentBody('/api/platform/v1/messages/optimize/batch')).toEqual({
+      items: [{ message: 'Hi Dana, quick one', context: { facts: ['Dana runs ops'] } }, { message: 'Hi Sam' }],
+    })
+    expect(r.stderr).toContain('Not sent, and copied to the results as they are: 3 columns Amdahl does not read (Company, Email, Notes).\n')
+    // Every input column stays where it was, then Amdahl's columns.
+    const rows = parseCsv(readFileSync(join(io.cwd, 'crm.optimized.csv'), 'utf8')).rows
+    expect(rows[0]).toEqual(['Company', 'Message', 'Email', 'facts', 'Notes', 'optimized_message', 'status', 'summary', 'run_id', 'error'])
+    expect(rows[1]).toEqual(['Acme', 'Hi Dana, quick one', 'dana@acme.com', 'Dana runs ops', 'call back, Friday', 'better: Hi Dana, quick one', 'done', 'Tighter opener.', batchRun(0), ''])
+    expect(rows[2]?.slice(0, 5)).toEqual(['Beta', 'Hi Sam', 'sam@beta.io', '', ''])
+  })
+
+  it('keeps a list column that has the name of one of its results columns, and names its own with amdahl_', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'x.csv')
+    writeFileSync(list, 'id,status,run_id,message\n1,open,mine,Hi\n')
+    await cli(io, 'optimize', '--list', list)
+    const rows = parseCsv(readFileSync(join(io.cwd, 'x.optimized.csv'), 'utf8')).rows
+    expect(rows[0]).toEqual(['id', 'status', 'run_id', 'message', 'optimized_message', 'amdahl_status', 'summary', 'amdahl_run_id', 'error'])
+    expect(rows[1]?.slice(0, 4)).toEqual(['1', 'open', 'mine', 'Hi'])
+    expect(rows[1]?.[5]).toBe('done')
+    expect(rows[1]?.[7]).toBe(batchRun(0))
+    expect(resultColumnNames(['optimized_message', 'amdahl_error', 'error'])).toEqual(['amdahl_optimized_message', 'status', 'summary', 'run_id', 'amdahl_amdahl_error'])
+  })
+
+  it('refuses a list only when its message column is missing or twice, and says which columns it reads', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'h.csv')
+    writeFileSync(list, 'Company,Email\nAcme,a@b.c\n')
+    const missing = await cli(io, 'optimize', '--list', list)
+    expect(missing.code).toBe(2)
+    expect(missing.stderr).toBe(
+      `Error: ${list} needs a "message" column.\n` +
+        'The first row must name the columns. Required: message. Read: item_id, channel, evidence, on_unsupported, facts, rules. Any other column is copied to the results as it is.\n'
+    )
+    writeFileSync(list, 'message,Message\na,b\n')
+    expect((await cli(io, 'optimize', '--list', list)).stderr).toBe(`Error: ${list} has the column "message" twice.\n`)
+    // No header row: the first message is read as the header, which has no message column.
+    writeFileSync(list, `${'Hi Dana I saw your talk and wanted to ask about your data stack '.repeat(3)}\nsecond\n`)
+    const headerless = await cli(io, 'optimize', '--list', list)
+    expect(headerless.code).toBe(2)
+    expect(headerless.stderr).toContain('needs a "message" column.')
+    expect(requests('/messages/optimize/batch')).toEqual([])
+    // Seven ignored columns: six are named, the rest are counted.
+    writeFileSync(list, 'a,b,c,d,e,f,g,message\n1,2,3,4,5,6,7,Hi\n')
+    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).stderr).toContain('7 columns Amdahl does not read (a, b, c, d, e, f and 1 more).')
   })
 
   it('a refused item names its line in the list', async () => {
@@ -453,8 +512,8 @@ describe('optimize --list', () => {
     writeFileSync(list, 'item_id,message\n-5,=1+1\nok,"@me and a normal one"\n')
     expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
     expect(parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows.slice(1)).toEqual([
-      ["'-5", "'=1+1", "'+cmd|calc", 'done', 'Cut the opener.', batchRun(0), ''],
-      ['ok', "'@me and a normal one", "'+cmd|calc", 'done', 'Cut the opener.', batchRun(1), ''],
+      ["'-5", "'=1+1", "'+cmd|calc", 'done', 'Tighter opener.', batchRun(0), ''],
+      ['ok', "'@me and a normal one", "'+cmd|calc", 'done', 'Tighter opener.', batchRun(1), ''],
     ])
     expect([neutralise('=a'), neutralise('+a'), neutralise('-a'), neutralise('@a'), neutralise('\ta'), neutralise('\ra'), neutralise('a=b'), neutralise('')]).toEqual([
       "'=a", "'+a", "'-a", "'@a", "'\ta", "'\ra", 'a=b', '',
@@ -511,22 +570,6 @@ describe('optimize --list', () => {
     expect(existsSync(join(io.cwd, 'three.optimized.csv'))).toBe(false)
     expect((await cli(io, 'optimize', '--list', two, '--batch', id)).code).toBe(0)
     expect(readFileSync(join(io.cwd, 'two.optimized.csv'), 'utf8')).toContain('better: b')
-  })
-
-  it('an unknown or missing header names the headers it expects; a message in the header row is cut short', async () => {
-    const io = await signedIn()
-    const list = join(io.cwd, 'h.csv')
-    const hint = 'The first row must name the columns, from: item_id, message, channel, evidence, on_unsupported, facts, rules (message is required). For any other field, use a JSONL file.'
-    writeFileSync(list, 'message,email\nhi,a@b.c\n')
-    expect((await cli(io, 'optimize', '--list', list)).stderr).toBe(`Error: ${list} has a column Amdahl doesn't read: "email".\n${hint}\n`)
-    writeFileSync(list, 'channel\nemail\n')
-    expect((await cli(io, 'optimize', '--list', list)).stderr).toBe(`Error: ${list} needs a "message" column.\n${hint}\n`)
-    // No header row: the first message is read as the header.
-    writeFileSync(list, `${'Hi Dana I saw your talk and wanted to ask about your data stack '.repeat(3)}\nsecond\n`)
-    const headerless = await cli(io, 'optimize', '--list', list)
-    expect(headerless.code).toBe(2)
-    expect(headerless.stderr.split('\n')[0]).toMatch(/column Amdahl doesn't read: "hi dana i saw your talk and wanted to\.\.\."\.$/)
-    expect(headerless.stderr).toContain(hint)
   })
 
   it('refuses a list over the 500-message cap by naming it, before any request; 500 goes through', async () => {
@@ -624,7 +667,7 @@ describe('feedback and sent', () => {
     expect(server!.log.length).toBe(before)
   })
 
-  const send = ['--provider', 'gmail', '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', '<abc@mail.gmail.com>']
+  const send = ['--provider', 'gmail', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', '<abc@mail.gmail.com>']
 
   it('sent reports one send with its send key; sent_at defaults to now; a repeat updates the first report', async () => {
     const io = await signedIn()
@@ -637,27 +680,28 @@ describe('feedback and sent', () => {
       items: [{ run_id: KNOWN_RUN, provider: 'lemlist', channel: 'email', sent_as: 'returned', sent_at: new Date(now).toISOString(), provider_send_id: 'act_1', provider_campaign_id: 'cam_1', sequence_step: 0 }],
     })
     expect(r.stdout).toBe('Reported the send.\n')
-    const again = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', 'act_1')
+    const again = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'act_1')
     expect(again.stdout).toBe('Updated the earlier report of this send.\n')
     const json = await cli(io, 'sent', KNOWN_RUN, ...send, '--json')
     expect(json.json).toMatchObject({ ok: true, success: true, accepted: 1, rejected: 0, items: [{ status: 'accepted', result: 'created' }] })
   })
 
-  it('sent needs one send key, and says so before any request (the real server refuses a report without one)', async () => {
+  it('sent needs a send id or a recipient, and says so before any request (the real server refuses a report without one)', async () => {
     const io = await signedIn()
     const before = server!.log.length
     const none = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned')
     expect(none.code).toBe(2)
     expect(none.stderr).toBe(
-      'Error: Say which send this is with one of --provider-send-id, --recipient, --recipient-key-hash.\n' +
-        "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).\n"
+      'Error: Say which send this is: give --provider-send-id, a recipient (--recipient or --recipient-key-hash), or both.\n' +
+        "Amdahl matches a report to a send by its provider's own id, by the recipient (stored only as a hash), or both.\n"
     )
     // A campaign, lead and step alone are not a send key either.
     const lemlist = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-campaign-id', 'c1', '--provider-lead-id', 'lea_1', '--sequence-step', '0')
     expect(lemlist.code).toBe(2)
     expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', ' ')).code).toBe(2)
     expect(server!.log.length).toBe(before)
-    // Each of the three keys is enough.
+    // Each key is enough, and a send id with a recipient (or a hash) is fine: the server takes both.
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x2', '--recipient-key-hash', 'b'.repeat(64))).code).toBe(0)
     const base = ['--provider', 'other', '--channel', 'email', '--sent-as', 'returned']
     expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--provider-send-id', 'x1')).code).toBe(0)
     expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--recipient', 'dana@example.com')).code).toBe(0)
@@ -839,13 +883,13 @@ describe('next steps', () => {
     writeFileSync(file, 'draft')
     const r = await cli(io, 'optimize', file)
     expect(r.code).toBe(0)
-    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
+    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
     const before = requests('/setup/status').length
     const json = await cli(io, 'optimize', file, '--json')
     expect(json.stderr).toBe('')
     expect(requests('/setup/status').length).toBe(before)
     server!.options.noConnections = false
-    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\n')
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\n')
   })
 })
 

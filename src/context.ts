@@ -168,7 +168,7 @@ async function profileCredential(ctx: Ctx): Promise<Credential> {
 
 /** An API client that sends the credential as `Authorization: Bearer`. */
 export function apiClient(ctx: Ctx, credential: Credential): AmdahlClient {
-  return createAmdahlClient({ baseUrl: ctx.apiUrl, token: credential.token })
+  return createAmdahlClient({ baseUrl: ctx.apiUrl, token: credential.token, source: credential.source })
 }
 
 /** Pull `details` from a server error body, when it sent any. */
@@ -181,6 +181,41 @@ function errorDetails(body: string | undefined): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+/** What each call does, said as a verb, for "This credential cannot <verb>." Longest path first. */
+const CALL_VERBS: [string, string][] = [
+  ['/messages/optimize/batch', 'optimize a list'],
+  ['/messages/optimize/runs/', 'record feedback'],
+  ['/messages/optimize', 'optimize'],
+  ['/messages/report_send', 'report sends'],
+  ['/research/', 'read research'],
+  ['/search/query', 'search'],
+  ['/connections', 'read connections'],
+  ['/setup/status', 'read the setup status'],
+]
+
+/**
+ * The sentence a person reads for a refusal of the credential, or null when
+ * the server's own message is the one to show. Only this sentence changes: the
+ * error's `code` (the server's) and its `hint` stay what they were, because
+ * agents branch on them. A key or token the server will not take says so, a
+ * sign-in it will not take says so, and a missing scope says what this
+ * credential cannot do and what to use, never the server's
+ * `Missing required scope(s)`.
+ */
+function plainMessage(err: AmdahlApiError): string | null {
+  if (err.statusCode === 401 && err.credentialSource) {
+    if (err.credentialSource === 'profile') return 'Your sign-in is no longer valid.'
+    // AMDAHL_ACCESS_TOKEN is an OAuth access token; the other sources are API keys.
+    const noun = err.credentialSource === 'env:AMDAHL_ACCESS_TOKEN' ? 'token' : 'key'
+    return `This ${noun} isn't valid (revoked or expired).`
+  }
+  if (err.errorCode === 'missing_scope' || /^Missing required scope/i.test(err.message)) {
+    const verb = CALL_VERBS.find(([prefix]) => err.path.includes(prefix))?.[1] ?? 'do this'
+    return `This credential cannot ${verb}. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`
+  }
+  return null
 }
 
 /**
@@ -200,7 +235,7 @@ export function toCliError(err: unknown): CliError {
         : typeof retry === 'number'
           ? `Try again in ${retry} seconds.`
           : undefined
-    return new CliError(err.errorCode ?? `http_${err.statusCode}`, err.message, exit, hint)
+    return new CliError(err.errorCode ?? `http_${err.statusCode}`, plainMessage(err) ?? err.message, exit, hint)
   }
   const message = err instanceof Error ? err.message : String(err)
   return new CliError('network_error', `Could not reach the Amdahl API: ${message}`, EXIT.network, NETWORK_HINT)

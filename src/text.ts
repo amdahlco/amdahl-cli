@@ -93,6 +93,23 @@ export function day(iso: unknown): string {
   return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : ''
 }
 
+/** True when a context (as sent) holds at least one fact or rule. */
+export function hasFactsOrRules(context: unknown): boolean {
+  const c = record(context)
+  const some = (list: unknown) => Array.isArray(list) && list.some((entry) => (typeof entry === 'string' ? entry.trim() !== '' : !!record(entry)))
+  return !!c && (some(c.facts) || some(c.rules))
+}
+
+/**
+ * The run's one-line summary, when it is true of this run. The summary says the
+ * message was checked "against your facts and rules": a run that was sent
+ * neither has nothing of the sender's to have been checked against, so that
+ * line is dropped (an empty string) rather than printed.
+ */
+export function truthfulSummary(summary: string, context: unknown): string {
+  return /facts and rules/i.test(summary) && !hasFactsOrRules(context) ? '' : summary
+}
+
 /** `1 row`, `2 rows`. */
 export function count(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`

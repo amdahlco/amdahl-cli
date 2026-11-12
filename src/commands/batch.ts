@@ -7,8 +7,9 @@
 // The list is a CSV file with a header row, or a JSONL file with one batch
 // item (a JSON object) per line. A CSV has a `message` column and may have
 // `item_id`, `channel`, `evidence`, `on_unsupported`, `facts` and `rules`
-// (facts and rules one per line within the cell). Any other column is
-// refused by name, so a misspelled one is never dropped without a word. The
+// (facts and rules one per line within the cell). Any other column (a CRM
+// export has many) is not sent: it is named in one line and copied to the
+// results file, in its place. Only a missing `message` column is refused. The
 // optimize flags (`--channel`, `--evidence`, `--on-unsupported`, `--tries`,
 // `--context`) apply to every item that does not set its own.
 //
@@ -23,12 +24,14 @@
 // runs a cell that starts with `=`, `+`, `-` or `@` as a formula, so the CSV
 // results start such a cell with a quote. Ctrl+C stops the wait, not the batch.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
-import { clip, count, field, record, records } from '../text'
+import { readTextFile } from '../files'
+import { sentLines } from '../next-steps'
+import { clip, count, field, record, records, truthfulSummary } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -53,7 +56,7 @@ export function shellWord(path: string, platform: NodeJS.Platform = process.plat
   return platform === 'win32' ? `"${path.replace(/"/g, '""')}"` : `'${path.replace(/'/g, `'\\''`)}'`
 }
 
-/** The CSV columns a list may have. */
+/** The CSV columns Amdahl reads. Any other column is ignored and copied to the results. */
 export const CSV_COLUMNS = ['item_id', 'message', 'channel', 'evidence', 'on_unsupported', 'facts', 'rules']
 
 /** A list read from a file: the items to send, and what each came from. */
@@ -64,6 +67,8 @@ export interface ListFile {
   /** CSV only: the header and each item's row, for the results file. */
   header?: string[]
   rows?: string[][]
+  /** CSV only: the columns Amdahl does not read, as the header names them. They are copied to the results. */
+  ignored?: string[]
   /** The line each item starts on, for an error that names an item. */
   lines: number[]
 }
@@ -150,12 +155,15 @@ function csvList(path: string, text: string): ListFile {
   const [header, ...body] = rows
   if (!header) throw usageError(`${path} is empty.`)
   const names = header.map((h) => h.trim().toLowerCase())
-  const unknown = names.find((n) => !CSV_COLUMNS.includes(n))
-  const headers = `The first row must name the columns, from: ${CSV_COLUMNS.join(', ')} (message is required). For any other field, use a JSONL file.`
-  if (unknown !== undefined) {
-    throw usageError(`${path} has a column Amdahl doesn't read: "${clip(unknown, 40)}".`, headers)
+  const twice = CSV_COLUMNS.find((c) => names.indexOf(c) !== names.lastIndexOf(c))
+  if (twice !== undefined) throw usageError(`${path} has the column "${twice}" twice.`)
+  if (!names.includes('message')) {
+    throw usageError(
+      `${path} needs a "message" column.`,
+      `The first row must name the columns. Required: message. Read: ${CSV_COLUMNS.filter((c) => c !== 'message').join(', ')}. Any other column is copied to the results as it is.`
+    )
   }
-  if (!names.includes('message')) throw usageError(`${path} needs a "message" column.`, headers)
+  const ignored = header.map((h, i) => ({ name: h.trim(), known: CSV_COLUMNS.includes(names[i] ?? '') })).filter((c) => !c.known && c.name).map((c) => clip(c.name, 30))
   const items = body.map((row, i) => {
     if (row.length !== names.length) {
       throw usageError(`Line ${lines[i + 1]} of ${path} has ${count(row.length, 'cell')}; the header has ${names.length}.`)
@@ -164,14 +172,14 @@ function csvList(path: string, text: string): ListFile {
     const context: Record<string, string[]> = {}
     names.forEach((name, j) => {
       const value = row[j] ?? ''
-      if (!value.trim()) return
+      if (!CSV_COLUMNS.includes(name) || !value.trim()) return
       if (name === 'facts' || name === 'rules') context[name] = perLine(value)
       else item[name] = name === 'message' ? value : value.trim()
     })
     if (Object.keys(context).length > 0) item.context = context
     return item
   })
-  return { path, kind: 'csv', items, header, rows: body, lines: lines.slice(1) }
+  return { path, kind: 'csv', items, header, rows: body, ignored, lines: lines.slice(1) }
 }
 
 /** Read a JSONL list: each non-blank line one JSON object, sent as one batch item. */
@@ -196,12 +204,7 @@ function jsonlList(path: string, text: string): ListFile {
 
 /** Read a list file: `.csv`, or `.jsonl`/`.ndjson`, else by its first character. */
 export function readList(path: string): ListFile {
-  let text: string
-  try {
-    text = readFileSync(path, 'utf8')
-  } catch (err) {
-    throw usageError(`Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  const text = readTextFile(path)
   const ext = extname(path).toLowerCase()
   const jsonl = ext === '.jsonl' || ext === '.ndjson' || (ext !== '.csv' && text.trimStart().startsWith('{'))
   const list = jsonl ? jsonlList(path, text) : csvList(path, text)
@@ -232,6 +235,12 @@ function withDefaults(items: Record<string, unknown>[], defaults: Record<string,
   })
 }
 
+/** The part of a progress line that says where the batch stands, without the estimate. */
+export function progressKey(batch: Record<string, unknown>): string {
+  const c = record(batch.counts) ?? {}
+  return ['total', 'queued', 'running', 'done', 'failed'].map((k) => (typeof c[k] === 'number' ? c[k] : 0)).join('/')
+}
+
 /** One progress line: counts, and the server's estimate while items are left. */
 export function progressLine(batch: Record<string, unknown>): string {
   const c = record(batch.counts) ?? {}
@@ -244,7 +253,8 @@ export function progressLine(batch: Record<string, unknown>): string {
   const left = seconds === null || finished === total ? '' : seconds < 90 ? ', about a minute left' : `, about ${Math.round(seconds / 60)} min left`
   if (finished === 0 && n('running') === 0) {
     const ahead = typeof batch.queue_position === 'number' && batch.queue_position > 0 ? ` behind ${count(batch.queue_position, 'item')}` : ''
-    return `Queued${ahead}: 0 of ${total} done${left}`
+    // Nothing has started, so it says only that: "0 of N done" is the next line's to say.
+    return `Queued${ahead}${left}`
   }
   return `${n('done')} of ${total} done${failed}${left}`
 }
@@ -254,13 +264,16 @@ async function waitForBatch(ctx: Ctx, credential: Credential, id: string, first:
   const client = apiClient(ctx, credential)
   const tty = ctx.io.stderrIsTTY && !ctx.out.json
   let last = ''
+  let lastKey = ''
   const show = (batch: Record<string, unknown>) => {
     const line = progressLine(batch)
     if (line === last) return
     last = line
-    // At a terminal, the line is rewritten in place; elsewhere each change is a line.
+    // At a terminal, the line is rewritten in place. Elsewhere a line prints when the batch
+    // moves, not when only its estimate does, so no "N of M done" appears twice.
     if (tty) ctx.io.stderr(`\r\u001b[2K${line}`)
-    else ctx.out.info(line)
+    else if (progressKey(batch) !== lastKey) ctx.out.info(line)
+    lastKey = progressKey(batch)
   }
   let batch = first
   for (;;) {
@@ -303,16 +316,31 @@ export function neutralise(cell: string): string {
 }
 
 /** The results columns a CSV list gains. */
-export const RESULT_COLUMNS = ['optimized_message', 'status', 'what_changed', 'run_id', 'error']
+export const RESULT_COLUMNS = ['optimized_message', 'status', 'summary', 'run_id', 'error']
 
-/** One item's results cells: Amdahl's message, done or failed, what changed, the run id, why it failed. */
-function resultCells(item: Record<string, unknown> | undefined): string[] {
+/**
+ * The names of the results columns for a list with this header. A column the
+ * list already has under a name (a CRM export may have `status`) keeps it, and
+ * Amdahl's column takes `amdahl_` in front, so nothing is written over.
+ */
+export function resultColumnNames(header: string[]): string[] {
+  const taken = new Set(header.map((h) => h.trim().toLowerCase()))
+  return RESULT_COLUMNS.map((name) => {
+    let candidate = name
+    while (taken.has(candidate)) candidate = `amdahl_${candidate}`
+    taken.add(candidate)
+    return candidate
+  })
+}
+
+/** One item's results cells: Amdahl's message, done or failed, its one-line summary, the run id, why it failed. */
+function resultCells(item: Record<string, unknown> | undefined, context: unknown): string[] {
   const result = record(item?.result)
   if (!item || !result) return ['', field(item?.status) || 'missing', '', '', '']
   if (result.ok === false) return ['', 'failed', '', field(result.run_id), `${field(result.reason)}: ${field(result.detail)}`.replace(/: $/, '')]
   // The message is the sender's own text: kept as sent, line breaks and all.
   const message = typeof result.message === 'string' ? result.message : ''
-  return [message, result.unchanged === true ? 'unchanged' : 'done', field(result.what_changed), field(result.run_id), '']
+  return [message, result.unchanged === true ? 'unchanged' : 'done', truthfulSummary(field(result.summary), context), field(result.run_id), '']
 }
 
 /** Where the results of a run go: next to its list, or `<id>.optimized.jsonl` here. */
@@ -331,13 +359,13 @@ function assertFree(path: string, force: boolean): void {
 }
 
 /** Write the results file for `list`. Returns its path. */
-function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean): string {
+function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean, contexts: unknown[]): string {
   const byIndex = new Map(items.map((i) => [i.index, i]))
   const path = resultsFile(list, id, cwd)
   // `wx` fails when the file appeared since the check, instead of replacing it.
   const flag = force ? 'w' : 'wx'
   if (list?.kind === 'csv' && list.header && list.rows) {
-    const rows = [[...list.header, ...RESULT_COLUMNS], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i))])]
+    const rows = [[...list.header, ...resultColumnNames(list.header)], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i), contexts[i])])]
     writeFileSync(path, toCsv(rows.map((row) => row.map(neutralise))), { flag })
     return path
   }
@@ -370,6 +398,11 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     throw usageError('--batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.')
   }
   const list = listPath ? readList(listPath) : null
+  if (list?.ignored?.length) {
+    const shown = list.ignored.slice(0, 6).join(', ')
+    const more = list.ignored.length > 6 ? ` and ${list.ignored.length - 6} more` : ''
+    out.info(`Not sent, and copied to the results as they are: ${count(list.ignored.length, 'column')} Amdahl does not read (${shown}${more}).`)
+  }
   if (!resume && list && list.items.length > MAX_BATCH_ITEMS) {
     throw usageError(`A batch takes at most ${MAX_BATCH_ITEMS} messages, and ${list.path} has ${list.items.length}.`, 'Split the list into files of 500 or fewer, and run each one.')
   }
@@ -419,9 +452,14 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     out.result({ ...batch, ok: failed === 0, items, next_cursor: null })
     return failed === 0 ? EXIT.ok : EXIT.general
   }
-  const path = writeResults(list, id, items, ctx.io.cwd, force)
+  // What each row was sent with, so a summary that speaks of the sender's facts and rules is kept only when there were some.
+  const contexts = list ? withDefaults(list.items, defaults).map((item) => item.context) : []
+  const path = writeResults(list, id, items, ctx.io.cwd, force, contexts)
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
   out.result({}, `Results: ${path}`)
+  // What to do once the messages are sent, with a real run id from this batch.
+  const runId = items.map((i) => field(record(i.result)?.run_id)).find(Boolean)
+  for (const line of sentLines(runId, 'Sent one?')) out.info(line)
   return failed === 0 ? EXIT.ok : EXIT.general
 }

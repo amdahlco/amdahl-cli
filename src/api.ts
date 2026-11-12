@@ -195,7 +195,9 @@ export class AmdahlApiError extends Error {
     public readonly path: string,
     public readonly responseBody?: string,
     /** Machine-readable code from the response body, when it sent one. */
-    public readonly errorCode?: string
+    public readonly errorCode?: string,
+    /** Where the credential that was refused came from (`flag`, `env:AMDAHL_KEY`, `profile` ...), when the client knows. */
+    public readonly credentialSource?: string
   ) {
     super(message)
     this.name = 'AmdahlApiError'
@@ -304,10 +306,12 @@ export interface AmdahlClientConfig {
   baseUrl: string
   /** An OAuth access token or an `amdhl_` key, sent as a bearer credential. */
   token: string
+  /** Where the credential came from, so a refusal can say whether a key or a sign-in was refused. */
+  source?: string
 }
 
 export function createAmdahlClient(config: AmdahlClientConfig) {
-  const { baseUrl, token } = config
+  const { baseUrl, token, source } = config
 
   async function request<T>(
     path: string,
@@ -326,13 +330,13 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '')
       const { message, code } = parseErrorBody(errorBody, response.status)
-      throw new AmdahlApiError(message, response.status, path, errorBody, code)
+      throw new AmdahlApiError(message, response.status, path, errorBody, code, source)
     }
 
     const json = (await response.json()) as unknown
     const toolFailure = extractToolFailure(json)
     if (toolFailure) {
-      throw new AmdahlApiError(toolFailure.message, response.status, path, JSON.stringify(json), toolFailure.code)
+      throw new AmdahlApiError(toolFailure.message, response.status, path, JSON.stringify(json), toolFailure.code, source)
     }
     // Unwrap a lone `{data: ...}` envelope; anything else passes through.
     if (

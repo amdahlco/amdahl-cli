@@ -12,6 +12,8 @@ import { batchProblems, feedbackProblem, reportSendProblem, reportSendRejection,
 export const BIZ = '11111111-1111-4111-8111-111111111111'
 export const USER = '22222222-2222-4222-8222-222222222222'
 export const API_KEY = `amdhl_${'a'.repeat(48)}`
+/** A read-only key: it reads and searches, and the server refuses it messages:execute (optimize, feedback, sent). */
+export const READONLY_KEY = `amdhl_${'b'.repeat(48)}`
 /** An optimize run this workspace has (made an hour ago): `feedback` and `sent` find it. */
 export const KNOWN_RUN = '88888888-8888-4888-8888-888888888888'
 /** A well-formed run id this workspace does not have. */
@@ -73,12 +75,21 @@ export interface MockOptions {
   researchBlocks?: Record<string, unknown>[]
   /** The connections list (inside `data`). */
   connections?: Record<string, unknown>[]
+  /** The connections list answers a 500. */
+  connectionsError?: boolean
+  /** The error code the server sends with a 401 (default `Unauthorized`, the server's own) and with a missing scope (default `forbidden`). */
+  unauthenticatedCode?: string
+  forbiddenCode?: string
   /** Status reads of a batch before it completes. */
   batchPolls?: number
+  /** Of those reads, how many answer "one item running, none done" (with a falling estimate) before the batch completes. */
+  batchRunningPolls?: number
   /** Item indexes that fail in a batch. */
   batchFailures?: number[]
   /** The message every batch item comes back with (default: `better: <draft>`). */
   batchMessage?: string
+  /** The one-line summary every batch item comes back with (default: `Tighter opener.`). */
+  batchSummary?: string
 }
 
 export interface MockServer {
@@ -139,10 +150,11 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
     const h = req.headers.authorization
     return typeof h === 'string' && h.startsWith('Bearer ') ? h.slice(7) : null
   }
-  const authKind = (req: IncomingMessage): 'oauth' | 'api_key' | null => {
+  const authKind = (req: IncomingMessage): 'oauth' | 'api_key' | 'readonly' | null => {
     const t = bearer(req)
     if (!t) return null
     if (t === API_KEY) return 'api_key'
+    if (t === READONLY_KEY) return 'readonly'
     if (issued.access.includes(t) && !revoked.includes(t)) return 'oauth'
     return null
   }
@@ -255,7 +267,10 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       const kind = authKind(req)
-      if (path.startsWith('/api/') && !kind) return err(res, 401, 'unauthenticated', 'Authentication required')
+      if (path.startsWith('/api/') && !kind) return err(res, 401, options.unauthenticatedCode ?? 'Unauthorized', 'Authentication required')
+      // The server refuses a call whose scope the credential lacks, in these words and as a 403 `forbidden`.
+      const needsMessages = /^\/api\/platform\/v1\/messages\//.test(path)
+      if (needsMessages && kind === 'readonly') return err(res, 403, options.forbiddenCode ?? 'forbidden', 'Missing required scope(s): messages:execute')
 
       if (path === '/api/platform/v1/me/context') {
         return json(res, 200, {
@@ -355,6 +370,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       if (path === '/api/platform/v1/connections' && req.method === 'GET') {
+        if (options.connectionsError) return err(res, 500, 'internal_error', 'Could not read the connections.')
         return json(res, 200, {
           data: options.connections ?? [
             { id: 'c0', connector_type: 'hubspot', connector: { type: 'hubspot', name: 'HubSpot', category: 'crm' }, name: 'HubSpot', status: 'connected', health: 'healthy', last_synced_at: '2026-11-11T08:00:00Z' },
@@ -390,14 +406,17 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         const entry = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batch[1] ?? '') ? batches.get(batch[1] ?? '') : undefined
         if (!entry) return err(res, 404, 'not_found')
         entry.polls++
-        const done = entry.polls > (options.batchPolls ?? 1)
+        const reads = options.batchPolls ?? 1
+        const done = entry.polls > reads
+        // The last few reads before it completes see one item running and none done, the estimate falling.
+        const running = !done && entry.polls > reads - (options.batchRunningPolls ?? 0) ? { eta: Math.max(60, 300 - entry.polls * 60) } : undefined
         const limit = Number(url.searchParams.get('limit') ?? 50)
         const after = Number(url.searchParams.get('cursor') ?? -1)
         const page = entry.items.map((item, index) => ({ item, index })).filter((x) => x.index > after).slice(0, limit)
         const last = page[page.length - 1]
         return json(res, 200, {
           data: {
-            ...batchSummary(batch[1] ?? '', entry.items, done),
+            ...batchSummary(batch[1] ?? '', entry.items, done, running),
             items: page.map(({ item, index }) => ({
               index,
               item_id: (item.item_id as string | undefined) ?? null,
@@ -406,7 +425,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
                 ? null
                 : options.batchFailures?.includes(index)
                   ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
-                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: batchRun(index), unchanged: false },
+                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: options.batchSummary ?? 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false },
             })),
             next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
           },
@@ -491,16 +510,22 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       return err(res, 404, 'not_found')
     })
   })
-  function batchSummary(id: string, items: unknown[], done: boolean) {
+  function batchSummary(id: string, items: unknown[], done: boolean, running?: { eta: number }) {
     const failed = done ? (options.batchFailures?.length ?? 0) : 0
     return {
       batch_id: id,
-      status: done ? 'completed' : 'queued',
+      status: done ? 'completed' : running ? 'running' : 'queued',
       created_at: '2026-11-12T00:00:00Z',
       completed_at: done ? '2026-11-12T00:05:00Z' : null,
-      counts: { total: items.length, queued: done ? 0 : items.length, running: 0, done: done ? items.length - failed : 0, failed },
-      queue_position: done ? 0 : 3,
-      eta: done ? null : { seconds: 300, estimate: true, items_ahead: 3, median_run_seconds: 30, slots: 2 },
+      counts: {
+        total: items.length,
+        queued: done ? 0 : running ? items.length - 1 : items.length,
+        running: running ? 1 : 0,
+        done: done ? items.length - failed : 0,
+        failed,
+      },
+      queue_position: done || running ? 0 : 3,
+      eta: done ? null : { seconds: running?.eta ?? 300, estimate: true, items_ahead: running ? 0 : 3, median_run_seconds: 30, slots: 2 },
     }
   }
 
