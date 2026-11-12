@@ -128,8 +128,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.4.0\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.4.0\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.4.1\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.4.1\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })
@@ -200,12 +200,14 @@ describe('optimize', () => {
     expect(r.stderr).toBe(
       [
         'Wrote it from your facts.',
-        'Cut the opener and 3 more sentences, replaced the ask.',
         "Removed 1 claim your calls don't back.",
+        'Left out 3 things: None of the facts gives a customer count. (1 more reason in --json)',
         "Flagged 1 claim your calls don't back; check before sending.",
         '',
       ].join('\n')
     )
+    // `what_changed` is the same sentence on every run, so it is not printed.
+    expect(r.stderr).not.toContain('Cut the opener')
 
     const json = await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')
     expect(json.json).toEqual({ ok: true, file: join(io.homedir, 'a.md'), result: optimizeResult })
@@ -230,8 +232,9 @@ describe('optimize', () => {
     const io = await loggedIn()
     const file = join(io.homedir, 'a.md')
     writeFileSync(file, 'draft')
-    const run = 'Tighter opener.\nRun: r1\n'
-    const link = `${run}Feedback: http://localhost:4000/admin/optimizer/runs/r1\n`
+    const sentIt = 'Sent it? amdahl sent|feedback r1\n'
+    const run = `Tighter opener.\nRun: r1\n${sentIt}`
+    const link = `Tighter opener.\nRun: r1\nFeedback: http://localhost:4000/admin/optimizer/runs/r1\n${sentIt}`
 
     // Off by default: the run page is internal, so customers see only the id.
     expect((await cli(io, 'optimize', file)).stderr).toBe(run)
@@ -289,10 +292,12 @@ describe('optimize', () => {
       context_use: { rows: [{ bucket: 'external', verdict: 'pass' }, { bucket: 'internal', verdict: 'fail' }] },
     })
     expect(full).toEqual([
-      'Cut the opener.',
       "Checked every claim against your calls and found none they don't back.",
+      'Used 1 source: what their company or market published.',
       'Flagged 1 sentence problem it could not fix; check before sending.',
     ])
+    // `what_changed` is never a line: it is the same sentence on every run.
+    expect(whatAmdahlDid({ what_changed: 'Wrote this message from the context you sent.' })).toEqual([])
     expect(
       whatAmdahlDid({
         evidence: { requested: 'workspace', used: true },
@@ -336,7 +341,8 @@ describe('optimize', () => {
       optimizeResult: {
         ok: true,
         message: 'Hi',
-        what_changed: 'Wrote this\u001b[2J message from the context you sent.',
+        what_changed: 'Wrote this message from the context you sent.',
+        omitted: [{ what: 'a', why: 'Nothing\u001b[2J backs it.' }],
         steps: [{ node: 'w6', changed: true, reason: 'drops_ask' }],
         evidence: { requested: 'workspace', used: false, reason: 'corpus_empty' },
         unsupported_claims: null,
@@ -346,8 +352,8 @@ describe('optimize', () => {
     const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
     expect(r.stderr).toBe(
       [
-        'Wrote this[2J message from the context you sent.',
         'Skipped checking claims against your calls: the workspace has none yet.',
+        'Left out 1 thing: Nothing[2J backs it.',
         'Flagged a second-check concern (it leaves out your ask); check before sending.',
         'Connect calls or a CRM so Amdahl checks claims against them: amdahl connect',
         '',
@@ -411,7 +417,7 @@ describe('optimize with no file at a terminal', () => {
     expect(io.prompts).toEqual([PASTE_PROMPT])
     expect(r.stdout).toBe('Hi Sam, short.\n')
     expect(r.stderr).toBe(
-      `Amdahl is rewriting it. This can take a minute.\n${VERSION_RULE}\nCut the opener.\nNext time: npx -y amdahl optimize draft.txt,\nor pbpaste | npx -y amdahl optimize -\n`
+      `Amdahl is rewriting it. This can take a minute.\n${VERSION_RULE}\nNext time: npx -y amdahl optimize draft.txt,\nor pbpaste | npx -y amdahl optimize -\n`
     )
     const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
     expect(bodies).toEqual([{ message: 'Hi Sam,\n\nLong draft.', channel: 'linkedin' }])

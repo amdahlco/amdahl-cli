@@ -9,7 +9,9 @@
 // The CLI never creates a connection itself: a sign-in has no
 // `connections:write`, and a CRM's own sign-in happens in the browser
 // anyway. The `connector` in the link only fills the add page's search box;
-// the person still picks the connector there. `open` opens the workspace in
+// the person still picks the connector there. A connector that is already
+// connected is said first: healthy, the add page is offered, not opened; one
+// that needs attention gets its own page. `open` opens the workspace in
 // the console. With `--no-browser`, under `--json`, for an agent, in CI, with
 // no terminal on stdin or stdout, or when the browser does not open, both
 // print the link instead.
@@ -158,7 +160,10 @@ export async function connect(ctx: Ctx, args: string[]): Promise<number> {
     }
   }
   const slug = await workspaceSlug(ctx, credential)
-  const url = connectUrl(consoleUrlFor(ctx.io, ctx.apiUrl), slug, entry?.type)
+  const consoleUrl = consoleUrlFor(ctx.io, ctx.apiUrl)
+  const url = connectUrl(consoleUrl, slug, entry?.type)
+  const existing = entry ? await existingConnection(client, entry.type) : null
+  if (entry && existing) return alreadyConnected(ctx, entry, existing, url, connectionUrl(consoleUrl, slug, field(existing.id)))
   const opened = await openOrPrint(ctx, url)
   if (ctx.out.json) {
     ctx.out.result({ ok: true, url, opened, connector: entry?.type ?? null })
@@ -170,6 +175,44 @@ export async function connect(ctx: Ctx, args: string[]): Promise<number> {
   }
   ctx.out.info(`Open this link to add a source${entry ? ` (its search box starts on ${entry.name})` : ''}:`)
   ctx.out.result({}, url)
+  return EXIT.ok
+}
+
+/**
+ * The workspace's connection of this connector type, the healthiest one when
+ * there are several, or null. Never rejects: a list that cannot be read is no
+ * reason to stop a person from adding a source.
+ */
+async function existingConnection(client: ReturnType<typeof apiClient>, type: string): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await client.request<unknown>(`${PLATFORM}/connections`)
+    const same = records(Array.isArray(body) ? body : record(body)?.connections).filter((c) => field(c.connector_type) === type || field(record(c.connector)?.type) === type)
+    return same.find((c) => FINE.has(healthOf(c))) ?? same[0] ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Say that this connector is already connected, before offering anything. Healthy: the add
+ * page is offered, not opened. Needing attention: its own page is what fixes it.
+ */
+function alreadyConnected(ctx: Ctx, entry: CatalogEntry, existing: Record<string, unknown>, addUrl: string, pageUrl: string): number {
+  const health = healthOf(existing)
+  const healthy = FINE.has(health)
+  const synced = day(existing.last_synced_at)
+  if (ctx.out.json) {
+    ctx.out.result({ ok: true, url: addUrl, opened: false, connector: entry.type, connected: { id: field(existing.id), health, healthy, url: pageUrl } })
+    return EXIT.ok
+  }
+  if (healthy) {
+    ctx.out.info(`${entry.name} is already connected and healthy${synced ? ` (last sync ${synced})` : ''}.`)
+    ctx.out.info('To add another one, open this link:')
+    ctx.out.result({}, addUrl)
+    return EXIT.ok
+  }
+  ctx.out.info(`${entry.name} is already connected, but its health is "${HEALTH[health] ?? health}".`)
+  ctx.out.info(`${health === 'needs_reauth' ? 'Sign in to it again' : 'Fix it'}: ${pageUrl}`)
   return EXIT.ok
 }
 

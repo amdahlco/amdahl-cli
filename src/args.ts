@@ -27,7 +27,7 @@ const GLOBAL_OPTIONS: OptionSpec = {
 const SETUP_OPTIONS: OptionSpec = { 'no-browser': { type: 'boolean' } }
 
 /** Each command's own flags, keyed by its canonical name. */
-const COMMAND_OPTIONS: Record<string, OptionSpec> = {
+export const COMMAND_OPTIONS: Record<string, OptionSpec> = {
   setup: SETUP_OPTIONS,
   help: {},
   login: {
@@ -114,6 +114,18 @@ export interface ParsedArgs {
   args: string[]
   /** Every flag value, by long name. */
   flags: Record<string, string | boolean | undefined>
+}
+
+/**
+ * The positional words of a command line, for help: lenient, so it never throws.
+ * `amdahl keys --help` and `amdahl optimize draft.md --help` still name a command.
+ */
+export function helpWords(argv: string[]): string[] {
+  try {
+    return parseArgs({ args: argv, options: allOptions(), allowPositionals: true, strict: false }).positionals
+  } catch {
+    return []
+  }
 }
 
 function allOptions(): OptionSpec {
@@ -234,12 +246,15 @@ Commands:
   optimize [<file>... | -] [--channel email|linkedin]
            [--evidence off|workspace] [--on-unsupported flag|remove]
            [--tries] [--context <file.json>]
+           --json prints {ok, file, result}: the message is .result.message
+           and the run id is .result.run_id.
   optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force]
            [the optimize flags above, for every message]
-           A CSV has a message column, and may have item_id, channel,
-           evidence, on_unsupported, facts and rules. --batch <id> picks up
-           a batch queued earlier, with the same list. --force replaces an
-           existing results file.
+           A CSV needs a message column, and may have item_id, channel,
+           evidence, on_unsupported, facts and rules. Any other column is
+           copied to the results as it is. --batch <id> picks up a batch
+           queued earlier, with the same list. --force replaces an existing
+           results file.
   search "<question>" [--research] [--limit <n>]
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset
@@ -259,6 +274,12 @@ Commands:
            [--provider-variant-id <id>] [--provider-lead-id <id>]
            [--thread-id <id>] [--sent-text <file> | -]
            One send per command. It needs one of the three in brackets.
+           --provider: lemlist, instantly, outreach, salesloft, hubspot,
+                       salesforce, gmail, heyreach, apollo, linkedin_manual,
+                       other (any sender not listed)
+           --channel:  email, linkedin (= linkedin_message), linkedin_invite,
+                       linkedin_message, linkedin_inmail
+           --sent-as edited needs --sent-text.
                                              Report that a message went out
   keys create --name <name> [--preset read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]
@@ -280,6 +301,7 @@ Commands:
                      (Cancel or Install anyway); -y, --json or no terminal
                      stops (exit 9)
   help                                       Show this help
+           Run \`amdahl <command> --help\` for one command's usage.
 
 Global options:
   --profile <name>   Use a saved profile (default: AMDAHL_PROFILE, then the

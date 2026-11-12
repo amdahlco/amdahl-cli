@@ -20,11 +20,11 @@
 // Every value is checked here against the server's own limits first, so a
 // mistake is a usage error (exit 2) that names the flag, not a refusal.
 
-import { readFileSync } from 'node:fs'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
-import { field, records } from '../text'
+import { readTextFile } from '../files'
+import { clip, field, records } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -32,6 +32,11 @@ export const FEEDBACK_OUTCOMES = ['used', 'used_with_edits', 'not_used', 'unsure
 export const FEEDBACK_EVIDENCE = ['did_it_myself', 'reported_to_me', 'inferred']
 export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'linkedin_manual', 'other']
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
+/**
+ * `amdahl optimize --channel` says `linkedin`; the server's report names the kind of LinkedIn
+ * message. `sent --channel linkedin` is the message, `linkedin_message`, so one word works in both.
+ */
+export const CHANNEL_ALIASES: Record<string, string> = { linkedin: 'linkedin_message' }
 export const SENT_AS = ['returned', 'edited']
 
 /** The longest message (`--sent-text`) and comment the server takes, in characters. */
@@ -79,11 +84,7 @@ function text(flag: string, value: string | undefined, max: number): string | un
 
 /** `--sent-text <file>` or `-` for stdin, read whole. */
 async function readText(ctx: Ctx, path: string): Promise<string> {
-  try {
-    return path === '-' ? await ctx.io.readStdin() : readFileSync(path, 'utf8')
-  } catch (err) {
-    throw usageError(`Could not read --sent-text ${path}: ${err instanceof Error ? err.message : String(err)}`)
-  }
+  return path === '-' ? await ctx.io.readStdin() : readTextFile(path)
 }
 
 /** `amdahl feedback <run-id> --evidence <how> [--sent-text <file>] [--comment <text>] [--outcome <what>]`. */
@@ -140,15 +141,23 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   const usage = `Usage: ${amdahlCommand('sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited --provider-send-id <id>')}`
   const [rawId, ...rest] = args
   if (!rawId) throw usageError('Give the run id of the message that was sent.', usage)
+  if (rest.length > 0 && rest.every((r) => r.toLowerCase() === rawId.toLowerCase())) {
+    throw usageError(`${rawId} is there twice.`, 'Give each run id once. The command reports one send.')
+  }
   if (rest.length > 0) {
     throw usageError('Report one send at a time: give one run id.', 'Each send needs its own --provider-send-id or --recipient, so run it once for each. The API takes up to 100 at once (POST /messages/report_send).')
   }
   const id = runId(rawId, usage)
-  const provider = oneOf('provider', str(flags.provider), SEND_PROVIDERS)
-  const channel = oneOf('channel', str(flags.channel), SEND_CHANNELS)
+  const rawProvider = str(flags.provider)
+  if (rawProvider !== undefined && !SEND_PROVIDERS.includes(rawProvider)) {
+    throw usageError(`--provider must be one of: ${SEND_PROVIDERS.join(', ')}.`, `"${clip(rawProvider, 40)}" is not on the list. For a sender that is not, use --provider other.`)
+  }
+  const provider = rawProvider
+  const rawChannel = str(flags.channel)
+  const channel = rawChannel === undefined ? undefined : (CHANNEL_ALIASES[rawChannel] ?? oneOf('channel', rawChannel, [...SEND_CHANNELS, ...Object.keys(CHANNEL_ALIASES)]))
   const sentAs = oneOf('sent-as', str(flags['sent-as']), SENT_AS)
   if (!provider) throw usageError(`Say where it went out with --provider: ${SEND_PROVIDERS.join(', ')}.`, usage)
-  if (!channel) throw usageError(`Say what was sent with --channel: ${SEND_CHANNELS.join(', ')}.`, usage)
+  if (!channel) throw usageError(`Say what was sent with --channel: ${[...SEND_CHANNELS, ...Object.keys(CHANNEL_ALIASES)].join(', ')}.`, usage)
   if (!sentAs) throw usageError('Say whether it was sent as Amdahl returned it with --sent-as: returned, edited.', usage)
   const sentAt = str(flags['sent-at']) ?? new Date(ctx.io.now()).toISOString()
   if (!TIME_WITH_ZONE.test(sentAt) || !Number.isFinite(Date.parse(sentAt))) {
@@ -186,6 +195,11 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   }
   const sentPath = str(flags['sent-text'])
   if (sentPath !== undefined) item.sent_text = text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS)
+  // The server takes an edited send with no text, but a report of an edit that does not say what it
+  // became is of little use: the text is the point of `edited`, and only its hash is kept.
+  if (sentAs === 'edited' && sentPath === undefined) {
+    throw usageError('--sent-as edited needs --sent-text <file>: the message as you sent it.', 'Amdahl keeps only a hash of the text. Use - to read it from standard input.')
+  }
   // The server stores a report only when it can tell which send it is: refuse here, before any request.
   if (!sendId?.trim() && !recipient?.trim() && !hash?.trim()) {
     throw usageError(`Say which send this is with one of ${SEND_KEYS.join(', ')}.`, "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).")

@@ -39,9 +39,14 @@ export const RESEARCH_TIMEOUT_MS = 15 * 60_000
 const ROWS_UNDER_ANSWER = 5
 const ROWS_ALONE = 10
 
-/** The line a sign-in gets when a deeper answer needs a key. */
+/** The sentence that says what research needs: a Customer agent key, and the command that makes one. */
 export function researchKeyLine(): string {
-  return `A deeper answer needs a Customer agent key: ${amdahlCommand('keys create --name research --preset agent')}`
+  return `Research needs a Customer agent key: ${amdahlCommand('keys create --name research --preset agent')}`
+}
+
+/** What a sign-in is told before its search answer, when it asked for research: the key, then what it gets instead. */
+export function researchKeyFirst(): string {
+  return `${researchKeyLine()}. Here is the search answer instead.`
 }
 
 /** The research states a wait ends on. */
@@ -51,8 +56,9 @@ const SETTLED = new Set(['complete', 'failed', 'canceled', 'needs_input'])
 // lanes (warehouse rows, call matches, deal rows). The first one present wins.
 const TITLE_FIELDS = ['title', 'call_title', 'meeting_title', 'subject', 'deal_name', 'account_name', 'company_name', 'name']
 const DATE_FIELDS = ['occurred_at', 'started_at', 'date', 'call_date', 'call_timestamp', 'close_date', 'created_at', 'updated_at']
-const TEXT_FIELDS = ['text', 'quote', 'snippet', 'excerpt', 'content', 'summary', 'body', 'description']
-const WHO_FIELDS = ['speaker', 'speaker_name', 'account_name', 'company_name', 'owner_name', 'deal_stage_label']
+// `content_preview` is the quote of a semantic or lexical match.
+const TEXT_FIELDS = ['content_preview', 'text', 'quote', 'snippet', 'excerpt', 'content', 'summary', 'body', 'description']
+const WHO_FIELDS = ['speaker', 'speaker_name', 'account_name', 'company_name', 'owner_name', 'deal_stage_label', 'speaker_type']
 // A deal's amount, said after its stage.
 const AMOUNT_FIELDS = ['deal_amount', 'amount']
 
@@ -94,6 +100,20 @@ function rowsOf(result: Record<string, unknown>): Record<string, unknown>[] {
   return records(result.results)
 }
 
+/**
+ * What to say when the server found rows but wrote no answer over them:
+ * `not_enough_data` (the rows do not answer the question) or `failed`. Empty
+ * for an answer, and for `skipped` (no rows, which has its own line).
+ */
+function noAnswerLines(status: string, rows: number): string[] {
+  if (rows === 0) return []
+  if (status === 'not_enough_data') {
+    return [...wrap(`Amdahl couldn't answer that from these rows. Try rephrasing the question, or run ${amdahlCommand('connections')} to see whether your data is synced.`), '']
+  }
+  if (status === 'failed') return [...wrap(`Amdahl found rows but couldn't write an answer this time. Here are the rows. Try again, or rephrase the question.`), '']
+  return []
+}
+
 /** The search answer for a person: the cited answer or the rows, and what the server noted. */
 export function searchLines(result: Record<string, unknown>): string[] {
   const lines: string[] = []
@@ -101,9 +121,10 @@ export function searchLines(result: Record<string, unknown>): string[] {
   const answer = record(result.answer)
   const answered = answer?.status === 'answered' && paragraphs(answer.text)
   if (answered) lines.push(...wrap(plainMarkdown(answered)), '')
+  else lines.push(...noAnswerLines(field(answer?.status), rows.length))
   const shown = rows.slice(0, answered ? ROWS_UNDER_ANSWER : ROWS_ALONE)
   if (shown.length > 0) {
-    if (answered) lines.push('From:')
+    if (answered || lines.length > 0) lines.push(answered ? 'From:' : 'Rows it read:')
     shown.forEach((row, i) => lines.push(...rowLines(row, i + 1)))
     if (rows.length > shown.length) lines.push(`And ${count(rows.length - shown.length, 'more row')} (all of them: add --json).`)
   } else if (!answered) {
@@ -201,13 +222,13 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
     out.result({}, [...wrap(field(setup.message) || 'This workspace has no data connected yet.'), connectLine()].join('\n'))
     return EXIT.ok
   }
-  const lines = searchLines(result)
-  out.result({}, lines.join('\n'))
-  if (refusedForScope(notes)) out.info(researchKeyLine())
+  // Said before any rows: a person who asked for research should hear first why this is not it.
+  if (refusedForScope(notes)) out.info(wrap(researchKeyFirst()).join('\n'))
   else {
     const refused = notes.find((n) => /ran search instead/i.test(n))
     if (refused) out.info(wrap(refused).join('\n'))
   }
+  out.result({}, searchLines(result).join('\n'))
   return EXIT.ok
 }
 

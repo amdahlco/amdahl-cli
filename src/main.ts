@@ -4,7 +4,7 @@
 // failure into the error output and its exit code. Returns the exit code
 // instead of exiting, so tests drive the whole CLI in-process.
 
-import { USAGE, parseCommandLine } from './args'
+import { USAGE, helpWords, parseCommandLine } from './args'
 import { setCommandName } from './command-name'
 import { authToken, login, logout, whoami } from './commands/auth'
 import { connect, connections, open } from './commands/connections'
@@ -18,6 +18,7 @@ import { skillsAdd } from './commands/skills'
 import { status, workspaceList, workspaceUse } from './commands/workspace-status'
 import { createCtx, toCliError, type Ctx } from './context'
 import { CliError, EXIT } from './errors'
+import { commandHelp } from './help'
 import type { Io } from './io'
 import { createOutput } from './output'
 import { VERSION } from './version'
@@ -46,6 +47,11 @@ const COMMANDS: Record<string, Handler> = {
   'skills add': skillsAdd,
 }
 
+/** The help text for the command named by `words`: its own, or the whole help when it has none. */
+function helpFor(words: string[]): string {
+  return commandHelp(words.slice(0, 2)) ?? commandHelp(words.slice(0, 1)) ?? USAGE
+}
+
 /** Commands that take no positional arguments. */
 const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'connections', 'open', 'keys create', 'keys list', 'workspace list'])
 
@@ -61,14 +67,25 @@ export async function runCli(argv: string[], io: Io): Promise<number> {
   const json = argv.includes('--json')
   let out = createOutput(io, json, argv.includes('--no-color'))
   try {
-    const parsed = parseCommandLine(argv)
+    let parsed: ReturnType<typeof parseCommandLine>
+    try {
+      parsed = parseCommandLine(argv)
+    } catch (err) {
+      // `amdahl keys --help` is a request for help, not a command that is missing its subcommand.
+      if (argv.includes('--help') || argv.includes('-h')) {
+        io.stdout(helpFor(helpWords(argv)))
+        return EXIT.ok
+      }
+      throw err
+    }
     out = createOutput(io, parsed.flags.json === true, parsed.flags['no-color'] === true)
     if (parsed.flags.version) {
       io.stdout(`${VERSION}\n`)
       return EXIT.ok
     }
     if (parsed.flags.help || parsed.command === 'help') {
-      io.stdout(USAGE)
+      // One command's usage and nothing else, or the whole help for no command (or one with no help).
+      io.stdout(helpFor(parsed.command === 'help' ? parsed.args : (parsed.command?.split(' ') ?? [])))
       return EXIT.ok
     }
     if (NO_ARGS.has(parsed.command ?? '') && parsed.args.length > 0) {

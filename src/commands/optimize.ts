@@ -21,11 +21,11 @@
 // or a CRM, so claims can be checked against them. An agent, a pipe and CI make
 // no request for it and print no line.
 
-import { readFileSync } from 'node:fs'
 import { amdahlCommand } from '../command-name'
 import { feedbackLinkOn } from '../config'
 import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
+import { readTextFile } from '../files'
 import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
 import { atTerminal } from '../terminal'
@@ -57,11 +57,12 @@ function oneOf(flag: string, value: string | undefined, allowed: string[]): stri
 
 /** Read and check the `--context` file: a JSON object. */
 function readContext(path: string): Record<string, unknown> {
+  const text = readTextFile(path)
   let parsed: unknown
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf8'))
+    parsed = JSON.parse(text)
   } catch (err) {
-    throw usageError(`Could not read --context ${path}: ${err instanceof Error ? err.message : String(err)}`)
+    throw usageError(`--context ${path} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`)
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw usageError('--context must be a JSON object with rules, voice_examples and facts.')
@@ -178,9 +179,10 @@ function and(parts: string[]): string {
 
 /**
  * At most three short lines on what the run did, each starting with what
- * Amdahl did, from fields the API already returns: `what_changed`, `evidence`
- * (with `lift.quotes`), `unsupported_claims`, `context_use`, `steps` and
- * `omitted`. The "Flagged" line, what the sender must check before sending,
+ * Amdahl did, from fields the API already returns: `evidence` (with
+ * `lift.quotes`), `unsupported_claims`, `context_use`, `steps` and `omitted`.
+ * `what_changed` is not one of them: it is the same sentence on every run, so
+ * it says nothing. The "Flagged" line, what the sender must check before sending,
  * is never dropped; past that, the lines worth most are kept. They print with
  * what Amdahl did first and the flags last. Empty when nothing says anything
  * worth reading.
@@ -224,7 +226,6 @@ export function whatAmdahlDid(result: Record<string, unknown>): string[] {
 
   // In print order, each with its rank: 1 is kept first.
   const lines = [
-    { rank: 2, line: sentence(text(result.what_changed)) },
     { rank: 5, line: checked },
     { rank: 3, line: removed },
     { rank: 6, line: usedLine },
@@ -247,6 +248,16 @@ export function feedbackLines(ctx: Ctx, result: Record<string, unknown>): string
   if (!feedbackLinkOn(ctx.io, ctx.config)) return [`Run: ${runId}`]
   const url = `${consoleUrlFor(ctx.io, ctx.apiUrl)}/admin/optimizer/runs/${encodeURIComponent(runId)}`
   return [`Run: ${runId}`, `Feedback: ${url}`]
+}
+
+/**
+ * The line after a run that points to what to do once the message is sent:
+ * `amdahl sent <run-id>` or `amdahl feedback <run-id>`, with the run's own id.
+ * Empty when the run has no id.
+ */
+export function sentLines(result: Record<string, unknown>): string[] {
+  const runId = text(result.run_id)
+  return runId ? [`Sent it? ${amdahlCommand('sent')}|feedback ${runId}`] : []
 }
 
 /** What a person is asked when the message is pasted at the terminal. */
@@ -385,7 +396,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
   const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
-  out.info([...did, ...feedbackLines(ctx, result), ...connect, nextTimeLine(ctx)].join('\n'))
+  out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
 
@@ -419,12 +430,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   // fails before the first one is spent.
   const inputs: { file: string; message: string }[] = []
   for (const file of files) {
-    let message: string
-    try {
-      message = file === '-' ? await io.readStdin() : readFileSync(file, 'utf8')
-    } catch (err) {
-      throw usageError(`Could not read ${file}: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    const message = file === '-' ? await io.readStdin() : readTextFile(file)
     if (!message.trim()) throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
     inputs.push({ file, message })
   }
@@ -448,7 +454,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
       else if (typeof result.summary === 'string') out.info(result.summary)
       out.result({}, String(result.message ?? ''))
-      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result)]
+      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result)]
       if (lines.length) out.info(lines.join('\n'))
     }
   }
