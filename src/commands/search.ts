@@ -8,7 +8,8 @@
 // Research is something search starts, never a command of its own. Search
 // hands a statistical or long ask to a research job by itself, and
 // `--research` asks it to (`route: "research"`). When a job starts, the CLI
-// waits on GET /research/:id with `wait_ms` and prints its cited answer. A
+// waits on GET /research/:id with `wait_ms` and prints its cited answer, then
+// the tables, quotes and figures it rests on (blocks.ts). A
 // CLI sign-in cannot start one (it has no `conversations:write`), so the
 // server runs the search instead and says so; the CLI then adds one line on
 // the key that can (`amdahl keys create --preset agent`).
@@ -19,6 +20,7 @@
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
+import { blockLines } from '../blocks'
 import { clip, count, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
 import { connectLine } from './connections'
 
@@ -118,8 +120,12 @@ function refusedForScope(notes: string[]): boolean {
 /** The research answer for a person: its cited text, then up to three questions to ask next. */
 export function researchLines(job: Record<string, unknown>): string[] {
   const answer = record(job.answer)
-  const lines = wrap(plainMarkdown(paragraphs(answer?.text)) || 'The research finished with no answer.')
+  const text = plainMarkdown(paragraphs(answer?.text))
+  const lines = wrap(text || 'The research finished with no answer.')
   if (answer?.partial === true) lines.push('', 'It stopped at its budget, so this answers from what it had read.')
+  // What the answer rests on (tables, quotes, figures), in the order the job presented it.
+  const details = blockLines(answer?.content_blocks, text)
+  if (details.length > 0) lines.push('', 'Details:', ...details)
   const next = (Array.isArray(answer?.follow_ups) ? answer.follow_ups : []).map(field).filter(Boolean).slice(0, 3)
   if (next.length > 0) {
     lines.push('', 'Ask next:')

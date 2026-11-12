@@ -60,6 +60,8 @@ export interface MockOptions {
   researchPolls?: number
   /** The research answer's text (default: one sentence). */
   researchText?: string
+  /** The research answer's `content_blocks` (default: none). */
+  researchBlocks?: Record<string, unknown>[]
   /** The connections list (inside `data`). */
   connections?: Record<string, unknown>[]
   /** Status reads of a batch before it completes. */
@@ -331,7 +333,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             status: done ? 'complete' : 'running',
             question: 'q',
             answer: done
-              ? { text: options.researchText ?? 'Deals with a pricing objection closed less often [1](amdahl:cite?block=b1).', partial: false, partial_reason: null, content_blocks: [], follow_ups: ['Which competitor came up most?'] }
+              ? { text: options.researchText ?? 'Deals with a pricing objection closed less often [1](amdahl:cite?block=b1).', partial: false, partial_reason: null, content_blocks: options.researchBlocks ?? [], follow_ups: ['Which competitor came up most?'] }
               : null,
             error: null,
           },

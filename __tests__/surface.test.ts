@@ -5,6 +5,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { asciiTable, blockLines, wrapCell } from '../src/blocks'
 import { neutralise, parseCsv, progressLine, resultsPath, toCsv } from '../src/commands/batch'
 import { plainMarkdown, wrap } from '../src/text'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
@@ -107,6 +108,64 @@ describe('search', () => {
     )
     expect(r.stdout).not.toContain('\u001b')
     for (const line of r.stdout.split('\n')) expect(line.length).toBeLessThanOrEqual(80)
+  })
+
+  it('prints the answer\'s content blocks after it, in the order the job presented them', async () => {
+    const answer = 'Two deals closed lost, and neither names a rival product.'
+    const blocks = [
+      { id: 'answer-text', type: 'text', markdown: answer },
+      { id: 'b1', type: 'table', title: 'Closed lost deals', columns: [{ key: 'account', label: 'Account' }, { key: 'stage', label: 'Stage' }, { key: 'amount', label: 'Amount' }], query: { kind: 'data.query', sql: 'select 1' }, data: [{ account: 'Cobalt Payments', stage: 'Closed Lost', amount: 85000 }, { account: 'Alder Health', stage: 'Closed Lost', amount: null }] },
+      { id: 'b2', type: 'text', markdown: 'Both losses carry the **same** timestamp, [a backfill sign](amdahl:cite?block=b1), and <unverified>2</unverified> deals.' },
+      { id: 'b3', type: 'text', markdown: answer },
+      { id: 'b4', type: 'metric', label: 'Lost deals', data: { value: 2, delta: 'was 0 last quarter' } },
+      { id: 'b5', type: 'citation', kind: 'utterance', ref: 'utt_1', label: 'Cobalt call, Oct 20', snippet: 'We already moved the budget.' },
+      { id: 'b6', type: 'callout', tone: 'warn', markdown: 'Two deals is a small sample.' },
+      { id: 'b7', type: 'cluster_finding', cluster_id: 'c1', label: 'Budget moved', insight: 'Buyers shift budget mid-cycle.', conversations: 12, period_label: 'last 90 days', status: 'rising' },
+      { id: 'b8', type: 'chart_spec', title: 'Deals by stage', chart_type: 'bar', encoding: { x: 'stage', y: 'deals' }, query: { kind: 'named', named_id: 'q' }, data: [{ stage: 'won', deals: 4 }, { stage: 'lost', deals: 2 }] },
+      { id: 'b9', type: 'sparkle', anything: true },
+    ]
+    const io = await withKey({ researchText: answer, researchBlocks: blocks })
+    const r = await cli(io, 'search', 'why?', '--research')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe(
+      [
+        answer,
+        '',
+        'Details:',
+        'Closed lost deals:',
+        '| Account         | Stage       | Amount |',
+        '|-----------------|-------------|--------|',
+        '| Cobalt Payments | Closed Lost | 85000  |',
+        '| Alder Health    | Closed Lost |        |',
+        '',
+        'Both losses carry the same timestamp, a backfill sign, and 2 (unverified) deals.',
+        '',
+        'Lost deals: 2 (was 0 last quarter)',
+        '',
+        '- Cobalt call, Oct 20',
+        '  "We already moved the budget."',
+        '',
+        'Warning: Two deals is a small sample.',
+        '',
+        'Budget moved (12 conversations in last 90 days, rising): Buyers shift budget',
+        'mid-cycle.',
+        '',
+        '"Deals by stage", a bar chart of 2 rows, is not drawn here. Add --json for its',
+        'data.',
+        '',
+        'A "sparkle" block is not shown here. Add --json to see it.',
+        '',
+        'Ask next:',
+        '- Which competitor came up most?',
+        '',
+      ].join('\n')
+    )
+    // The answer's own block (answer-text) and a text block that repeats the answer are not printed again.
+    expect(r.stdout.split(answer).length).toBe(2)
+    for (const line of r.stdout.split('\n')) expect(line.length).toBeLessThanOrEqual(80)
+    // --json is the job as the server sent it, blocks and all.
+    const json = await cli(io, 'search', 'why?', '--research', '--json')
+    expect(json.json.research.answer.content_blocks).toHaveLength(blocks.length)
   })
 
   it('a workspace with nothing connected prints the message and link, then the connect command', async () => {
@@ -600,6 +659,53 @@ describe('the optimize no-data line is only for a person at a terminal', () => {
     const r = await cli(io, 'optimize', file)
     expect(r.stderr).toContain('Connect calls or a CRM so Amdahl checks claims against them: amdahl connect')
     expect((await cli(io, 'optimize', file, '--json')).stderr).toBe('')
+  })
+})
+
+describe('tables in the terminal', () => {
+  it('a table that fits keeps its columns; one that does not wraps its cells and every line fits 80 columns', () => {
+    const fits = asciiTable(['A', 'Long label'], [['x', 'y']])
+    expect(fits).toEqual(['| A | Long label |', '|---|------------|', '| x | y          |'])
+    const labels = ['Account', 'Theme', 'What they said']
+    const rows = [['Cobalt Payments', 'Budget', 'We looked at Collibra for governance, but it does not catch bad data while it flows through the pipeline.'], ['Alder', 'EHR', 'Short.']]
+    const wide = asciiTable(labels, rows)
+    expect(wide.every((l) => [...l].length <= 80)).toBe(true)
+    expect(wide[0]).toContain('What they said')
+    expect(wide.join('\n')).toContain('Collibra')
+    // A column of ids or timestamps stays whole while the prose column wraps.
+    const stamped = asciiTable(['Deal', 'Changed at', 'Note'], [['Cobalt - Audit trail rollout', '2026-10-13T19:22:48.282Z', 'Recorded close date came weeks before the stage change in the CRM log']])
+    expect(stamped.join('\n')).toContain('2026-10-13T19:22:48.282Z')
+    expect(stamped.every((l) => [...l].length <= 80)).toBe(true)
+    // A wrapped row is set off from the next one by a rule.
+    expect(wide.filter((l) => /^\|-+\|/.test(l)).length).toBeGreaterThan(1)
+  })
+
+  it('cuts a cell that would take more than four lines with ..., and splits a word wider than its column with a -', () => {
+    // The last line keeps only what fits beside the mark.
+    expect(wrapCell('one two three four five six seven eight nine ten', 8)).toEqual(['one two', 'three', 'four', 'five...'])
+    expect(wrapCell('https://example.com/a/very/long/path', 12)).toEqual(['https://exa-', 'mple.com/a/-', 'very/long/p-', 'ath'])
+    expect(wrapCell('', 5)).toEqual([''])
+    expect(wrapCell('x'.repeat(40), 5, 2)).toEqual(['xxxx-', 'xx...'])
+  })
+
+  it('too many columns for 80: every row prints as label: value lines, so no column is dropped', () => {
+    const labels = Array.from({ length: 12 }, (_, i) => `Column ${i + 1}`)
+    const lines = asciiTable(labels, [labels.map((_, i) => `value ${i + 1}`)])
+    expect(lines.slice(0, 3)).toEqual(['Row 1:', '  Column 1: value 1', '  Column 2: value 2'])
+    expect(lines).toContain('  Column 12: value 12')
+    expect(lines).toHaveLength(13)
+  })
+
+  it('prints at most 25 rows and counts the rest', () => {
+    const lines = asciiTable(['n'], Array.from({ length: 30 }, (_, i) => [String(i)]))
+    expect(lines.at(-1)).toBe('... and 5 more rows (all of them: add --json).')
+    expect(lines).toHaveLength(2 + 25 + 1)
+  })
+
+  it('a table block with no rows or columns prints nothing, and block text is made safe', () => {
+    expect(blockLines([{ type: 'table', columns: [], data: [] }, { type: 'text', markdown: '   ' }], 'answer')).toEqual([])
+    expect(blockLines([{ type: 'text', markdown: 'safe\u001b[2J text' }], 'answer')).toEqual(['safe[2J text'])
+    expect(blockLines(undefined, 'answer')).toEqual([])
   })
 })
 

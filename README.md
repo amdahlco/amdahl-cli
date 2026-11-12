@@ -407,7 +407,20 @@ Research is something search starts, never a command of its own. Search
 hands a statistical or long question to a research job by itself, and
 `--research` asks it to (`route: "research"`). The CLI then waits for the
 job (`GET /research/:id`, 45 seconds a read, up to 15 minutes) and prints its
-cited answer and up to three questions to ask next. Starting research needs
+cited answer, then what the answer rests on under `Details:` (its
+`content_blocks`, in the order the job presented them), then up to three
+questions to ask next.
+
+Each table prints as a plain ASCII table that fits 80 columns: a long cell
+wraps (a column is narrowed to its longest word first, so an id or a timestamp
+stays whole), a cell past four lines is cut with `...`, a word wider than its
+column is split with a `-`, and a table with more columns than 80 columns hold
+prints each row as `label: value` lines, so no column is dropped. A table
+prints at most 25 rows and counts the rest. Text, callout, citation, metric and
+theme blocks print as plain text (an `<unverified>` figure is marked
+`(unverified)`). A chart prints one line that says so, and so does any block
+type this version does not know: both point to `--json`, where the whole block
+is. Starting research needs
 `conversations:write` and reading it back `conversations:read`. A CLI
 sign-in has neither, so the server runs the search instead and the CLI adds
 one line:
