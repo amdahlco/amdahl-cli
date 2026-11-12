@@ -198,6 +198,30 @@ describe('the import file is for a sequencer, not a spreadsheet', () => {
     expect(sentBody().items).toEqual([{ item_id: 'r1', message: 'Hi', channel: 'email', evidence: 'off', on_unsupported: 'flag', context: { facts: ['Fact one'], rules: ['Rule one'] } }])
   })
 
+  it('also leaves out the column the message came from, and matches Amdahl\'s columns on the snake_case header', async () => {
+    // `Draft` is the draft (the first column that names one); `message` and `Item ID` and `On Unsupported` are Amdahl's, by snake_case.
+    const text = 'Email,Item ID,On Unsupported,Draft,Body,message,Notes\na@x.com,r1,flag,my draft,my body,Hi,keep me\n'
+    const { io, list } = await withList({}, text, 'draft.csv')
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'instantly')
+    expect(r.code, r.stderr).toBe(0)
+    // Only the first column that names a draft is the draft: `Body` is a column of the list, and stays.
+    expect(readFileSync(join(io.cwd, 'draft-instantly.csv'), 'utf8').split('\r\n')[0]).toBe('email,amdahl_subject,amdahl_message,body,notes')
+  })
+
+  it('a column of addresses is not the draft, and neither is a subject or channel column', () => {
+    const lemlist = SEND_TO_PRESETS.find((p) => p.id === 'lemlist')!
+    const written = { kind: 'written', subject: 'S', body: 'B' } as const
+    const file = buildSendToFile({
+      path: 'x.csv',
+      headers: ['Email', 'Copy', 'email_copy', 'Subject', 'Type', 'body'],
+      rows: [{ cells: ['a@x.com', 'b@x.com', 'my copy', 's', 'email', 'my body'], written }],
+      channel: 'email',
+      preset: lemlist,
+    })
+    // `email_copy` is the first draft-named column that is not all addresses; `Copy` is not a draft name. `body` is the second draft column, so it stays.
+    expect(file.csv.split('\r\n')[0]).toBe('email,amdahl_subject,amdahl_message,copy,subject,type,body')
+  })
+
   it('names exactly the columns the list reader reads', () => {
     expect([...AMDAHL_INPUT_COLUMNS].sort()).toEqual([...CSV_COLUMNS].sort())
   })
@@ -226,16 +250,19 @@ describe('a channel is read in any case', () => {
   })
 })
 
-describe('HeyReach\'s step says to set a fallback, and says what is not confirmed', () => {
-  it('step 3 names the fallback, and a note says the brace form is not documented', async () => {
+describe('HeyReach\'s guide uses its Add variable menu, and says to set a fallback message', () => {
+  it('step 3 points to the menu, and a note says what the step needs and that the brace form is not documented', async () => {
     const heyreach = SEND_TO_PRESETS.find((p) => p.id === 'heyreach')!
-    expect(guideLines(heyreach, 'linkedin')[2]).toBe('Name the variable amdahl_message, set a fallback value for it, then paste: Message {amdahl_message}')
-    expect(heyreach.note).toBe('HeyReach does not document the exact form of a variable in a message, so add it from the Add variable menu in your step if {amdahl_message} does not work.')
+    expect(guideLines(heyreach, 'linkedin')[2]).toBe('Add amdahl_message from the Add variable menu, or paste: Message {amdahl_message}')
+    expect(heyreach.note).toBe(
+      'Set a fallback message on the step: HeyReach sends it when a lead has no value. Its docs do not show the brace syntax, so use the Add variable menu if the pasted text does not turn orange.'
+    )
     const { io, list } = await withList()
     const r = await cli(io, 'optimize', '--list', list, '--for', 'heyreach')
     const text = r.stderr.replace(/\n\s*/g, ' ')
-    expect(text).toContain('Name the variable amdahl_message, set a fallback value for it, then paste: Message {amdahl_message}')
-    expect(text).toContain('HeyReach does not document the exact form of a variable in a message')
+    expect(text).toContain('Add amdahl_message from the Add variable menu, or paste: Message {amdahl_message}')
+    expect(text).toContain('Set a fallback message on the step: HeyReach sends it when a lead has no value.')
+    expect(text).toContain('so use the Add variable menu if the pasted text does not turn orange.')
   })
 
   it('a lead with no full name is left out as "no LinkedIn URL or full name"', () => {

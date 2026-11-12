@@ -586,9 +586,11 @@ Import file for lemlist: drafts-lemlist.csv
   names them (lemlist `firstName`, `companyName`; Instantly and Smartlead
   `company_name`), then `amdahl_subject` and `amdahl_message` (just
   `amdahl_message` for LinkedIn), then every other column of your list in its
-  order, as lowercase snake_case. The columns Amdahl reads itself (`message`,
-  `channel`, `evidence`, `on_unsupported`, `facts`, `rules` and `item_id`) are
-  not in the file. Your tool imports a value as it is, so no cell gets the `'`
+  order, as lowercase snake_case. The column the message came from (the first
+  whose header names a draft, such as `message`, `draft` or `body`) and the columns Amdahl
+  reads itself (`message`, `channel`, `evidence`, `on_unsupported`, `facts`,
+  `rules` and `item_id`, matched on the snake_case header, so `Item ID` too)
+  are not in the file. Your tool imports a value as it is, so no cell gets the `'`
   guard that the results file has: a `-20% off` subject or a `+1 415...` phone
   number arrives as written. Line breaks are CRLF, and there is no byte-order
   mark.

@@ -5,9 +5,10 @@
 // it. The console's "Send to" writes the same file for the same list, so the
 // presets, the header names, the variable syntax and the rules for which lead is
 // left out are copied BY HAND from amdahl-frontend,
-// apps/universal-ui/lib/optimizer/send-to/presets.ts and build.ts, as they were
-// at amdahl-frontend commit 2a47d5612 (#2180), plus the spec change from the
-// review of this CLI (no formula guard, Amdahl's own input columns dropped).
+// apps/universal-ui/lib/optimizer/send-to/presets.ts and build.ts (and, for the
+// draft column, leads.ts and parse-drafts.ts): the #2180 versions (commit
+// 2a47d5612) with the changes of #2188 at commit 8c1a85c04 (raw values, the
+// columns Amdahl reads left out, the HeyReach guide and left-out wording).
 // Nothing here runs the console's code. __tests__/send-to.test.ts compares the
 // CLI with values copied from the console's own test (e2e-stub/optimizer-send-to.spec.ts
 // at that commit) and with each tool's header names and variable syntax typed
@@ -17,9 +18,10 @@
 // Only leads Amdahl wrote are in the file. A failed lead, a lead that needed
 // input, one not written and one with no contact for the channel are left out,
 // and counted. The list's own columns follow Amdahl's, in their order, except
-// the ones Amdahl reads itself (AMDAHL_INPUT_COLUMNS). No cell gets a `'` guard:
-// a sequencer imports a value as it is, so a `'` would reach the email or the
-// phone number.
+// the column the message came from (the draft) and the ones Amdahl reads itself
+// (AMDAHL_INPUT_COLUMNS, matched on the snake_case header). No cell gets a `'`
+// guard: a sequencer imports a value as it is, so a `'` would reach the email
+// or the phone number.
 
 import { basename } from 'node:path'
 import { usageError } from './errors'
@@ -94,8 +96,8 @@ export const SEND_TO_PRESETS: readonly SendToPreset[] = [
     needsNames: true,
     where: 'Leads > Add Leads > Import from CSV.',
     match: () => 'Map linkedin_url to the profile URL. Add a custom variable from amdahl_message.',
-    insert: 'Name the variable amdahl_message, set a fallback value for it, then paste',
-    note: 'HeyReach does not document the exact form of a variable in a message, so add it from the Add variable menu in your step if {amdahl_message} does not work.',
+    insert: 'Add amdahl_message from the Add variable menu, or paste',
+    note: 'Set a fallback message on the step: HeyReach sends it when a lead has no value. Its docs do not show the brace syntax, so use the Add variable menu if the pasted text does not turn orange.',
     variable: single,
   },
   {
@@ -287,8 +289,30 @@ export function cell(value: string): string {
   return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
 
-/** The list columns Amdahl reads itself (by header, trimmed and lowercased, as the list reader does). They stay out of the import file. */
+/** The list columns Amdahl reads itself, matched on the snake_case header (`Item ID` is `item_id`). They stay out of the import file. */
 export const AMDAHL_INPUT_COLUMNS: readonly string[] = ['message', 'channel', 'evidence', 'on_unsupported', 'facts', 'rules', 'item_id']
+
+const SUBJECT_HEADERS = ['subject', 'subject_line', 'email_subject', 'subjectline', 'betreff', 'objet', 'sujet', 'asunto', 'oggetto', 'onderwerp']
+const CHANNEL_HEADERS = ['channel', 'type', 'medium']
+const ADDRESS = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const isDraftHeader = (h: string) => ['message', 'draft', 'email_copy'].includes(h) || /(^|_)body(_html|_text)?$/.test(h)
+
+/**
+ * The column the message came from, or -1: the first whose header names a draft
+ * (`message`, `draft`, `email_copy`, `body`, `body_html`...), never the subject
+ * or channel column or one that holds only addresses. The console finds it the
+ * same way, and leaves it out of the import file.
+ */
+function draftColumn(headers: string[], rows: string[][]): number {
+  const n = headers.map(norm)
+  const subjectCol = n.findIndex((h) => SUBJECT_HEADERS.includes(h))
+  const channelCol = n.findIndex((h) => CHANNEL_HEADERS.includes(h))
+  const onlyAddresses = (c: number) => {
+    const cells = rows.map((r) => (r[c] ?? '').trim()).filter(Boolean)
+    return cells.length > 0 && cells.every((v) => ADDRESS.test(v))
+  }
+  return n.findIndex((h, i) => isDraftHeader(h) && i !== subjectCol && i !== channelCol && !onlyAddresses(i))
+}
 
 /** A header as lowercase snake_case ASCII. */
 export function snakeHeader(header: string): string {
@@ -351,11 +375,12 @@ function identityColumns(map: LeadMap, preset: SendToPreset): { columns: Column[
   return { columns, used }
 }
 
-function otherColumns(headers: string[], used: Set<number>, taken: Set<string>): Column[] {
+function otherColumns(headers: string[], used: Set<number>, taken: Set<string>, draft: number): Column[] {
   const out: Column[] = []
   headers.forEach((header, i) => {
-    if (used.has(i) || AMDAHL_INPUT_COLUMNS.includes(header.trim().toLowerCase())) return
+    if (used.has(i) || i === draft) return
     const base = snakeHeader(header) || `column_${i + 1}`
+    if (AMDAHL_INPUT_COLUMNS.includes(base)) return
     let columnName = base
     for (let n = 2; taken.has(columnName); n += 1) columnName = `${base}_${n}`
     taken.add(columnName)
@@ -396,7 +421,7 @@ export function buildSendToFile({ path, headers: raw, rows, channel, preset }: S
     ...identity.columns,
     ...(channel === 'email' ? [{ name: subjectColumn, value: (w: Extract<Written, { kind: 'written' }>) => w.subject }] : []),
     { name: messageColumn, value: (w: Extract<Written, { kind: 'written' }>) => w.body },
-    ...otherColumns(headers, identity.used, taken),
+    ...otherColumns(headers, identity.used, taken, draftColumn(headers, rows.map((r) => r.cells))),
   ]
   const lines = ready.map(({ written, lead }) => columns.map((c) => cell(c.value(written, lead).replace(/\r\n?/g, '\n'))).join(','))
   const overLimit = preset.maxValue ? ready.filter(({ written }) => written.body.length > (preset.maxValue ?? 0)).length : 0
