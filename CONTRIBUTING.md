@@ -21,7 +21,7 @@ instead.
    pnpm smoke:pack
    ```
 
-4. Open a pull request. CI runs the same checks on Node 20 and 24, and a
+4. Open a pull request. CI runs the same checks on Node 22 and 24, and a
    maintainer reviews every PR.
 
 ## Compatibility

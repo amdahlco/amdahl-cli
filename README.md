@@ -40,8 +40,10 @@ Full steps: https://amdahl.ai/connect
 
 ## Install
 
-Needs Node.js 20 or later. On an older Node, `amdahl` stops before it does
-anything, names the version it found, and links the Node.js download page.
+Needs Node.js 22 or later. Node.js 20 reached end of life in April 2026 and
+gets no security fixes. `amdahl` still starts on it, but npm warns when it
+installs. On a Node older than 20, `amdahl` stops before it does anything,
+names the version it found, and links the Node.js download page.
 
 ```sh
 # Run once, with no install
@@ -582,7 +584,7 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 
 ## Development
 
-Needs Node.js 20 or later and pnpm 9 (`corepack enable` picks up the version
+Needs Node.js 22 or later and pnpm 9 (`corepack enable` picks up the version
 pinned in `package.json`).
 
 ```sh
