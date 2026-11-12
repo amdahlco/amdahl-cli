@@ -10,6 +10,14 @@
 //   GET  /api/platform/v1/cli/key-requests/:requestId    getKeyRequestStatus
 //   GET  /api/team/:businessId/mcp-keys                  mcpKeys.list
 //   POST /api/platform/v1/messages/optimize              via request()
+//   POST /api/platform/v1/messages/optimize/batch        via request() (optimize --list)
+//   GET  /api/platform/v1/messages/optimize/batches/:id  via request()
+//   POST /api/platform/v1/messages/optimize/runs/:id/feedback  via request() (feedback)
+//   POST /api/platform/v1/messages/report_send           via request() (sent)
+//   POST /api/platform/v1/search/query                   via request() (search)
+//   GET  /api/platform/v1/research/:id                   via request() (search, a research handoff)
+//   GET  /api/platform/v1/connections                    via request() (connections)
+//   GET  /api/platform/v1/connections/catalog            via request() (connect)
 //
 // Every request also sends `X-Amdahl-Client: cli/<version>` and
 // `User-Agent: amdahl-cli/<version>`, so the server can record that a run came

@@ -50,6 +50,20 @@ export interface MockOptions {
   failRevoke?: boolean
   /** Answer setup/status with the degraded shape: no workspace, connections unavailable. */
   degradedStatus?: boolean
+  /** Answer setup/status with no connection at all. */
+  noConnections?: boolean
+  /** Answer setup/status with an optimize blocker (and the quota used up for quota_exhausted). */
+  blocker?: 'missing_scope' | 'role_too_low' | 'quota_exhausted'
+  /** The search/query result body (inside `data`); the default is two rows and a cited answer. */
+  searchResult?: Record<string, unknown>
+  /** Research reads that answer `running` before the job completes. */
+  researchPolls?: number
+  /** The connections list (inside `data`). */
+  connections?: Record<string, unknown>[]
+  /** Status reads of a batch before it completes. */
+  batchPolls?: number
+  /** Item indexes that fail in a batch. */
+  batchFailures?: number[]
 }
 
 export interface MockServer {
@@ -70,6 +84,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   const issued = { access: [] as string[], refresh: [] as string[] }
   const revoked: string[] = []
   const keyRequests = new Map<string, Record<string, unknown>>()
+  const batches = new Map<string, { items: Record<string, unknown>[]; polls: number }>()
+  let researchReads = 0
   let workspaceCreated = false
   let refusals = 0
   const codes = new Map<string, { challenge: string; redirectUri: string }>()
@@ -236,16 +252,162 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       if (path === '/api/platform/v1/setup/status') {
+        const blocker = options.blocker ?? null
+        const used = blocker === 'quota_exhausted' ? 1000 : 12
         return json(res, 200, {
           data: {
             workspace: options.degradedStatus ? null : { id: BIZ, name: 'Acme', slug: 'acme' },
             caller: { user_id: USER, email: 'dev@example.com', role: 'editor', auth_method: kind, client_id: null, scopes: [] },
-            optimize: { allowed: true, blocker: null, quota: { limit: 1000, used: 12, remaining: 988, resets_at: '2026-11-01T00:00:00Z' } },
+            optimize: { allowed: blocker === null, blocker, quota: { limit: 1000, used, remaining: 1000 - used, resets_at: '2026-12-01T00:00:00Z' } },
             connections: options.degradedStatus
               ? { omitted: 'unavailable' }
-              : { total: 3, healthy: 2, needs_attention: [{ id: 'c1', connector_type: 'gong', name: 'Gong', status: 'error' }] },
+              : options.noConnections
+                ? { total: 0, healthy: 0, needs_attention: [] }
+                : { total: 3, healthy: 2, needs_attention: [{ id: 'c1', connector_type: 'gong', name: 'Gong', status: 'error' }] },
           },
         })
+      }
+
+      // search.query: a CLI OAuth token has no conversations:write, so a research handoff
+      // falls back to the search with the server's note, as amdahl-app does.
+      if (path === '/api/platform/v1/search/query' && req.method === 'POST') {
+        const input = JSON.parse(body) as { query?: string; route?: string }
+        if (!input.query) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: 'Provide a `query`.' } } })
+        if (input.route === 'research') {
+          if (kind === 'api_key') {
+            return json(res, 200, {
+              data: {
+                success: true,
+                mode_ran: 'research',
+                results: [],
+                timing: { total_ms: 5 },
+                research: { research_id: '66666666-6666-4666-8666-666666666666', chat_id: 'chat1', status: 'running', poll: 'Poll GET /research/:id' },
+                notes: ['route:"research" was set, so this ask started a research job.'],
+              },
+            })
+          }
+          return json(res, 200, {
+            data: {
+              success: true,
+              mode_ran: 'fuzzy',
+              results: [{ id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' }],
+              timing: { total_ms: 5 },
+              notes: ['Starting a research job for this ask needs a credential that can start one (conversations:write); ran search instead.'],
+            },
+          })
+        }
+        return json(res, 200, {
+          data: options.searchResult ?? {
+            success: true,
+            mode_ran: 'semantic',
+            results: [
+              { id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' },
+              { id: 'r2', title: 'Renewal call', speaker: 'Sam', occurred_at: '2026-10-08T10:00:00Z', text: 'They asked for annual billing.' },
+            ],
+            timing: { total_ms: 5 },
+            answer: {
+              status: 'answered',
+              text: 'Buyers raised [pricing](amdahl:cite?block=r1) and [annual billing](amdahl:cite?block=r2).',
+              citations: [],
+              model: 'm',
+            },
+          },
+        })
+      }
+
+      const research = path.match(/^\/api\/platform\/v1\/research\/([^/]+)$/)
+      if (research && req.method === 'GET') {
+        if (kind !== 'api_key') return err(res, 403, 'missing_scope', 'This credential lacks conversations:read.')
+        researchReads++
+        const done = researchReads > (options.researchPolls ?? 1)
+        return json(res, 200, {
+          data: {
+            research_id: research[1],
+            chat_id: 'chat1',
+            status: done ? 'complete' : 'running',
+            question: 'q',
+            answer: done
+              ? { text: 'Deals with a pricing objection closed less often [1](amdahl:cite?block=b1).', partial: false, partial_reason: null, content_blocks: [], follow_ups: ['Which competitor came up most?'] }
+              : null,
+            error: null,
+          },
+        })
+      }
+
+      if (path === '/api/platform/v1/connections' && req.method === 'GET') {
+        return json(res, 200, {
+          data: options.connections ?? [
+            { id: 'c0', connector_type: 'hubspot', connector: { type: 'hubspot', name: 'HubSpot', category: 'crm' }, name: 'HubSpot', status: 'connected', health: 'healthy', last_synced_at: '2026-11-11T08:00:00Z' },
+            { id: 'c1', connector_type: 'gong', connector: { type: 'gong', name: 'Gong', category: 'calls' }, name: 'Sales calls', status: 'error', health: 'needs_reauth', last_synced_at: null },
+          ],
+        })
+      }
+
+      if (path === '/api/platform/v1/connections/catalog' && req.method === 'GET') {
+        return json(res, 200, {
+          data: [
+            { type: 'hubspot', name: 'HubSpot', category: 'crm', connectable: true, unavailable_reason: null },
+            { type: 'gong', name: 'Gong', category: 'calls', connectable: true, unavailable_reason: null },
+            { type: 'slack', name: 'Slack', category: 'comms', connectable: false, unavailable_reason: 'planned' },
+          ],
+        })
+      }
+
+      if (path === '/api/platform/v1/messages/optimize/batch' && req.method === 'POST') {
+        const input = JSON.parse(body) as { items?: Record<string, unknown>[] }
+        const items = input.items ?? []
+        const bad = items.findIndex((i) => typeof i.message !== 'string')
+        if (bad >= 0) return err(res, 400, 'invalid_input', `Input failed schema validation: $.items[${bad}].message: Required`)
+        const id = `77777777-7777-4777-8777-${String(++n).padStart(12, '0')}`
+        batches.set(id, { items, polls: 0 })
+        return json(res, 202, { data: { ok: true, replayed: false, ...batchSummary(id, items, false) } })
+      }
+
+      const batch = path.match(/^\/api\/platform\/v1\/messages\/optimize\/batches\/([^/]+)$/)
+      if (batch && req.method === 'GET') {
+        const entry = batches.get(batch[1] ?? '')
+        if (!entry) return err(res, 404, 'not_found')
+        entry.polls++
+        const done = entry.polls > (options.batchPolls ?? 1)
+        const limit = Number(url.searchParams.get('limit') ?? 50)
+        const after = Number(url.searchParams.get('cursor') ?? -1)
+        const page = entry.items.map((item, index) => ({ item, index })).filter((x) => x.index > after).slice(0, limit)
+        const last = page[page.length - 1]
+        return json(res, 200, {
+          data: {
+            ...batchSummary(batch[1] ?? '', entry.items, done),
+            items: page.map(({ item, index }) => ({
+              index,
+              item_id: (item.item_id as string | undefined) ?? null,
+              status: done ? (options.batchFailures?.includes(index) ? 'failed' : 'done') : 'queued',
+              result: !done
+                ? null
+                : options.batchFailures?.includes(index)
+                  ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
+                  : { ok: true, message: `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: `run-${index}`, unchanged: false },
+            })),
+            next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
+          },
+        })
+      }
+
+      const feedback = path.match(/^\/api\/platform\/v1\/messages\/optimize\/runs\/([^/]+)\/feedback$/)
+      if (feedback && req.method === 'POST') {
+        const input = JSON.parse(body) as Record<string, unknown>
+        if (!['did_it_myself', 'reported_to_me', 'inferred'].includes(String(input.evidence))) return err(res, 400, 'invalid_input')
+        if (feedback[1] === 'unknown') return json(res, 404, { data: { success: false, error: { code: 'not_found', message: 'No such run.' } } })
+        return json(res, 200, { data: { success: true, feedback_id: 'fb1', run_id: feedback[1], rubric_miss: null, outcome: input.outcome ?? null, evidence: input.evidence } })
+      }
+
+      if (path === '/api/platform/v1/messages/report_send' && req.method === 'POST') {
+        const input = JSON.parse(body) as { items: Record<string, unknown>[] }
+        const items = input.items.map((item, index) =>
+          item.run_id === 'bad'
+            ? { index, run_id: item.run_id, status: 'rejected', reason: 'run_not_found', message: 'No optimize run with this id.' }
+            : { index, run_id: item.run_id, status: 'accepted', result: 'created' }
+        )
+        const rejected = items.filter((i) => i.status === 'rejected').length
+        return json(res, 200, { data: { success: true, accepted: items.length - rejected, rejected, items } })
       }
 
       if (path === '/api/platform/v1/cli/key-requests' && req.method === 'POST') {
@@ -300,6 +462,19 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       return err(res, 404, 'not_found')
     })
   })
+  function batchSummary(id: string, items: unknown[], done: boolean) {
+    const failed = done ? (options.batchFailures?.length ?? 0) : 0
+    return {
+      batch_id: id,
+      status: done ? 'completed' : 'queued',
+      created_at: '2026-11-12T00:00:00Z',
+      completed_at: done ? '2026-11-12T00:05:00Z' : null,
+      counts: { total: items.length, queued: done ? 0 : items.length, running: 0, done: done ? items.length - failed : 0, failed },
+      queue_position: done ? 0 : 3,
+      eta: done ? null : { seconds: 300, estimate: true, items_ahead: 3, median_run_seconds: 30, slots: 2 },
+    }
+  }
+
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
   return {

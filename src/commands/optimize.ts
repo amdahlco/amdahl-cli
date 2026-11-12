@@ -13,6 +13,11 @@
 // (the setup's "This terminal" does the same), and shows Amdahl's version
 // under a rule, then what Amdahl did and how to run it next time. An agent
 // (CLAUDECODE, CURSOR_AGENT), CI or AMDAHL_NO_PROMPT=1 gets the usage (exit 2).
+//
+// `--list <file>` (and `--batch <id>`) rewrite a whole list in one batch
+// instead: see batch.ts. A file given without `--list` is still one message.
+// Without `--json`, a run on a workspace with no data connected ends with one
+// line on connecting calls or a CRM, so claims can be checked against them.
 
 import { readFileSync } from 'node:fs'
 import { ciVariable } from '../ci'
@@ -23,6 +28,7 @@ import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
 import { browserSignIn } from './auth'
+import { optimizeList } from './batch'
 import { runningAgent } from './skills-guide'
 
 /** Said before a first sign-in: it is also where a new user's workspace is made. */
@@ -255,6 +261,39 @@ export function nextTimeLine(ctx: Ctx): string {
   return ctx.io.platform === 'darwin' ? `Next time: ${file},\nor pbpaste | ${amdahlCommand('optimize -')}` : `Next time: ${file}`
 }
 
+/** The line after a run on a workspace with no data connected: what connecting adds, and the command. */
+export function noDataLine(): string {
+  return `Connect calls or a CRM so Amdahl checks claims against them: ${amdahlCommand('connect')}`
+}
+
+/**
+ * Whether the setup status counts no connection, for the line after a run
+ * (a result can also say so itself: {@link saysNoData}). Never rejects:
+ * anything unknown is "has data", so a workspace that holds data is never
+ * told to connect it.
+ */
+async function noDataConnected(ctx: Ctx, credential: Credential): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined
+  // A slow read never holds up the run's last line: past the cap, it says nothing.
+  const cap = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), NO_DATA_CHECK_MS)
+    timer.unref?.()
+  })
+  const read = apiClient(ctx, credential)
+    .cli.setupStatus()
+    .then((status) => 'total' in status.connections && status.connections.total === 0)
+    .catch(() => false)
+  return Promise.race([read, cap]).finally(() => clearTimeout(timer))
+}
+
+/** How long the no-data check's status read may take (it starts beside the rewrite). */
+const NO_DATA_CHECK_MS = 5000
+
+/** True when a result itself says the workspace has nothing connected. */
+function saysNoData(result: Record<string, unknown>): boolean {
+  return Boolean(record(result.setup_needed)) || text(record(result.evidence)?.reason) === 'corpus_empty'
+}
+
 /** The request body's options from the flags: channel, evidence, context and the rest. */
 function requestOptions(ctx: Ctx): Record<string, unknown> {
   const { flags } = ctx
@@ -320,6 +359,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
     return EXIT.ok
   }
   out.info('Amdahl is rewriting it. This can take a minute.')
+  const noData = out.json ? Promise.resolve(false) : noDataConnected(ctx, credential)
   const result = await optimizeOne(ctx, credential, message, base, 'your message')
   if (result.ok === false) {
     if (out.json) out.result({ ok: false, file: '-', result })
@@ -334,13 +374,19 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
-  out.info([...did, ...feedbackLines(ctx, result), nextTimeLine(ctx)].join('\n'))
+  const connect = saysNoData(result) || (await noData) ? [noDataLine()] : []
+  out.info([...did, ...feedbackLines(ctx, result), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
 
 /** `amdahl optimize [<file>... | -]`. */
 export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   const { io, out } = ctx
+  if (str(ctx.flags.list) || str(ctx.flags.batch)) {
+    if (args.length > 0) throw usageError('Give the messages with --list <file>, or as files, not both.')
+    return optimizeList(ctx, requestOptions(ctx))
+  }
+  if (ctx.flags['no-wait'] === true) throw usageError('--no-wait goes with --list <file>.')
   let files = args
   if (files.length === 0) {
     // An agent may run commands in a terminal, and so may a CI job: neither can paste, so they get the usage.
@@ -372,6 +418,8 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   }
 
   const credential = await resolveCredential(ctx)
+  // Asked beside the first rewrite, so the line after the run adds no wait.
+  const noData = out.json ? Promise.resolve(false) : noDataConnected(ctx, credential)
   const results: FileResult[] = []
   let exit: number = EXIT.ok
   for (const { file, message } of inputs) {
@@ -393,5 +441,6 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     }
   }
   if (out.json) out.result(results.length === 1 ? (results[0] as unknown as Record<string, unknown>) : (results as unknown as Record<string, unknown>[]))
+  else if (results.some((r) => r.ok) && (results.some((r) => saysNoData(r.result)) || (await noData))) out.info(noDataLine())
   return exit
 }

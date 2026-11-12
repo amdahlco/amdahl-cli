@@ -2,22 +2,47 @@
 //
 // `status` (the server's setup.status read) and `workspace list|use` (local
 // profiles only). Neither creates, joins or lists server workspaces: the CLI
-// never calls the workspace or waitlist endpoints.
+// never calls the workspace or waitlist endpoints. Without `--json`, each
+// blocked item names its fix: the command, the console page, when the quota
+// resets, or who to ask.
 
 import type { CliSetupStatus } from '../api'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
+import { consoleUrlFor } from '../oauth'
+import { day } from '../text'
+import { connectLine, connectionUrl, connectionsUrl } from './connections'
 
 /** What to do about each optimize blocker. */
-const BLOCKER_FIX: Record<string, () => string> = {
+const BLOCKER_FIX: Record<string, (status: CliSetupStatus) => string> = {
   missing_scope: () => `This credential cannot optimize. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`,
   role_too_low: () => 'Your role cannot optimize. Ask a workspace admin to raise it.',
-  quota_exhausted: () => 'The monthly optimize quota is used up.',
+  quota_exhausted: (status) => {
+    const resets = day(status.optimize.quota?.resets_at)
+    return `The monthly optimize quota is used up.${resets ? ` It resets on ${resets}.` : ''}`
+  },
+}
+
+/**
+ * Where to fix the connections that need attention: the one connection's
+ * console page, or the Connections list for several. Without the workspace,
+ * the command that lists them.
+ */
+function connectionFix(status: CliSetupStatus, consoleUrl: string): string {
+  if (!('needs_attention' in status.connections)) return ''
+  const attention = status.connections.needs_attention
+  const [only] = attention
+  if (!only) return ''
+  const slug = status.workspace?.slug
+  if (!slug) return `  See them: ${amdahlCommand('connections')}`
+  if (attention.length > 1) return `  Fix them: ${connectionsUrl(consoleUrl, slug)}`
+  const verb = only.status === 'needs_reauth' ? 'Sign in to it again' : 'Fix it'
+  return `  ${verb}: ${connectionUrl(consoleUrl, slug, only.id)}`
 }
 
 /** Human summary of a setup status. */
-function describe(status: CliSetupStatus): string {
+function describe(status: CliSetupStatus, consoleUrl: string): string {
   const lines = [
     `Workspace:  ${status.workspace ? `${status.workspace.name} (${status.workspace.slug})` : 'unknown'}`,
     `You:        ${status.caller.email ?? status.caller.user_id} (${status.caller.role ?? 'unknown role'}, ${status.caller.auth_method})`,
@@ -29,7 +54,7 @@ function describe(status: CliSetupStatus): string {
   }
   const fix = opt.blocker ? BLOCKER_FIX[opt.blocker] : undefined
   if (!opt.allowed && fix) {
-    lines.push(`            ${fix()}`)
+    lines.push(`            ${fix(status)}`)
   }
   const conns = status.connections
   if ('omitted' in conns) {
@@ -40,9 +65,12 @@ function describe(status: CliSetupStatus): string {
     )
   } else {
     lines.push(`Connections: ${conns.healthy} of ${conns.total} healthy`)
+    if (conns.total === 0) lines.push(`  No data connected yet. ${connectLine()}`)
     for (const c of conns.needs_attention) {
       lines.push(`  needs attention: ${c.name} (${c.connector_type}): ${c.status}`)
     }
+    const fixLine = connectionFix(status, consoleUrl)
+    if (fixLine) lines.push(fixLine)
   }
   return lines.join('\n')
 }
@@ -51,7 +79,7 @@ function describe(status: CliSetupStatus): string {
 export async function status(ctx: Ctx): Promise<number> {
   const credential = await resolveCredential(ctx)
   const body = await call(() => apiClient(ctx, credential).cli.setupStatus())
-  ctx.out.result({ ok: true, source: credential.source, ...body }, describe(body))
+  ctx.out.result({ ok: true, source: credential.source, ...body }, describe(body, consoleUrlFor(ctx.io, ctx.apiUrl)))
   return EXIT.ok
 }
 
