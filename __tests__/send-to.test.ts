@@ -8,7 +8,8 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { COMMAND_OPTIONS } from '../src/args'
-import { SEND_TO_IDS, SEND_TO_PRESETS, buildSendToFile, guideLines, leftOutLine, planSendTo, sendToFileName, snakeHeader, writtenOf, type Written } from '../src/send-to'
+import { CSV_COLUMNS, parseCsv, shellWord } from '../src/commands/batch'
+import { AMDAHL_INPUT_COLUMNS, SEND_TO_IDS, SEND_TO_PRESETS, buildSendToFile, guideLines, leftOutLine, planSendTo, sendToFileName, snakeHeader, writtenOf, type Written } from '../src/send-to'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { startMockServer, type MockOptions, type MockServer } from './helpers/mock-server'
 
@@ -65,10 +66,10 @@ describe('--for writes the console file', () => {
     const file = join(io.cwd, 'q4-leads-lemlist.csv')
     expect(readFileSync(file, 'utf8')).toBe(
       [
-        'email,firstName,lastName,companyName,linkedinUrl,amdahl_subject,amdahl_message,notes,message',
-        'sam.rivera@example.com,Sam,Rivera,Northwind Traders,https://www.linkedin.com/in/sam-rivera,A note for Sam,"Hi Sam,\n\nA claim about calls.\n\nOpen to 20 minutes?","Hiring 4 AEs, call notes",Hi Sam',
-        "jo.okafor@example.com,Jo,Okafor,Fabrikam,,A note for Jo,\"Hi Jo,\n\nA claim about calls.\n\nOpen to 20 minutes?\",'=1+1,Hi Jo",
-        'lee.park@example.com,Lee,Park,Contoso,https://www.linkedin.com/in/lee-park,A note for Lee,"Hi Lee,\n\nA claim about calls.\n\nOpen to 20 minutes?",Skip,Hi Lee',
+        'email,firstName,lastName,companyName,linkedinUrl,amdahl_subject,amdahl_message,notes',
+        'sam.rivera@example.com,Sam,Rivera,Northwind Traders,https://www.linkedin.com/in/sam-rivera,A note for Sam,"Hi Sam,\n\nA claim about calls.\n\nOpen to 20 minutes?","Hiring 4 AEs, call notes"',
+        'jo.okafor@example.com,Jo,Okafor,Fabrikam,,A note for Jo,"Hi Jo,\n\nA claim about calls.\n\nOpen to 20 minutes?",=1+1',
+        'lee.park@example.com,Lee,Park,Contoso,https://www.linkedin.com/in/lee-park,A note for Lee,"Hi Lee,\n\nA claim about calls.\n\nOpen to 20 minutes?",Skip',
       ].join('\r\n')
     )
     expect(r.stdout).toBe(`Results: ${join(io.cwd, 'q4 leads.optimized.csv')}\nImport file for lemlist: ${file}\n`)
@@ -82,7 +83,7 @@ describe('--for writes the console file', () => {
     const r = await cli(io, 'optimize', '--list', list, '--for', 'heyreach')
     expect(r.code).toBe(1)
     const rows = readFileSync(join(io.cwd, 'q4-leads-heyreach.csv'), 'utf8').split('\r\n')
-    expect(rows[0]).toBe('email,first_name,last_name,company,linkedin_url,amdahl_message,notes,message')
+    expect(rows[0]).toBe('email,first_name,last_name,company,linkedin_url,amdahl_message,notes')
     expect(rows.map((row) => row.split(',')[1])).toEqual(['first_name', 'Sam', 'Lee', 'Ana'])
     expect(r.stderr).toContain('3 messages ready for HeyReach. 2 left out: 1 failed, 1 with no LinkedIn URL or full name.\n')
     // A tool that takes one channel sends its channel: the messages are written for it.
@@ -138,7 +139,7 @@ describe('--for writes the console file', () => {
     })
     const r = await cli(io, 'optimize', '--list', list, '--for', 'instantly')
     expect(r.stderr).toContain('1 message ready for Instantly. 4 left out: 1 failed, 1 not written yet, 1 needed input, 1 with no email.\n')
-    expect(readFileSync(join(io.cwd, 'q4-leads-instantly.csv'), 'utf8').split('\r\n')[0]).toBe('email,first_name,last_name,company_name,linkedin_url,amdahl_subject,amdahl_message,notes,message')
+    expect(readFileSync(join(io.cwd, 'q4-leads-instantly.csv'), 'utf8').split('\r\n')[0]).toBe('email,first_name,last_name,company_name,linkedin_url,amdahl_subject,amdahl_message,notes')
   })
 
   it('no lead ready: no file, a line that says so, and exit 1', async () => {
@@ -157,6 +158,140 @@ describe('--for writes the console file', () => {
     expect(sendToFileName('/x/___.csv', reply)).toBe('leads-reply-io.csv')
     expect(sendToFileName('/x/contacts', reply)).toBe('contacts-reply-io.csv')
     expect(snakeHeader('  Q4 / Région  ')).toBe('q4_region')
+  })
+})
+
+describe('the import file is for a sequencer, not a spreadsheet', () => {
+  const run = (index: number) => `99999999-9999-4999-8999-${String(index).padStart(12, '0')}`
+
+  it('never puts a guard quote on a cell: a body starting "- ", a "-20%" subject and a +1 415 phone arrive as written, and the results file keeps its guard', async () => {
+    const text = 'Email,First Name,Phone,Notes,message\nsam@x.com,Sam,+1 415 555 0100,@home,Hi Sam\njo@x.com,Jo,-5,=1+1,Hi Jo\n'
+    const { io, list } = await withList(
+      {
+        batchResults: (item, i) => ({
+          status: 'done',
+          result: { ok: true, message: i === 0 ? 'Subject: -20% off for Sam\n\n- Hi Sam,\n\n- second line' : '-20% off for Jo', summary: 'Written.', run_id: run(i), unchanged: false },
+        }),
+      },
+      text,
+      'p.csv'
+    )
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'instantly')
+    expect(r.code, r.stderr).toBe(0)
+    expect(readFileSync(join(io.cwd, 'p-instantly.csv'), 'utf8')).toBe(
+      ['email,first_name,last_name,amdahl_subject,amdahl_message,phone,notes', 'sam@x.com,Sam,,-20% off for Sam,"- Hi Sam,\n\n- second line",+1 415 555 0100,@home', 'jo@x.com,Jo,,,-20% off for Jo,-5,=1+1'].join('\r\n')
+    )
+    // The results file is for a spreadsheet, so it keeps the guard.
+    const results = parseCsv(readFileSync(join(io.cwd, 'p.optimized.csv'), 'utf8')).rows
+    expect(results[2]?.slice(0, 3)).toEqual(['jo@x.com', 'Jo', "'-5"])
+    expect(results[2]?.[5]).toBe("'-20% off for Jo")
+  })
+
+  it('leaves out the columns Amdahl reads itself, in any case, and keeps the rest; the request still sends them', async () => {
+    const text = 'Item_ID,Email,Channel,Message,Evidence,On_Unsupported,Facts,Rules,Notes\nr1,a@x.com,email,Hi,off,flag,Fact one,Rule one,keep me\n'
+    const { io, list } = await withList({}, text, 'own.csv')
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'instantly')
+    expect(r.code, r.stderr).toBe(0)
+    const rows = readFileSync(join(io.cwd, 'own-instantly.csv'), 'utf8').split('\r\n')
+    expect(rows[0]).toBe('email,amdahl_subject,amdahl_message,notes')
+    expect(rows[1]?.endsWith(',keep me')).toBe(true)
+    expect(sentBody().items).toEqual([{ item_id: 'r1', message: 'Hi', channel: 'email', evidence: 'off', on_unsupported: 'flag', context: { facts: ['Fact one'], rules: ['Rule one'] } }])
+  })
+
+  it('names exactly the columns the list reader reads', () => {
+    expect([...AMDAHL_INPUT_COLUMNS].sort()).toEqual([...CSV_COLUMNS].sort())
+  })
+})
+
+describe('a channel is read in any case', () => {
+  it('LinkedIn in the channel column is linkedin: it picks the file\'s channel and is what the batch is sent with', async () => {
+    const { io, list } = await withList({}, 'LinkedIn URL,Channel,message\nhttps://linkedin.com/in/a,LinkedIn,Hi\n', 'ch.csv')
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'other')
+    expect(r.code, r.stderr).toBe(0)
+    expect(sentBody().items).toEqual([{ message: 'Hi', channel: 'linkedin' }])
+    expect(readFileSync(join(io.cwd, 'ch-other.csv'), 'utf8').split('\r\n')[0]).toBe('linkedin_url,amdahl_message')
+  })
+
+  it('--list alone sends Email as email too, and a list that mixes Email and linkedin is still two channels', async () => {
+    const { io, list } = await withList({}, 'Email,channel,message\na@x.com, EMAIL ,Hi\nb@x.com,Email,Yo\n', 'e.csv')
+    expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
+    expect(sentBody().items.map((i) => i.channel)).toEqual(['email', 'email'])
+    const mixed = join(io.cwd, 'm.csv')
+    writeFileSync(mixed, 'Email,LinkedIn URL,channel,message\na@x.com,https://l/in/a,Email,Hi\nb@x.com,https://l/in/b,LinkedIn,Hi\n')
+    const before = batchRequests().length
+    const r = await cli(io, 'optimize', '--list', mixed, '--for', 'other')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('--for writes one channel at a time')
+    expect(batchRequests().length).toBe(before)
+  })
+})
+
+describe('HeyReach\'s step says to set a fallback, and says what is not confirmed', () => {
+  it('step 3 names the fallback, and a note says the brace form is not documented', async () => {
+    const heyreach = SEND_TO_PRESETS.find((p) => p.id === 'heyreach')!
+    expect(guideLines(heyreach, 'linkedin')[2]).toBe('Name the variable amdahl_message, set a fallback value for it, then paste: Message {amdahl_message}')
+    expect(heyreach.note).toBe('HeyReach does not document the exact form of a variable in a message, so add it from the Add variable menu in your step if {amdahl_message} does not work.')
+    const { io, list } = await withList()
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'heyreach')
+    const text = r.stderr.replace(/\n\s*/g, ' ')
+    expect(text).toContain('Name the variable amdahl_message, set a fallback value for it, then paste: Message {amdahl_message}')
+    expect(text).toContain('HeyReach does not document the exact form of a variable in a message')
+  })
+
+  it('a lead with no full name is left out as "no LinkedIn URL or full name"', () => {
+    const heyreach = SEND_TO_PRESETS.find((p) => p.id === 'heyreach')!
+    expect(leftOutLine({ failed: 0, unwritten: 0, needsInput: 0, noContact: 2 }, 'linkedin', heyreach)).toBe('2 left out: 2 with no LinkedIn URL or full name.')
+  })
+})
+
+describe('a file that appears while the batch runs', () => {
+  /** A mock whose batch read plants `target()` once, as another process would while the batch runs. */
+  async function planting(target: () => string) {
+    return withList({
+      batchResults: (item, i) => {
+        const path = target()
+        if (path && !existsSync(path)) writeFileSync(path, 'appeared\n')
+        return results?.(item, i)
+      },
+    })
+  }
+  const pickUp = (list: string, id: string, rest = '') => `amdahl optimize --list ${shellWord(list)} --batch ${id}${rest}`
+
+  it('the results file: says it already exists and how to read the batch again, never the system\'s EEXIST', async () => {
+    let target = ''
+    const { io, list } = await planting(() => target)
+    target = join(io.cwd, 'q4 leads.optimized.csv')
+    const r = await cli(io, 'optimize', '--list', list)
+    const id = /as batch (\S+)\./.exec(r.stderr)?.[1] ?? ''
+    expect(r.code).toBe(2)
+    expect(r.stderr.endsWith(`Error: ${target} already exists.\nMove it, or add --force to replace it. The batch is done, and you can read it again: ${pickUp(list, id)}\n`)).toBe(true)
+    expect(r.stderr).not.toContain('EEXIST')
+    expect(readFileSync(target, 'utf8')).toBe('appeared\n')
+  })
+
+  it('the import file: the same message, with the tool in the pick-up line; the results file was already written', async () => {
+    let target = ''
+    const { io, list } = await planting(() => target)
+    target = join(io.cwd, 'q4-leads-lemlist.csv')
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'lemlist', '--channel', 'email')
+    const id = /as batch (\S+)\./.exec(r.stderr)?.[1] ?? ''
+    expect(r.code).toBe(2)
+    expect(r.stderr.endsWith(`Error: ${target} already exists.\nMove it, or add --force to replace it. The batch is done, and you can read it again: ${pickUp(list, id, ' --for lemlist --channel email')}\n`)).toBe(true)
+    expect(r.stderr).not.toContain('EEXIST')
+    expect(readFileSync(target, 'utf8')).toBe('appeared\n')
+    expect(existsSync(join(io.cwd, 'q4 leads.optimized.csv'))).toBe(true)
+  })
+
+  it('--json too, and --force replaces a file that appeared', async () => {
+    let target = ''
+    const { io, list } = await planting(() => target)
+    target = join(io.cwd, 'q4-leads-instantly.csv')
+    const json = await cli(io, 'optimize', '--list', list, '--for', 'instantly', '--json')
+    expect(json.code).toBe(2)
+    expect(json.stdout).toContain(`${target} already exists.`)
+    const forced = await cli(io, 'optimize', '--list', list, '--for', 'instantly', '--force')
+    expect(forced.code).toBe(1)
+    expect(readFileSync(target, 'utf8')).toContain('amdahl_message')
   })
 })
 
@@ -235,7 +370,7 @@ describe('--for with --no-wait and --batch', () => {
     // The pick-up writes the file.
     const picked = await cli(io, 'optimize', '--list', list, '--batch', id, '--for', 'reply_io', '--channel', 'linkedin')
     expect(picked.code).toBe(1)
-    expect(readFileSync(join(io.cwd, 'q4-leads-reply-io.csv'), 'utf8').split('\r\n')[0]).toBe('email,first_name,last_name,company,linkedin_url,amdahl_message,notes,message')
+    expect(readFileSync(join(io.cwd, 'q4-leads-reply-io.csv'), 'utf8').split('\r\n')[0]).toBe('email,first_name,last_name,company,linkedin_url,amdahl_message,notes')
     // A tool of one channel needs no --channel in the pick-up line.
     const one = await cli(io, 'optimize', '--list', list, '--for', 'instantly', '--no-wait', '--force')
     expect(one.stdout).toMatch(/--batch \S+ --for instantly\n$/)

@@ -508,7 +508,8 @@ The list is a CSV file with a header row, or a JSONL file (`.jsonl` or
 `.ndjson`) with one batch item, a JSON object, per line. A CSV has a
 `message` column and may have `item_id`, `channel`, `evidence`,
 `on_unsupported`, `facts` and `rules`; facts and rules take one per line
-inside the cell. Any other column (a CRM export has many) is not sent: one
+inside the cell, and a channel is read in any case (`LinkedIn` is `linkedin`).
+Any other column (a CRM export has many) is not sent: one
 line names it, and it is copied to the results file in its place. Only a
 missing `message` column, or a column Amdahl reads that appears twice (a
 doubled `message`, say), is refused. A JSONL item takes any field a single
@@ -585,8 +586,12 @@ Import file for lemlist: drafts-lemlist.csv
   names them (lemlist `firstName`, `companyName`; Instantly and Smartlead
   `company_name`), then `amdahl_subject` and `amdahl_message` (just
   `amdahl_message` for LinkedIn), then every other column of your list in its
-  order, as lowercase snake_case. A cell that starts with `=`, `+`, `-` or `@`
-  gets a `'` in front. Line breaks are CRLF, and there is no byte-order mark.
+  order, as lowercase snake_case. The columns Amdahl reads itself (`message`,
+  `channel`, `evidence`, `on_unsupported`, `facts`, `rules` and `item_id`) are
+  not in the file. Your tool imports a value as it is, so no cell gets the `'`
+  guard that the results file has: a `-20% off` subject or a `+1 415...` phone
+  number arrives as written. Line breaks are CRLF, and there is no byte-order
+  mark.
 - **Checked first:** before anything is queued, a list the tool cannot import
   exits 2: no email column for an email file, no LinkedIn URL column for a
   LinkedIn one, a JSONL list (the file keeps your columns), a file that already

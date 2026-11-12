@@ -105,10 +105,13 @@ a spreadsheet does not run it as a formula. That includes a phone number such
 as +1 555 0100 or a negative number you copied through. Delete the ' to use it.
 
 The --for file holds only the leads Amdahl wrote, with your columns after
-Amdahl's. A lead that failed, needed input or has no email (no LinkedIn URL for
-LinkedIn) is left out, and counted. A tool that takes one channel needs no
---channel; lemlist, reply_io and other take both, so add --channel. With --json,
-.send_to has the file and the counts.
+Amdahl's, except the ones Amdahl reads (message, channel, evidence,
+on_unsupported, facts, rules, item_id). Your tool imports a value as it is, so
+no cell gets the ' guard (the results file keeps it). A lead that failed,
+needed input or has no email (no LinkedIn URL for LinkedIn) is left out, and
+counted. A tool that takes one channel needs no --channel; lemlist, reply_io
+and other take both, so add --channel. With --json, .send_to has the file and
+the counts.
 
 Output: the rewrite goes to stdout. What Amdahl did, and the run id, go to
 stderr. With --json it prints {"ok", "file", "result"}: the rewritten message

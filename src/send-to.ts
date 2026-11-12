@@ -4,13 +4,22 @@
 // as one CSV a sequencer can import, and the three lines that say how to import
 // it. The console's "Send to" writes the same file for the same list, so the
 // presets, the header names, the variable syntax and the rules for which lead is
-// left out are copied from amdahl-frontend, apps/universal-ui/lib/optimizer/send-to
-// (presets.ts and build.ts; the vendor docs each preset follows are listed
-// there). Change one there and here together: a test pins the files to each other.
+// left out are copied BY HAND from amdahl-frontend,
+// apps/universal-ui/lib/optimizer/send-to/presets.ts and build.ts, as they were
+// at amdahl-frontend commit 2a47d5612 (#2180), plus the spec change from the
+// review of this CLI (no formula guard, Amdahl's own input columns dropped).
+// Nothing here runs the console's code. __tests__/send-to.test.ts compares the
+// CLI with values copied from the console's own test (e2e-stub/optimizer-send-to.spec.ts
+// at that commit) and with each tool's header names and variable syntax typed
+// out again in the test. A change in the console is not caught here: make it
+// in both places. The vendor docs each preset follows are listed in presets.ts.
 //
 // Only leads Amdahl wrote are in the file. A failed lead, a lead that needed
 // input, one not written and one with no contact for the channel are left out,
-// and counted. The list's own columns follow Amdahl's, in their order.
+// and counted. The list's own columns follow Amdahl's, in their order, except
+// the ones Amdahl reads itself (AMDAHL_INPUT_COLUMNS). No cell gets a `'` guard:
+// a sequencer imports a value as it is, so a `'` would reach the email or the
+// phone number.
 
 import { basename } from 'node:path'
 import { usageError } from './errors'
@@ -85,7 +94,8 @@ export const SEND_TO_PRESETS: readonly SendToPreset[] = [
     needsNames: true,
     where: 'Leads > Add Leads > Import from CSV.',
     match: () => 'Map linkedin_url to the profile URL. Add a custom variable from amdahl_message.',
-    insert: 'Name the variable amdahl_message, then paste',
+    insert: 'Name the variable amdahl_message, set a fallback value for it, then paste',
+    note: 'HeyReach does not document the exact form of a variable in a message, so add it from the Add variable menu in your step if {amdahl_message} does not work.',
     variable: single,
   },
   {
@@ -272,13 +282,13 @@ export interface SendToFile {
   overLimit: number
 }
 
-const FORMULA = /^[=+\-@\t\r]/
-
-/** One CSV cell: a formula-looking one gets a `'` in front, and quotes are added where needed. */
+/** One CSV cell, quoted where it must be. It is never changed: a sequencer imports a value raw, so no `'` guard. */
 export function cell(value: string): string {
-  const safe = FORMULA.test(value) ? `'${value}` : value
-  return /[",\n\r]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
 }
+
+/** The list columns Amdahl reads itself (by header, trimmed and lowercased, as the list reader does). They stay out of the import file. */
+export const AMDAHL_INPUT_COLUMNS: readonly string[] = ['message', 'channel', 'evidence', 'on_unsupported', 'facts', 'rules', 'item_id']
 
 /** A header as lowercase snake_case ASCII. */
 export function snakeHeader(header: string): string {
@@ -344,7 +354,7 @@ function identityColumns(map: LeadMap, preset: SendToPreset): { columns: Column[
 function otherColumns(headers: string[], used: Set<number>, taken: Set<string>): Column[] {
   const out: Column[] = []
   headers.forEach((header, i) => {
-    if (used.has(i)) return
+    if (used.has(i) || AMDAHL_INPUT_COLUMNS.includes(header.trim().toLowerCase())) return
     const base = snakeHeader(header) || `column_${i + 1}`
     let columnName = base
     for (let n = 2; taken.has(columnName); n += 1) columnName = `${base}_${n}`
