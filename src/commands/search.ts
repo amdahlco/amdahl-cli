@@ -45,9 +45,11 @@ const SETTLED = new Set(['complete', 'failed', 'canceled', 'needs_input'])
 // Field names a row's title, date and text are found under, across the search
 // lanes (warehouse rows, call matches, deal rows). The first one present wins.
 const TITLE_FIELDS = ['title', 'call_title', 'meeting_title', 'subject', 'deal_name', 'account_name', 'company_name', 'name']
-const DATE_FIELDS = ['occurred_at', 'started_at', 'date', 'call_date', 'close_date', 'created_at', 'updated_at']
+const DATE_FIELDS = ['occurred_at', 'started_at', 'date', 'call_date', 'call_timestamp', 'close_date', 'created_at', 'updated_at']
 const TEXT_FIELDS = ['text', 'quote', 'snippet', 'excerpt', 'content', 'summary', 'body', 'description']
-const WHO_FIELDS = ['speaker', 'speaker_name', 'account_name', 'company_name', 'owner_name']
+const WHO_FIELDS = ['speaker', 'speaker_name', 'account_name', 'company_name', 'owner_name', 'deal_stage_label']
+// A deal's amount, said after its stage.
+const AMOUNT_FIELDS = ['deal_amount', 'amount']
 
 function first(row: Record<string, unknown>, names: string[]): string {
   for (const name of names) {
@@ -68,7 +70,8 @@ export function rowLines(row: Record<string, unknown>, n: number): string[] {
   const who = first(row, WHO_FIELDS)
   const when = day(first(row, DATE_FIELDS))
   const body = first(row, TEXT_FIELDS)
-  const head = [title, who !== title ? who : '', when].filter(Boolean).join(', ')
+  const amount = first(row, AMOUNT_FIELDS)
+  const head = [title, who !== title ? who : '', amount, when].filter(Boolean).join(', ')
   if (head || body) {
     const lines = [`${n}. ${clip(head || body, 74)}`]
     if (head && body) lines.push(...wrap(clip(body, 220), 80, '   ').slice(0, 3))

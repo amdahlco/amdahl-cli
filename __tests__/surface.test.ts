@@ -98,6 +98,19 @@ describe('search', () => {
     expect((await cli(io, 'search', 'anything', '--json')).json.setup_needed.reason).toBe('no_sources_connected')
   })
 
+  it('names a deal row by its stage and amount and a call row by its date (the fuzzy lane field names)', async () => {
+    const io = await signedIn({
+      searchResult: {
+        success: true,
+        results: [
+          { deal_id: '1', deal_name: 'Pinecrest - Lab pilot', deal_stage_label: 'Presentation Scheduled', deal_amount: 12000, close_date: '2026-12-29T00:00:00.000Z' },
+          { parent_interaction_id: '2', company_name: 'Hubspot', call_timestamp: '2026-10-13T18:31:21.414Z' },
+        ],
+      },
+    })
+    expect((await cli(io, 'search', 'deals')).stdout).toBe('1. Pinecrest - Lab pilot, Presentation Scheduled, 12000, 2026-12-29\n2. Hubspot, 2026-10-13\n')
+  })
+
   it('no rows: the freshness line, or "Nothing matched."; no question is a usage error', async () => {
     const io = await signedIn({ searchResult: { success: true, results: [], data_freshness: { message: 'No matches. Latest conversation 2026-11-01; last sync 2026-11-02.' } } })
     expect((await cli(io, 'search', 'x')).stdout).toBe('No matches. Latest conversation 2026-11-01; last sync 2026-11-02.\n')

@@ -15,7 +15,7 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
-import { clip, day, field, record, records } from '../text'
+import { clip, day, field, record, records, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -145,7 +145,7 @@ export async function connect(ctx: Ctx, args: string[]): Promise<number> {
     entry = findConnector(entries, wanted)
     if (!entry) {
       const names = entries.filter((e) => e.connectable).map((e) => e.type)
-      throw usageError(`Amdahl has no connector called "${clip(wanted, 40)}".`, names.length ? `Connectors: ${names.join(', ')}` : undefined)
+      throw usageError(`Amdahl has no connector called "${clip(wanted, 40)}".`, names.length ? wrap(`Connectors: ${names.join(', ')}`).join('\n') : undefined)
     }
     if (!entry.connectable) {
       throw new CliError('connector_unavailable', `${entry.name} can't be connected yet${entry.reason === 'planned' ? ': it is coming soon' : ''}.`, EXIT.general, `To see what you can connect: ${amdahlCommand('connect')}`)
