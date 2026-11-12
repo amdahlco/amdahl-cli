@@ -68,6 +68,7 @@ With --json it prints the server's setup status as one object.
                        [--evidence off|workspace] [--on-unsupported flag|remove]
                        [--tries] [--context <file.json>]
        amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--force]
+       amdahl optimize --list <file.csv> --for <tool> [--channel email|linkedin]
        amdahl optimize --batch <id> [--list <file>] [--force]
 
 Rewrite an outbound email or LinkedIn message. Each file is one message; "-"
@@ -89,11 +90,28 @@ reads standard input. With no file, at a terminal, paste the message.
   --no-wait                    With --list: queue the batch and print its id.
   --batch <id>                 Pick up a batch queued earlier. With --list, the
                                same list; the results go next to it.
+  --for <tool>                 With a CSV --list: also write the messages Amdahl
+                               wrote as a CSV that tool imports, next to the
+                               list (drafts.csv for lemlist gets
+                               drafts-lemlist.csv), then print how to import it.
+                               Tools: instantly, smartlead, lemlist, heyreach,
+                               reply_io, apollo, outreach, salesloft, hubspot,
+                               lgm, woodpecker, or other (any tool that imports
+                               a CSV).
   --force                      Replace a results file that already exists.
 
 In the results CSV, a cell that starts with =, +, - or @ gets a ' in front, so
 a spreadsheet does not run it as a formula. That includes a phone number such
 as +1 555 0100 or a negative number you copied through. Delete the ' to use it.
+
+The --for file holds only the leads Amdahl wrote, with your columns after
+Amdahl's, except the column the message came from and the ones Amdahl reads
+(message, channel, evidence, on_unsupported, facts, rules, item_id). Your tool
+imports a value as it is, so no cell gets the ' guard (the results file keeps
+it). A lead that failed, needed input or has no email (no LinkedIn URL for
+LinkedIn) is left out, and counted. A tool that takes one channel needs no
+--channel; lemlist, reply_io and other take both, so add --channel. With
+--json, .send_to has the file and the counts.
 
 Output: the rewrite goes to stdout. What Amdahl did, and the run id, go to
 stderr. With --json it prints {"ok", "file", "result"}: the rewritten message

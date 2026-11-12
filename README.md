@@ -319,6 +319,7 @@ amdahl whoami                # the account, workspace and role you are signed in
 amdahl status                # can this workspace optimize, and what blocks it
 amdahl optimize draft.md     # rewrite one message (or pipe it in with -, or run it bare and paste)
 amdahl optimize --list drafts.csv   # rewrite a whole list in one batch
+amdahl optimize --list drafts.csv --for lemlist --channel email   # and a CSV lemlist imports
 amdahl search "what objections came up in lost deals?"   # ask about your customers
 amdahl connections           # what is connected, and whether it is healthy
 amdahl connect hubspot       # open the console's add page, to add a CRM or call recorder
@@ -363,7 +364,7 @@ amdahl auth token
 amdahl status
 amdahl optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
                 [--on-unsupported flag|remove] [--tries] [--context <file.json>]
-amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force] [the optimize flags]
+amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force] [--for <tool>] [the optimize flags]
 amdahl search "<question>" [--research] [--limit <n>]
 amdahl connections [--all]
 amdahl connect [<connector>] [--no-browser]
@@ -507,7 +508,8 @@ The list is a CSV file with a header row, or a JSONL file (`.jsonl` or
 `.ndjson`) with one batch item, a JSON object, per line. A CSV has a
 `message` column and may have `item_id`, `channel`, `evidence`,
 `on_unsupported`, `facts` and `rules`; facts and rules take one per line
-inside the cell. Any other column (a CRM export has many) is not sent: one
+inside the cell, and a channel is read in any case (`LinkedIn` is `linkedin`).
+Any other column (a CRM export has many) is not sent: one
 line names it, and it is copied to the results file in its place. Only a
 missing `message` column, or a column Amdahl reads that appears twice (a
 doubled `message`, say), is refused. A JSONL item takes any field a single
@@ -543,6 +545,65 @@ and exits. `--batch <id>` picks up a batch queued earlier; with `--list`, the
 results go next to that list and the list must have as many messages as the
 batch has items (exit 2 otherwise), otherwise they go to `<id>.optimized.jsonl`
 here. `--no-wait` with `--batch` exits 2: it only queues a new list.
+
+### Send the list to your sequencer
+
+```sh
+amdahl optimize --list drafts.csv --for lemlist --channel email
+```
+
+`--for <tool>` (a CSV list only) also writes the messages Amdahl wrote as a
+file that tool imports, next to the results, and prints three steps: where to
+import it, what to map, and what to paste into the step. The file is
+`<list>-<tool>.csv`: `drafts.csv` for lemlist gets `drafts-lemlist.csv`. The
+console's Send to writes the same file for the same list.
+
+```
+Results: drafts.optimized.csv
+Import file for lemlist: drafts-lemlist.csv
+38 messages ready for lemlist. 2 left out: 1 failed, 1 with no email.
+  1. Import: In your campaign, open Leads list > Import new leads > CSV.
+  2. email and the name columns map on their own. amdahl_subject and
+     amdahl_message become custom variables.
+  3. Paste into your step: Subject {{amdahl_subject}}, Body {{amdahl_message}}
+```
+
+- **Tools:** `instantly`, `smartlead`, `lemlist`, `heyreach`, `reply_io`,
+  `apollo`, `outreach`, `salesloft`, `hubspot`, `lgm` (La Growth Machine),
+  `woodpecker`, and `other` for any tool with a CSV import. Gmail and Outlook
+  send from a mailbox, so they have no import file.
+- **Channel:** a file is for one channel. A tool that takes one channel needs no
+  flag: HeyReach and La Growth Machine are LinkedIn, and the rest are email,
+  except lemlist, Reply.io and `other`, which take both. For those, add
+  `--channel email` or `--channel linkedin`, or put the channel in the list's
+  `channel` column. A list with both channels is refused.
+- **Rows:** only leads Amdahl wrote. A lead that failed, needed input or was not
+  written is left out, and so is one with no email (no LinkedIn URL for
+  LinkedIn; HeyReach also needs a first and a last name). The line after the
+  count says how many and why.
+- **Columns:** your list's `email`, `first_name`, `last_name`, `company` and
+  `linkedin_url`, found by header in any common spelling and named as the tool
+  names them (lemlist `firstName`, `companyName`; Instantly and Smartlead
+  `company_name`), then `amdahl_subject` and `amdahl_message` (just
+  `amdahl_message` for LinkedIn), then every other column of your list in its
+  order, as lowercase snake_case. The column the message came from (the first
+  whose header names a draft, such as `message`, `draft` or `body`) and the columns Amdahl
+  reads itself (`message`, `channel`, `evidence`, `on_unsupported`, `facts`,
+  `rules` and `item_id`, matched on the snake_case header, so `Item ID` too)
+  are not in the file. Your tool imports a value as it is, so no cell gets the `'`
+  guard that the results file has: a `-20% off` subject or a `+1 415...` phone
+  number arrives as written. Line breaks are CRLF, and there is no byte-order
+  mark.
+- **Checked first:** before anything is queued, a list the tool cannot import
+  exits 2: no email column for an email file, no LinkedIn URL column for a
+  LinkedIn one, a JSONL list (the file keeps your columns), a file that already
+  exists (`--force` replaces it). `--no-wait` queues the batch, and the line it
+  prints to pick it up carries `--for` and `--channel`.
+- **Under `--json`:** the file is still written, no steps are printed, and the
+  batch gains `send_to`: `tool`, `channel`, `file` (null when no lead was
+  ready), `ready`, `left_out` (`failed`, `not_written`, `needs_input`,
+  `no_contact`) and `over_limit`. With no lead ready, no file is written and
+  the exit is 1.
 
 ## After you send
 

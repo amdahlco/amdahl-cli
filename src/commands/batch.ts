@@ -7,7 +7,8 @@
 // The list is a CSV file with a header row, or a JSONL file with one batch
 // item (a JSON object) per line. A CSV has a `message` column and may have
 // `item_id`, `channel`, `evidence`, `on_unsupported`, `facts` and `rules`
-// (facts and rules one per line within the cell). Any other column (a CRM
+// (facts and rules one per line within the cell; a channel is read in any case,
+// so `LinkedIn` is `linkedin`). Any other column (a CRM
 // export has many) is not sent: it is named in one line and copied to the
 // results file, in its place. Only a missing `message` column is refused. The
 // optimize flags (`--channel`, `--evidence`, `--on-unsupported`, `--tries`,
@@ -20,7 +21,10 @@
 // `--no-wait` only queues the batch and prints its id; `--batch <id>` picks
 // up a batch queued earlier (with `--list`, its results go next to that list,
 // and the list must have as many messages as the batch has items). A results
-// file that already exists is not replaced without `--force`. A spreadsheet
+// file that already exists is not replaced without `--force`. With `--for
+// <tool>` (a CSV list only) a second file is written beside the results: the
+// written messages as an import file for that sequencer (see send-to.ts), and
+// the three steps to import it. A spreadsheet
 // runs a cell that starts with `=`, `+`, `-` or `@` as a formula, so the CSV
 // results start such a cell with a quote. Ctrl+C stops the wait, not the batch.
 
@@ -31,7 +35,8 @@ import { apiClient, call, resolveCredential, str, type Credential, type Ctx } fr
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { sentLines } from '../next-steps'
-import { clip, count, field, record, records, truthfulSummary } from '../text'
+import { buildSendToFile, guideLines, leftOutLine, overLimitLine, planSendTo, readyLine, sendToFileName, toolFor, writtenOf, SEND_TO_IDS, type SendToFile, type SendToPlan } from '../send-to'
+import { COLUMNS, clip, count, field, record, records, truthfulSummary, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -174,7 +179,7 @@ function csvList(path: string, text: string): ListFile {
       const value = row[j] ?? ''
       if (!CSV_COLUMNS.includes(name) || !value.trim()) return
       if (name === 'facts' || name === 'rules') context[name] = perLine(value)
-      else item[name] = name === 'message' ? value : value.trim()
+      else item[name] = name === 'message' ? value : name === 'channel' ? value.trim().toLowerCase() : value.trim()
     })
     if (Object.keys(context).length > 0) item.context = context
     return item
@@ -358,19 +363,79 @@ function assertFree(path: string, force: boolean): void {
   if (!force && existsSync(path)) throw usageError(`${path} already exists.`, 'Move it, or add --force to replace it.')
 }
 
+/**
+ * Write a file that must be new. `wx` fails when the file appeared since the
+ * check (while the batch ran), instead of replacing it; that says "already
+ * exists", as the check before the queue does, and how to read the batch again.
+ */
+function writeNew(path: string, text: string, force: boolean, pickUp: string): void {
+  try {
+    writeFileSync(path, text, { flag: force ? 'w' : 'wx' })
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code === 'EEXIST') {
+      throw usageError(`${path} already exists.`, `Move it, or add --force to replace it. The batch is done, and you can read it again: ${pickUp}`)
+    }
+    throw err
+  }
+}
+
 /** Write the results file for `list`. Returns its path. */
-function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean, contexts: unknown[]): string {
+function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean, contexts: unknown[], pickUp: string): string {
   const byIndex = new Map(items.map((i) => [i.index, i]))
   const path = resultsFile(list, id, cwd)
-  // `wx` fails when the file appeared since the check, instead of replacing it.
-  const flag = force ? 'w' : 'wx'
   if (list?.kind === 'csv' && list.header && list.rows) {
     const rows = [[...list.header, ...resultColumnNames(list.header)], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i), contexts[i])])]
-    writeFileSync(path, toCsv(rows.map((row) => row.map(neutralise))), { flag })
+    writeNew(path, toCsv(rows.map((row) => row.map(neutralise))), force, pickUp)
     return path
   }
-  writeFileSync(path, items.map((i) => JSON.stringify(i)).join('\n') + '\n', { flag })
+  writeNew(path, items.map((i) => JSON.stringify(i)).join('\n') + '\n', force, pickUp)
   return path
+}
+
+/** The import file for the plan's tool, written beside the list. `path` is null when no lead is ready, so no file is made. */
+function writeSendTo(plan: SendToPlan, list: ListFile, items: Record<string, unknown>[], force: boolean, pickUp: string): { built: SendToFile; path: string | null } {
+  const byIndex = new Map(items.map((i) => [i.index, i]))
+  const built = buildSendToFile({
+    path: list.path,
+    headers: list.header ?? [],
+    rows: (list.rows ?? []).map((cells, i) => ({ cells, written: writtenOf(byIndex.get(i)) })),
+    channel: plan.channel,
+    preset: plan.preset,
+  })
+  if (built.ready === 0) return { built, path: null }
+  const path = join(dirname(list.path), built.name)
+  writeNew(path, built.csv, force, pickUp)
+  return { built, path }
+}
+
+/** What `--for` adds to the batch in `--json`: the tool, the file, and what was left out. */
+function sendToJson(plan: SendToPlan, sent: { built: SendToFile; path: string | null }): Record<string, unknown> {
+  const { leftOut, ready, overLimit } = sent.built
+  return {
+    tool: plan.preset.id,
+    channel: plan.channel,
+    file: sent.path,
+    ready,
+    left_out: { failed: leftOut.failed, not_written: leftOut.unwritten, needs_input: leftOut.needsInput, no_contact: leftOut.noContact },
+    over_limit: overLimit,
+  }
+}
+
+/** The human lines after the import file is written: its path, what is in it, the three steps, and any note. */
+function printSendTo(ctx: Ctx, plan: SendToPlan, sent: { built: SendToFile; path: string | null }): void {
+  const { out } = ctx
+  const { preset, channel } = plan
+  const left = leftOutLine(sent.built.leftOut, channel, preset)
+  if (!sent.path) {
+    out.info(`Nothing to send to ${preset.label}.${left ? ` ${left}` : ''}`)
+    return
+  }
+  out.result({}, `Import file${preset.id === 'other' ? '' : ` for ${preset.label}`}: ${sent.path}`)
+  out.info(`${readyLine(sent.built.ready, preset)}.${left ? ` ${left}` : ''}`)
+  const steps = guideLines(preset, channel).map((line, i) => `${i + 1}. ${line}`)
+  const notes = [preset.note, sent.built.overLimit > 0 ? overLimitLine(sent.built.overLimit, preset) : undefined].filter((n): n is string => Boolean(n))
+  out.info(wrap(steps.join('\n'), COLUMNS, '  ').join('\n'))
+  for (const note of notes) out.info(wrap(note, COLUMNS).join('\n'))
 }
 
 /** The refusal of a body the server could not take, with the list line of the first item it names. */
@@ -386,7 +451,8 @@ function withLine(err: unknown, list: ListFile): unknown {
  * `amdahl optimize --list <file>` (and `--batch <id>`, `--no-wait`). `defaults`
  * are the optimize flags as request fields.
  */
-export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>): Promise<number> {
+export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>): Promise<number> {
+  let defaults = requested
   const { out, flags } = ctx
   const listPath = str(flags.list)
   const resume = str(flags.batch)
@@ -397,7 +463,17 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   if (resume && !BATCH_ID.test(resume)) {
     throw usageError('--batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.')
   }
+  const forFlag = str(flags.for)
+  if (typeof flags.for === 'string' && !forFlag) throw usageError('--for needs a tool.', `One of: ${SEND_TO_IDS.join(', ')}.`)
+  if (forFlag && !listPath) throw usageError('--for needs the list: add --list <file.csv>.')
+  const preset = forFlag ? toolFor(forFlag) : null
   const list = listPath ? readList(listPath) : null
+  // The tool and the list are checked together before anything is queued, so a list the tool cannot import costs nothing.
+  const plan = preset && list ? planSendTo(preset, list, typeof defaults.channel === 'string' ? defaults.channel : undefined) : null
+  if (plan) defaults = { ...defaults, channel: defaults.channel ?? plan.channel }
+  // The command that reads a batch again. The import file needs the tool, and its channel when the tool takes both.
+  const forPart = plan ? ` --for ${plan.preset.id}${plan.preset.channels.length > 1 ? ` --channel ${plan.channel}` : ''}` : ''
+  const pickUpFor = (batchId: string) => amdahlCommand(`optimize ${listPath ? `--list ${shellWord(listPath, ctx.io.platform)} ` : ''}--batch ${batchId}${forPart}`)
   if (list?.ignored?.length) {
     const shown = list.ignored.slice(0, 6).join(', ')
     const more = list.ignored.length > 6 ? ` and ${list.ignored.length - 6} more` : ''
@@ -409,6 +485,7 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const force = flags.force === true
   // Nothing is queued, read or waited for while the results have nowhere to go.
   if (!out.json && flags['no-wait'] !== true) assertFree(resultsFile(list, resume ?? '', ctx.io.cwd), force)
+  if (plan && list && flags['no-wait'] !== true) assertFree(join(dirname(list.path), sendToFileName(list.path, plan.preset)), force)
   const credential = await resolveCredential(ctx)
 
   let id = resume ?? ''
@@ -434,7 +511,7 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     }
     id = field(first.batch_id)
     if (!id) throw new CliError('no_batch_id', 'Amdahl accepted the list but sent no batch id.', EXIT.general)
-    const pickUp = amdahlCommand(`optimize --list ${shellWord(listPath ?? '', ctx.io.platform)} --batch ${id}`)
+    const pickUp = pickUpFor(id)
     if (flags['no-wait'] === true) {
       out.result({ ...first, ok: true }, `Queued ${count(list.items.length, 'message')} as batch ${id}.\nGet the results: ${pickUp}`)
       return EXIT.ok
@@ -449,17 +526,21 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const { batch, items } = await allItems(ctx, credential, id)
   const failed = items.filter((i) => i.status === 'failed' || record(i.result)?.ok === false).length
   if (out.json) {
-    out.result({ ...batch, ok: failed === 0, items, next_cursor: null })
-    return failed === 0 ? EXIT.ok : EXIT.general
+    const sent = plan && list ? writeSendTo(plan, list, items, force, pickUpFor(id)) : null
+    const ok = failed === 0 && (!sent || sent.built.ready > 0)
+    out.result({ ...batch, ok, items, next_cursor: null, ...(plan && sent ? { send_to: sendToJson(plan, sent) } : {}) })
+    return ok ? EXIT.ok : EXIT.general
   }
   // What each row was sent with, so a summary that speaks of the sender's facts and rules is kept only when there were some.
   const contexts = list ? withDefaults(list.items, defaults).map((item) => item.context) : []
-  const path = writeResults(list, id, items, ctx.io.cwd, force, contexts)
+  const path = writeResults(list, id, items, ctx.io.cwd, force, contexts, pickUpFor(id))
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
   out.result({}, `Results: ${path}`)
+  const sent = plan && list ? writeSendTo(plan, list, items, force, pickUpFor(id)) : null
+  if (plan && sent) printSendTo(ctx, plan, sent)
   // What to do once the messages are sent, with a real run id from this batch.
   const runId = items.map((i) => field(record(i.result)?.run_id)).find(Boolean)
   for (const line of sentLines(runId, 'Sent one?')) out.info(line)
-  return failed === 0 ? EXIT.ok : EXIT.general
+  return failed === 0 && (!sent || sent.built.ready > 0) ? EXIT.ok : EXIT.general
 }
