@@ -20,7 +20,10 @@
 // `--no-wait` only queues the batch and prints its id; `--batch <id>` picks
 // up a batch queued earlier (with `--list`, its results go next to that list,
 // and the list must have as many messages as the batch has items). A results
-// file that already exists is not replaced without `--force`. A spreadsheet
+// file that already exists is not replaced without `--force`. With `--for
+// <tool>` (a CSV list only) a second file is written beside the results: the
+// written messages as an import file for that sequencer (see send-to.ts), and
+// the three steps to import it. A spreadsheet
 // runs a cell that starts with `=`, `+`, `-` or `@` as a formula, so the CSV
 // results start such a cell with a quote. Ctrl+C stops the wait, not the batch.
 
@@ -31,7 +34,8 @@ import { apiClient, call, resolveCredential, str, type Credential, type Ctx } fr
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { sentLines } from '../next-steps'
-import { clip, count, field, record, records, truthfulSummary } from '../text'
+import { buildSendToFile, guideLines, leftOutLine, overLimitLine, planSendTo, readyLine, sendToFileName, toolFor, writtenOf, SEND_TO_IDS, type SendToFile, type SendToPlan } from '../send-to'
+import { COLUMNS, clip, count, field, record, records, truthfulSummary, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -373,6 +377,52 @@ function writeResults(list: ListFile | null, id: string, items: Record<string, u
   return path
 }
 
+/** The import file for the plan's tool, written beside the list. `path` is null when no lead is ready, so no file is made. */
+function writeSendTo(plan: SendToPlan, list: ListFile, items: Record<string, unknown>[], force: boolean): { built: SendToFile; path: string | null } {
+  const byIndex = new Map(items.map((i) => [i.index, i]))
+  const built = buildSendToFile({
+    path: list.path,
+    headers: list.header ?? [],
+    rows: (list.rows ?? []).map((cells, i) => ({ cells, written: writtenOf(byIndex.get(i)) })),
+    channel: plan.channel,
+    preset: plan.preset,
+  })
+  if (built.ready === 0) return { built, path: null }
+  const path = join(dirname(list.path), built.name)
+  writeFileSync(path, built.csv, { flag: force ? 'w' : 'wx' })
+  return { built, path }
+}
+
+/** What `--for` adds to the batch in `--json`: the tool, the file, and what was left out. */
+function sendToJson(plan: SendToPlan, sent: { built: SendToFile; path: string | null }): Record<string, unknown> {
+  const { leftOut, ready, overLimit } = sent.built
+  return {
+    tool: plan.preset.id,
+    channel: plan.channel,
+    file: sent.path,
+    ready,
+    left_out: { failed: leftOut.failed, not_written: leftOut.unwritten, needs_input: leftOut.needsInput, no_contact: leftOut.noContact },
+    over_limit: overLimit,
+  }
+}
+
+/** The human lines after the import file is written: its path, what is in it, the three steps, and any note. */
+function printSendTo(ctx: Ctx, plan: SendToPlan, sent: { built: SendToFile; path: string | null }): void {
+  const { out } = ctx
+  const { preset, channel } = plan
+  const left = leftOutLine(sent.built.leftOut, channel, preset)
+  if (!sent.path) {
+    out.info(`Nothing to send to ${preset.label}.${left ? ` ${left}` : ''}`)
+    return
+  }
+  out.result({}, `Import file${preset.id === 'other' ? '' : ` for ${preset.label}`}: ${sent.path}`)
+  out.info(`${readyLine(sent.built.ready, preset)}.${left ? ` ${left}` : ''}`)
+  const steps = guideLines(preset, channel).map((line, i) => `${i + 1}. ${line}`)
+  const notes = [preset.note, sent.built.overLimit > 0 ? overLimitLine(sent.built.overLimit, preset) : undefined].filter((n): n is string => Boolean(n))
+  out.info(wrap(steps.join('\n'), COLUMNS, '  ').join('\n'))
+  for (const note of notes) out.info(wrap(note, COLUMNS).join('\n'))
+}
+
 /** The refusal of a body the server could not take, with the list line of the first item it names. */
 function withLine(err: unknown, list: ListFile): unknown {
   if (!(err instanceof CliError)) return err
@@ -386,7 +436,8 @@ function withLine(err: unknown, list: ListFile): unknown {
  * `amdahl optimize --list <file>` (and `--batch <id>`, `--no-wait`). `defaults`
  * are the optimize flags as request fields.
  */
-export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>): Promise<number> {
+export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>): Promise<number> {
+  let defaults = requested
   const { out, flags } = ctx
   const listPath = str(flags.list)
   const resume = str(flags.batch)
@@ -397,7 +448,14 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   if (resume && !BATCH_ID.test(resume)) {
     throw usageError('--batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.')
   }
+  const forFlag = str(flags.for)
+  if (typeof flags.for === 'string' && !forFlag) throw usageError('--for needs a tool.', `One of: ${SEND_TO_IDS.join(', ')}.`)
+  if (forFlag && !listPath) throw usageError('--for needs the list: add --list <file.csv>.')
+  const preset = forFlag ? toolFor(forFlag) : null
   const list = listPath ? readList(listPath) : null
+  // The tool and the list are checked together before anything is queued, so a list the tool cannot import costs nothing.
+  const plan = preset && list ? planSendTo(preset, list, typeof defaults.channel === 'string' ? defaults.channel : undefined) : null
+  if (plan) defaults = { ...defaults, channel: defaults.channel ?? plan.channel }
   if (list?.ignored?.length) {
     const shown = list.ignored.slice(0, 6).join(', ')
     const more = list.ignored.length > 6 ? ` and ${list.ignored.length - 6} more` : ''
@@ -409,6 +467,7 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const force = flags.force === true
   // Nothing is queued, read or waited for while the results have nowhere to go.
   if (!out.json && flags['no-wait'] !== true) assertFree(resultsFile(list, resume ?? '', ctx.io.cwd), force)
+  if (plan && list && flags['no-wait'] !== true) assertFree(join(dirname(list.path), sendToFileName(list.path, plan.preset)), force)
   const credential = await resolveCredential(ctx)
 
   let id = resume ?? ''
@@ -434,7 +493,9 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     }
     id = field(first.batch_id)
     if (!id) throw new CliError('no_batch_id', 'Amdahl accepted the list but sent no batch id.', EXIT.general)
-    const pickUp = amdahlCommand(`optimize --list ${shellWord(listPath ?? '', ctx.io.platform)} --batch ${id}`)
+    // The import file needs the tool, and its channel when the tool takes both.
+    const forPart = plan ? ` --for ${plan.preset.id}${plan.preset.channels.length > 1 ? ` --channel ${plan.channel}` : ''}` : ''
+    const pickUp = amdahlCommand(`optimize --list ${shellWord(listPath ?? '', ctx.io.platform)} --batch ${id}${forPart}`)
     if (flags['no-wait'] === true) {
       out.result({ ...first, ok: true }, `Queued ${count(list.items.length, 'message')} as batch ${id}.\nGet the results: ${pickUp}`)
       return EXIT.ok
@@ -449,8 +510,10 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const { batch, items } = await allItems(ctx, credential, id)
   const failed = items.filter((i) => i.status === 'failed' || record(i.result)?.ok === false).length
   if (out.json) {
-    out.result({ ...batch, ok: failed === 0, items, next_cursor: null })
-    return failed === 0 ? EXIT.ok : EXIT.general
+    const sent = plan && list ? writeSendTo(plan, list, items, force) : null
+    const ok = failed === 0 && (!sent || sent.built.ready > 0)
+    out.result({ ...batch, ok, items, next_cursor: null, ...(plan && sent ? { send_to: sendToJson(plan, sent) } : {}) })
+    return ok ? EXIT.ok : EXIT.general
   }
   // What each row was sent with, so a summary that speaks of the sender's facts and rules is kept only when there were some.
   const contexts = list ? withDefaults(list.items, defaults).map((item) => item.context) : []
@@ -458,8 +521,10 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
   out.result({}, `Results: ${path}`)
+  const sent = plan && list ? writeSendTo(plan, list, items, force) : null
+  if (plan && sent) printSendTo(ctx, plan, sent)
   // What to do once the messages are sent, with a real run id from this batch.
   const runId = items.map((i) => field(record(i.result)?.run_id)).find(Boolean)
   for (const line of sentLines(runId, 'Sent one?')) out.info(line)
-  return failed === 0 ? EXIT.ok : EXIT.general
+  return failed === 0 && (!sent || sent.built.ready > 0) ? EXIT.ok : EXIT.general
 }

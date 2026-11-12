@@ -49,6 +49,7 @@ export const COMMAND_OPTIONS: Record<string, OptionSpec> = {
     batch: { type: 'string' },
     'no-wait': { type: 'boolean' },
     force: { type: 'boolean' },
+    for: { type: 'string' },
   },
   search: { research: { type: 'boolean' }, limit: { type: 'string' } },
   connections: { all: { type: 'boolean' } },
@@ -223,6 +224,10 @@ What you can do:
   amdahl optimize --list drafts.csv
                                  Rewrite a whole list in one batch; results go
                                  to drafts.optimized.csv
+  amdahl optimize --list drafts.csv --for lemlist
+                                 Also write drafts-lemlist.csv, a file your
+                                 sequencer imports, and say how (Instantly,
+                                 Smartlead, lemlist, HeyReach, Apollo and more)
   amdahl search "<question>"     Ask about your customers, calls and deals
   amdahl connect hubspot         Add a CRM or call recorder in the console
                                  (amdahl connections lists what is connected)
@@ -249,13 +254,20 @@ Commands:
            --json prints {ok, file, result}: the message is .result.message
            and the run id is .result.run_id.
   optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force]
-           [the optimize flags above, for every message]
+           [--for <tool>] [the optimize flags above, for every message]
            A CSV needs a message column, and may have item_id, channel,
            evidence, on_unsupported, facts and rules. Any other column is
            copied to the results as it is. --batch <id> picks up a batch
            queued earlier, with the same list. --force replaces an existing
            results file. In the results CSV, a cell that starts with =, +, -
            or @ (a phone number, say) gets a ' in front: it is no formula.
+           --for <tool>  a CSV list only: also write the messages Amdahl wrote
+                       as a CSV that tool imports (<list>-<tool>.csv), and say
+                       how to import it. Tools: instantly, smartlead, lemlist,
+                       heyreach, reply_io, apollo, outreach, salesloft,
+                       hubspot, lgm, woodpecker, other (any tool that imports
+                       a CSV). lemlist, reply_io and other take both channels,
+                       so add --channel email|linkedin.
   search "<question>" [--research] [--limit <n>]
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset

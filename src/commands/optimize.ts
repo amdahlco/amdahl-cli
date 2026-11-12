@@ -402,6 +402,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   }
   if (ctx.flags['no-wait'] === true) throw usageError('--no-wait goes with --list <file>.')
   if (ctx.flags.force === true) throw usageError('--force goes with --list <file>.')
+  if (ctx.flags.for !== undefined) throw usageError('--for goes with --list <file.csv>.')
   let files = args
   if (files.length === 0) {
     // An agent may run commands in a terminal, and so may a CI job: neither can paste, so they get the usage.

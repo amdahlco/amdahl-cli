@@ -90,6 +90,8 @@ export interface MockOptions {
   batchMessage?: string
   /** The one-line summary every batch item comes back with (default: `Tighter opener.`). */
   batchSummary?: string
+  /** A whole item's status and result by its index, when the default message does not do. */
+  batchResults?: (item: Record<string, unknown>, index: number) => { status: string; result: Record<string, unknown> | null } | undefined
 }
 
 export interface MockServer {
@@ -420,10 +422,12 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             items: page.map(({ item, index }) => ({
               index,
               item_id: (item.item_id as string | undefined) ?? null,
-              status: done ? (options.batchFailures?.includes(index) ? 'failed' : 'done') : 'queued',
+              status: done ? (options.batchResults?.(item, index)?.status ?? (options.batchFailures?.includes(index) ? 'failed' : 'done')) : 'queued',
               result: !done
                 ? null
-                : options.batchFailures?.includes(index)
+                : options.batchResults?.(item, index)
+                  ? options.batchResults(item, index)?.result
+                  : options.batchFailures?.includes(index)
                   ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
                   : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: options.batchSummary ?? 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false },
             })),
