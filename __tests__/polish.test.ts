@@ -2,11 +2,11 @@
 // block is one item of Dom's cold QA of 0.4.0, against the mock server (which
 // refuses what the real server refuses).
 
-import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { COMMAND_OPTIONS, USAGE, parseCommandLine } from '../src/args'
-import { progressKey, progressLine } from '../src/commands/batch'
+import { parseCsv, progressKey, progressLine } from '../src/commands/batch'
 import { SEND_PROVIDERS } from '../src/commands/feedback'
 import { searchLines } from '../src/commands/search'
 import { HELP_COMMANDS, commandHelp } from '../src/help'
@@ -96,8 +96,8 @@ describe('search: what a person reads', () => {
   })
 })
 
-describe('a credential that cannot do a thing says so in one plain line', () => {
-  const hint = 'Use a Customer agent key, or run `amdahl login` again.'
+describe('a refused credential: a plain sentence, and the same code and hint as 0.4.0', () => {
+  const scope = (verb: string) => `This credential cannot ${verb}. Use a Customer agent key, or run \`amdahl login\` again.`
 
   it('a read-only key: optimize, a list, feedback and sent each say what this credential cannot do, never "Missing required scope(s)"', async () => {
     const io = await withKey(READONLY_KEY)
@@ -113,32 +113,51 @@ describe('a credential that cannot do a thing says so in one plain line', () => 
     ]
     for (const [args, verb] of calls) {
       const r = await cli(io, ...args)
-      expect([r.code, r.stderr], args[0]).toEqual([4, `Error: This credential cannot ${verb}.\n${hint}\n`])
+      expect([r.code, r.stderr], args[0]).toEqual([4, `Error: ${scope(verb)}\n`])
       expect(r.stderr).not.toContain('Missing required')
     }
+    // --json: the server's code and no hint, as in 0.4.0 (an agent branches on `code`); only the message is plain.
     const json = await cli(io, 'optimize', draft, '--json')
-    expect(json.json).toEqual({ ok: false, error: { code: 'missing_scope', message: 'This credential cannot optimize.', hint } })
-    // The raw refusal reached the CLI: the server's words are what the mock sends.
+    expect(json.json).toEqual({ ok: false, error: { code: 'forbidden', message: scope('optimize') } })
     expect(requests('/messages/optimize').length).toBeGreaterThan(0)
   })
-})
 
-describe('a key the server will not take prints one line', () => {
-  it('a bad or revoked key from AMDAHL_KEY or --api-key says so and what to do', async () => {
+  it('the --json error code is the one the server sent, whatever it is, for a refused scope and a refused key', async () => {
+    const io = await withKey(READONLY_KEY, { forbiddenCode: 'scope_denied', unauthenticatedCode: 'token_revoked' })
+    const draft = join(io.homedir, 'a.md')
+    writeFileSync(draft, 'draft')
+    expect((await cli(io, 'optimize', draft, '--json')).json.error.code).toBe('scope_denied')
+    const bad = fakeIo({ AMDAHL_API_URL: server!.url, AMDAHL_KEY: 'amdhl_revoked' })
+    expect((await cli(bad, 'status', '--json')).json.error.code).toBe('token_revoked')
+  })
+
+  it('a bad or revoked key says so in a sentence, and keeps the code and the hint 0.4.0 printed', async () => {
     const io = await withKey('amdhl_revoked')
-    const env = await cli(io, 'status')
-    expect(env).toMatchObject({ code: 3, stderr: "Error: This key isn't valid (revoked or expired). Unset AMDAHL_KEY, then run amdahl login.\n" })
+    const hint = 'Run `amdahl login`, or check AMDAHL_KEY.'
+    const sentence = "This key isn't valid (revoked or expired)."
+    expect(await cli(io, 'status')).toMatchObject({ code: 3, stderr: `Error: ${sentence}\n${hint}\n` })
     const flag = await cli(fakeIo({ AMDAHL_API_URL: server!.url }), 'status', '--api-key', 'amdhl_revoked')
-    expect(flag).toMatchObject({ code: 3, stderr: "Error: This key isn't valid (revoked or expired). Drop --api-key, then run amdahl login.\n" })
+    expect(flag).toMatchObject({ code: 3, stderr: `Error: ${sentence}\n${hint}\n` })
     const npx = fakeIo({ AMDAHL_API_URL: server!.url, AMDAHL_KEY: 'amdhl_revoked', npm_command: 'exec' })
-    expect((await cli(npx, 'search', 'x')).stderr).toBe("Error: This key isn't valid (revoked or expired). Unset AMDAHL_KEY, then run npx -y amdahl login.\n")
-    expect((await cli(io, 'status', '--json')).json).toEqual({ ok: false, error: { code: 'invalid_key', message: "This key isn't valid (revoked or expired). Unset AMDAHL_KEY, then run amdahl login." } })
+    expect((await cli(npx, 'search', 'x')).stderr).toBe(`Error: ${sentence}\nRun \`npx -y amdahl login\`, or check AMDAHL_KEY.\n`)
+    // --json: the server's code and the same hint as before; only the message is plain.
+    expect((await cli(io, 'status', '--json')).json).toEqual({ ok: false, error: { code: 'Unauthorized', message: sentence, hint } })
+  })
+
+  it('an OAuth access token the server will not take says "token", not "key"', async () => {
+    server = await startMockServer()
+    const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_ACCESS_TOKEN: 'at_revoked' })
+    const r = await cli(io, 'status')
+    expect(r).toMatchObject({ code: 3, stderr: "Error: This token isn't valid (revoked or expired).\nRun `amdahl login`, or check AMDAHL_KEY.\n" })
+    expect((await cli(io, 'status', '--json')).json.error).toMatchObject({ code: 'Unauthorized', message: "This token isn't valid (revoked or expired)." })
   })
 
   it('a sign-in the server no longer takes says so', async () => {
     const io = await signedIn()
     for (const token of server!.issued.access) server!.revoked.push(token)
-    expect(await cli(io, 'status')).toMatchObject({ code: 3, stderr: 'Error: Your sign-in is no longer valid. Run amdahl login.\n' })
+    const r = await cli(io, 'status')
+    expect(r).toMatchObject({ code: 3, stderr: 'Error: Your sign-in is no longer valid.\nRun `amdahl login`, or check AMDAHL_KEY.\n' })
+    expect((await cli(io, 'status', '--json')).json.error).toEqual({ code: 'Unauthorized', message: 'Your sign-in is no longer valid.', hint: 'Run `amdahl login`, or check AMDAHL_KEY.' })
   })
 })
 
@@ -363,11 +382,11 @@ describe('after an optimize: what to do once it is sent', () => {
     const file = join(io.homedir, 'a.md')
     writeFileSync(file, 'draft')
     const r = await cli(io, 'optimize', file)
-    expect(r.stderr).toBe('Tighter.\nRun: 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\nSent it? amdahl sent|feedback 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\n')
+    expect(r.stderr).toBe('Tighter.\nRun: 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\nSent it? amdahl sent 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16 --evidence did_it_myself --outcome used\n')
     expect((await cli(io, 'optimize', file, '--json')).stderr).toBe('')
     // Under npx, the command is named as it is run.
     io.env.npm_command = 'exec'
-    expect((await cli(io, 'optimize', file)).stderr).toContain('Sent it? npx -y amdahl sent|feedback 9fd4f2e3-')
+    expect((await cli(io, 'optimize', file)).stderr).toContain('Sent it? npx -y amdahl sent 9fd4f2e3-')
     // No run id, no line.
     server!.options.optimizeResult = { ok: true, message: 'Hi', summary: 'Tighter.' }
     expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter.\n')
@@ -383,7 +402,7 @@ describe('after an optimize: what to do once it is sent', () => {
     const list = join(io.homedir, 'l.jsonl')
     writeFileSync(list, '{"message":"a"}\n{"message":"b"}\n')
     const batch = await cli(io, 'optimize', '--list', list)
-    expect(batch.stderr).toContain('Sent one? amdahl sent|feedback 99999999-9999-4999-8999-000000000000 (each row has its run id)\n')
+    expect(batch.stderr).toContain('Sent one? amdahl sent 99999999-9999-4999-8999-000000000000 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback 99999999-9999-4999-8999-000000000000 --evidence did_it_myself --outcome used\n')
     server!.options.batchFailures = [0, 1]
     const failed = await cli(io, 'optimize', '--list', list, '--force')
     expect(failed.stderr).not.toContain('Sent one?')
@@ -414,5 +433,114 @@ describe('the mock matches the server it stands for', () => {
     expect(await get(API_KEY)).toBe(200)
     expect(await get(READONLY_KEY)).toBe(200)
     expect(await get('amdhl_unknown')).toBe(401)
+  })
+})
+
+describe('the two lines after an optimize are commands to paste', () => {
+  it('each holds a command with the real run id and placeholders for the flags it needs, and runs once they are filled in', async () => {
+    const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi', summary: 'Tighter.', run_id: KNOWN_RUN } })
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    const lines = (await cli(io, 'optimize', file)).stderr.split('\n').filter(Boolean)
+    const [sent, feedback] = lines.slice(-2) as [string, string]
+    expect(sent.startsWith(`Sent it? amdahl sent ${KNOWN_RUN} --provider <provider> `)).toBe(true)
+    expect(feedback.startsWith(`Or say how it went: amdahl feedback ${KNOWN_RUN} `)).toBe(true)
+    // No shell pipe: a person who pastes the command must not run another program.
+    expect(sent + feedback).not.toContain('|')
+    // Fill the placeholders in and run each line as it stands: both succeed.
+    const run = async (line: string) => {
+      const argv = line.slice(line.indexOf('amdahl ') + 'amdahl '.length).replace('<provider>', 'other').replace('<channel>', 'email').replace('<id>', 'x1').split(' ')
+      return cli(io, ...argv)
+    }
+    expect((await run(sent)).code).toBe(0)
+    expect((await run(feedback)).code).toBe(0)
+    // Pasted as printed, `sent` is refused before it sends anything, instead of running something else.
+    const before = server!.log.length
+    expect((await cli(io, ...sent.slice(sent.indexOf('amdahl ') + 7).split(' '))).code).toBe(2)
+    expect(server!.log.length).toBe(before)
+  })
+})
+
+describe('a summary that is true of the run', () => {
+  const claim = 'Written from your context, with every sentence checked against your facts and rules.'
+
+  it('a single run keeps the summary line only when facts or rules were sent', async () => {
+    const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi', summary: claim, run_id: 'r1' } })
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    expect((await cli(io, 'optimize', file)).stderr).not.toContain('facts and rules')
+    const ctx = join(io.homedir, 'ctx.json')
+    writeFileSync(ctx, JSON.stringify({ facts: ['Dana runs ops'] }))
+    expect((await cli(io, 'optimize', file, '--context', ctx)).stderr).toContain(claim)
+    writeFileSync(ctx, JSON.stringify({ voice_examples: ['Hi, quick one.'], facts: [], rules: [] }))
+    expect((await cli(io, 'optimize', file, '--context', ctx)).stderr).not.toContain(claim)
+    // A summary that says something else is kept either way, and --json is the server's answer.
+    server!.options.optimizeResult = { ok: true, message: 'Hi', summary: 'Tightened the opener.', run_id: 'r1' }
+    expect((await cli(io, 'optimize', file)).stderr).toContain('Tightened the opener.')
+    server!.options.optimizeResult = { ok: true, message: 'Hi', summary: claim, run_id: 'r1' }
+    expect((await cli(io, 'optimize', file, '--json')).json.result.summary).toBe(claim)
+  })
+
+  it('a batch row gets an empty summary cell when its run had neither facts nor rules, and keeps it when it had either', async () => {
+    const io = await signedIn({ batchSummary: claim })
+    const list = join(io.cwd, 'f.csv')
+    writeFileSync(list, 'message,facts,rules\nno context,,\nwith a fact,Dana runs ops,\nwith a rule,,Never say just\n')
+    expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
+    const rows = parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows
+    expect(rows.map((r) => r[5])).toEqual(['summary', '', claim, claim])
+    // Rules from --context reach every row.
+    const ctx = join(io.homedir, 'ctx.json')
+    writeFileSync(ctx, JSON.stringify({ rules: ['Be brief'] }))
+    expect((await cli(io, 'optimize', '--list', list, '--context', ctx, '--force')).code).toBe(0)
+    expect(parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows.map((r) => r[5])).toEqual(['summary', claim, claim, claim])
+    // A summary that makes no such claim is kept for a row with no context.
+    server!.options.batchSummary = 'Tighter opener.'
+    expect((await cli(io, 'optimize', '--list', list, '--force')).code).toBe(0)
+    expect(parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows[1]?.[5]).toBe('Tighter opener.')
+  })
+})
+
+describe('sent: an edit needs its text', () => {
+  const edited = ['sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', 'x1']
+
+  it('refuses --sent-as edited with an empty or blank --sent-text file or empty standard input, before any request', async () => {
+    const io = await signedIn()
+    const before = server!.log.length
+    const empty = join(io.cwd, 'empty.txt')
+    writeFileSync(empty, '')
+    const r = await cli(io, ...edited, '--sent-text', empty)
+    expect(r).toMatchObject({ code: 2, stderr: `Error: --sent-text ${empty} is empty. An edited send needs the message as you sent it.\n` })
+    writeFileSync(empty, '  \n\t\n')
+    expect((await cli(io, ...edited, '--sent-text', empty)).code).toBe(2)
+    io.stdinText = '   '
+    expect(await cli(io, ...edited, '--sent-text', '-')).toMatchObject({ code: 2, stderr: 'Error: Standard input is empty. An edited send needs the message as you sent it.\n' })
+    expect(server!.log.length).toBe(before)
+    // Text, even with an empty line around it, goes through; `returned` needs none.
+    writeFileSync(empty, '\nHi Dana, as sent\n')
+    expect((await cli(io, ...edited, '--sent-text', empty)).code).toBe(0)
+  })
+})
+
+describe('the help says what the server allows and what the CLI guards', () => {
+  it('sent: at least one of a send id and a recipient, a recipient or a hash but not both; a send id with a recipient is fine', () => {
+    for (const text of [commandHelp(['sent'])!, USAGE]) {
+      expect(text).toContain('[--provider-send-id <id>]')
+      expect(text).toContain('[--recipient <email|url> | --recipient-key-hash <sha256>]')
+      expect(text).not.toContain('(--provider-send-id <id> | --recipient')
+    }
+    expect(commandHelp(['sent'])).toContain('Give at least one of --provider-send-id and a recipient (--recipient or')
+    expect(commandHelp(['sent'])).toContain('A send id with a recipient is fine')
+  })
+
+  it('optimize --list: a cell that starts with = + - or @ gets a quote in the results, phone numbers included', async () => {
+    for (const text of [commandHelp(['optimize'])!, USAGE]) {
+      expect(text).toMatch(/starts with =, \+, - ?\n? *or @|starts with =, \+, -\s+or @/)
+      expect(text).toContain("gets a '")
+    }
+    const io = await signedIn()
+    const list = join(io.cwd, 'phones.csv')
+    writeFileSync(list, 'message,phone,balance\nHi,+1 555 0100,-20\n')
+    expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
+    expect(parseCsv(readFileSync(join(io.cwd, 'phones.optimized.csv'), 'utf8')).rows[1]?.slice(0, 3)).toEqual(['Hi', "'+1 555 0100", "'-20"])
   })
 })

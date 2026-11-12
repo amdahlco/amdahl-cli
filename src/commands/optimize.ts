@@ -28,6 +28,8 @@ import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
+import { sentLines } from '../next-steps'
+import { truthfulSummary } from '../text'
 import { atTerminal } from '../terminal'
 import { browserSignIn } from './auth'
 import { optimizeList } from './batch'
@@ -250,16 +252,6 @@ export function feedbackLines(ctx: Ctx, result: Record<string, unknown>): string
   return [`Run: ${runId}`, `Feedback: ${url}`]
 }
 
-/**
- * The line after a run that points to what to do once the message is sent:
- * `amdahl sent <run-id>` or `amdahl feedback <run-id>`, with the run's own id.
- * Empty when the run has no id.
- */
-export function sentLines(result: Record<string, unknown>): string[] {
-  const runId = text(result.run_id)
-  return runId ? [`Sent it? ${amdahlCommand('sent')}|feedback ${runId}`] : []
-}
-
 /** What a person is asked when the message is pasted at the terminal. */
 export const PASTE_PROMPT = 'Paste an email or LinkedIn message, then press Enter on an empty line:'
 /** The rule above Amdahl's version of a pasted message. */
@@ -396,7 +388,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
   const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
-  out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result), ...connect, nextTimeLine(ctx)].join('\n'))
+  out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result.run_id), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
 
@@ -452,9 +444,9 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     if (!out.json) {
       if (inputs.length > 1) out.info(`== ${file} ==`)
       if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
-      else if (typeof result.summary === 'string') out.info(result.summary)
+      else if (typeof result.summary === 'string' && truthfulSummary(result.summary, base.context)) out.info(truthfulSummary(result.summary, base.context))
       out.result({}, String(result.message ?? ''))
-      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result)]
+      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result.run_id)]
       if (lines.length) out.info(lines.join('\n'))
     }
   }

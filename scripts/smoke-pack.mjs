@@ -7,7 +7,7 @@
 // (packages/amdahl), install it the way `npx amdahl` does (a project whose
 // only dependency is `amdahl`, with @amdahl/cli taken from the tarball just
 // packed), and run `amdahl --help` and `--version` through it: through
-// `npm exec` and through its own bin. Last, fake a Node older than 20 and
+// `npm exec` and through its own bin. Last, fake a Node older than 22 and
 // check that both bins stop with the plain Node message. Exits non-zero on
 // any failure.
 //
@@ -70,7 +70,7 @@ try {
   }
   console.log(`ok: ${shortTgz} runs @amdahl/cli ${version} (npx amdahl --help, --version)`)
 
-  // On a Node older than 20 (faked by a preload), both bins stop before the
+  // On a Node older than 22 (faked by a preload), both bins stop before the
   // CLI loads, with a line that says what to do.
   const fake = join(work, 'fake-node-18.cjs')
   writeFileSync(fake, "Object.defineProperty(process, 'versions', { value: Object.assign({}, process.versions, { node: '18.19.1' }) })\n")
@@ -82,11 +82,11 @@ try {
       failed = err
     }
     const said = failed ? String(failed.stderr) : ''
-    if (!failed || failed.status !== 1 || !said.startsWith('amdahl needs Node.js 20 or later. This computer has Node.js 18.19.1.')) {
+    if (!failed || failed.status !== 1 || !said.startsWith('amdahl needs Node.js 22 or later. This computer has Node.js 18.19.1.')) {
       throw new Error(`${binFile} on Node 18 did not stop with the Node message:\n${said}`)
     }
   }
-  console.log('ok: on Node 18 both bins say "amdahl needs Node.js 20 or later" and exit 1')
+  console.log('ok: on Node 18 both bins say "amdahl needs Node.js 22 or later" and exit 1')
 } finally {
   rmSync(work, { recursive: true, force: true })
 }

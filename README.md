@@ -44,9 +44,8 @@ Full steps: https://amdahl.ai/connect
 ## Install
 
 Needs Node.js 22 or later. Node.js 20 reached end of life in April 2026 and
-gets no security fixes. `amdahl` still starts on it, but npm warns when it
-installs. On a Node older than 20, `amdahl` stops before it does anything,
-names the version it found, and links the Node.js download page.
+gets no security fixes. On a Node older than 22, `amdahl` stops before it does
+anything, names the version it found, and links the Node.js download page.
 
 ```sh
 # Run once, with no install
@@ -372,7 +371,7 @@ amdahl open [--no-browser]
 amdahl feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
                 [--outcome used|used_with_edits|not_used|unsure] [--sent-text <file>|-] [--comment <text>]
 amdahl sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited
-                (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+                [--provider-send-id <id>] [--recipient <email|url> | --recipient-key-hash <sha256>]
                 [--sent-at <time>] [--provider-campaign-id <id>] [--sequence-step <n>]
                 [--provider-variant-id <id>] [--provider-lead-id <id>] [--thread-id <id>]
                 [--sent-text <file>|-]
@@ -510,7 +509,8 @@ The list is a CSV file with a header row, or a JSONL file (`.jsonl` or
 `on_unsupported`, `facts` and `rules`; facts and rules take one per line
 inside the cell. Any other column (a CRM export has many) is not sent: one
 line names it, and it is copied to the results file in its place. Only a
-missing `message` column is refused. A JSONL item takes any field a single
+missing `message` column, or a column Amdahl reads that appears twice (a
+doubled `message`, say), is refused. A JSONL item takes any field a single
 optimize takes, and the server refuses a key it does not know. The optimize flags (`--channel`,
 `--evidence`, `--on-unsupported`, `--tries`, `--context`) apply to every
 item that does not set its own; a row's facts and a `--context` file's rules
@@ -531,7 +531,10 @@ names the line of the first item the server refused.
 
 A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula,
 so in the results CSV such a cell (and one that starts with a tab or a
-carriage return) starts with a `'`. The CLI does not replace a results file
+carriage return) starts with a `'`. That includes the cells copied through
+from your own columns: a phone number such as `+1 555 0100` or a negative
+number gets the `'` too, and you delete it to use the value. The `'` is the
+guard, so it stays. The CLI does not replace a results file
 that already exists: it exits 2 before it queues anything, and `--force`
 replaces the file.
 
@@ -568,14 +571,16 @@ accepted and means `linkedin_message`, as in `amdahl optimize --channel`),
 `--sent-as` (`returned` or `edited`) and `--sent-at` (a time with a time
 zone; the current time when left out), then the optional ids. `--sent-as
 edited` needs `--sent-text`, the message as you sent it (Amdahl keeps only a
-hash of it). That is the CLI's rule, not the server's. A run id given twice,
-or two run ids, exits 2.
+hash of it), and the file must not be empty. That is the CLI's rule, not the
+server's. A run id given twice, or two run ids, exits 2.
 
-The server stores a report only when it can tell which send it is, so one of
-`--provider-send-id`, `--recipient` (an email address, or a LinkedIn profile
-URL for a LinkedIn channel) or `--recipient-key-hash` (a SHA-256) is required.
-A campaign, a lead and a step are not enough. Without one, the CLI exits 2
-before it sends anything. The id is the provider's own: for gmail, the
+The server stores a report only when it can tell which send it is, so you give
+at least one of `--provider-send-id` and a recipient: `--recipient` (an email
+address, or a LinkedIn profile URL for a LinkedIn channel) or
+`--recipient-key-hash` (a SHA-256), never both. A send id with a recipient is
+fine, and the server then counts a report with and one without the id as one
+send. A campaign, a lead and a step are not enough. Without a send id or a
+recipient, the CLI exits 2 before it sends anything. The id is the provider's own: for gmail, the
 `Message-ID` header with its angle brackets; never an email address (give that
 as `--recipient`; Amdahl stores only a hash of it). The command reports one
 send, so give one run id. To report many at once, call
@@ -604,8 +609,12 @@ lines; `--json` never carries them.
   day it resets; a role too low, ask a workspace admin.
 - Bare `amdahl`, signed in, with every tool set up: what to try here.
 - After an optimize (one file, a pasted message, or a list) a line says what
-  to do once the message is sent: `Sent it? amdahl sent|feedback <run-id>`,
-  with the run's own id. A list prints the first run id of its results.
+  to do once the message is sent: two lines, each a command to paste, with
+  the run's own id and the flags it needs as placeholders (`amdahl sent
+  <run-id> --provider <provider> --channel <channel> --sent-as returned
+  --provider-send-id <id>`, then `amdahl feedback <run-id> --evidence
+  did_it_myself --outcome used`). A list prints the first run id of its
+  results. Replace each `<placeholder>` before you run it.
 - `amdahl optimize` no longer prints the server's `what_changed` line. It is
   the same sentence on every run. It is still in `--json`.
 
@@ -617,16 +626,19 @@ codes where they matter. `amdahl keys --help` lists the `keys` commands. For
 `optimize --json`, the help says where the message is: `.result.message`, and
 the run id is `.result.run_id`.
 
-Three failures print one plain line each:
+Three failures print a plain sentence each. Only the sentence changed from
+0.4.0: the `--json` error `code` is still the server's (or `http_<status>`) and
+its `hint` is the same, because scripts and agents branch on them.
 
-- A credential that lacks a scope says what it cannot do and what to use:
-  `This credential cannot optimize.` then `Use a Customer agent key, or run
-  \`amdahl login\` again.` (exit 4). It never prints the server's
-  `Missing required scope(s)`.
+- A credential that lacks a scope says what it cannot do and what to use: `This
+  credential cannot optimize. Use a Customer agent key, or run \`amdahl
+  login\` again.` (exit 4). It never prints the server's `Missing required
+  scope(s)`.
 - A key the server will not take (revoked or expired): `This key isn't valid
-  (revoked or expired). Unset AMDAHL_KEY, then run amdahl login.` (or `Drop
-  --api-key` for a key from the flag; exit 3). A sign-in it will not take:
-  `Your sign-in is no longer valid. Run amdahl login.`
+  (revoked or expired).` and the hint, `Run amdahl login, or check
+  AMDAHL_KEY.` (exit 3). An OAuth access token in `AMDAHL_ACCESS_TOKEN` says
+  `This token isn't valid (revoked or expired).` A saved sign-in the server
+  will not take: `Your sign-in is no longer valid.`
 - A file that is not there: `Can't find <file>.` (exit 2), for a draft, a
   list, `--context` and `--sent-text`.
 

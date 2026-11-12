@@ -366,7 +366,8 @@ describe('optimize --list', () => {
         'Queued behind 3 items, about 5 min left',
         '2 of 2 done',
         '2 of 2 messages optimized.',
-        `Sent one? amdahl sent|feedback ${batchRun(0)} (each row has its run id)`,
+        `Sent one? amdahl sent ${batchRun(0)} --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>`,
+        `Or say how it went: amdahl feedback ${batchRun(0)} --evidence did_it_myself --outcome used`,
         '',
       ].join('\n')
     )
@@ -685,21 +686,22 @@ describe('feedback and sent', () => {
     expect(json.json).toMatchObject({ ok: true, success: true, accepted: 1, rejected: 0, items: [{ status: 'accepted', result: 'created' }] })
   })
 
-  it('sent needs one send key, and says so before any request (the real server refuses a report without one)', async () => {
+  it('sent needs a send id or a recipient, and says so before any request (the real server refuses a report without one)', async () => {
     const io = await signedIn()
     const before = server!.log.length
     const none = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned')
     expect(none.code).toBe(2)
     expect(none.stderr).toBe(
-      'Error: Say which send this is with one of --provider-send-id, --recipient, --recipient-key-hash.\n' +
-        "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).\n"
+      'Error: Say which send this is: give --provider-send-id, a recipient (--recipient or --recipient-key-hash), or both.\n' +
+        "Amdahl matches a report to a send by its provider's own id, by the recipient (stored only as a hash), or both.\n"
     )
     // A campaign, lead and step alone are not a send key either.
     const lemlist = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-campaign-id', 'c1', '--provider-lead-id', 'lea_1', '--sequence-step', '0')
     expect(lemlist.code).toBe(2)
     expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', ' ')).code).toBe(2)
     expect(server!.log.length).toBe(before)
-    // Each of the three keys is enough.
+    // Each key is enough, and a send id with a recipient (or a hash) is fine: the server takes both.
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x2', '--recipient-key-hash', 'b'.repeat(64))).code).toBe(0)
     const base = ['--provider', 'other', '--channel', 'email', '--sent-as', 'returned']
     expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--provider-send-id', 'x1')).code).toBe(0)
     expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--recipient', 'dana@example.com')).code).toBe(0)
@@ -881,13 +883,13 @@ describe('next steps', () => {
     writeFileSync(file, 'draft')
     const r = await cli(io, 'optimize', file)
     expect(r.code).toBe(0)
-    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent|feedback r1\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
+    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
     const before = requests('/setup/status').length
     const json = await cli(io, 'optimize', file, '--json')
     expect(json.stderr).toBe('')
     expect(requests('/setup/status').length).toBe(before)
     server!.options.noConnections = false
-    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent|feedback r1\n')
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\n')
   })
 })
 

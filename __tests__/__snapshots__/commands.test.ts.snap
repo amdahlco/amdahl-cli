@@ -46,7 +46,8 @@ Commands:
            evidence, on_unsupported, facts and rules. Any other column is
            copied to the results as it is. --batch <id> picks up a batch
            queued earlier, with the same list. --force replaces an existing
-           results file.
+           results file. In the results CSV, a cell that starts with =, +, -
+           or @ (a phone number, say) gets a ' in front: it is no formula.
   search "<question>" [--research] [--limit <n>]
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset
@@ -60,12 +61,13 @@ Commands:
                                              What happened to a message
   sent <run-id> --provider <provider> --channel <channel>
            --sent-as returned|edited [--sent-at <time>]
-           (--provider-send-id <id> | --recipient <email|url> |
-            --recipient-key-hash <sha256>)
+           [--provider-send-id <id>]
+           [--recipient <email|url> | --recipient-key-hash <sha256>]
            [--provider-campaign-id <id>] [--sequence-step <n>]
            [--provider-variant-id <id>] [--provider-lead-id <id>]
            [--thread-id <id>] [--sent-text <file> | -]
-           One send per command. It needs one of the three in brackets.
+           One send per command. Give --provider-send-id, a recipient, or
+           both (a recipient is --recipient or --recipient-key-hash, not both).
            --provider: lemlist, instantly, outreach, salesloft, hubspot,
                        salesforce, gmail, heyreach, apollo, linkedin_manual,
                        other (any sender not listed)

@@ -232,7 +232,7 @@ describe('optimize', () => {
     const io = await loggedIn()
     const file = join(io.homedir, 'a.md')
     writeFileSync(file, 'draft')
-    const sentIt = 'Sent it? amdahl sent|feedback r1\n'
+    const sentIt = 'Sent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\n'
     const run = `Tighter opener.\nRun: r1\n${sentIt}`
     const link = `Tighter opener.\nRun: r1\nFeedback: http://localhost:4000/admin/optimizer/runs/r1\n${sentIt}`
 

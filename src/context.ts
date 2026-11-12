@@ -195,31 +195,25 @@ const CALL_VERBS: [string, string][] = [
   ['/setup/status', 'read the setup status'],
 ]
 
-/** The environment variable or flag a key came from, as a person names it. */
-function keyOrigin(source: string): string | null {
-  if (source === 'flag') return '--api-key'
-  return source.startsWith('env:') ? source.slice('env:'.length) : null
-}
-
 /**
- * A refusal of the credential in one plain line, or null when it is some other
- * error. A key the server will not take (revoked or expired) and a sign-in it
- * will not take each say so; a missing scope says what this credential cannot
- * do and what to use instead, never the server's `Missing required scope(s)`.
+ * The sentence a person reads for a refusal of the credential, or null when
+ * the server's own message is the one to show. Only this sentence changes: the
+ * error's `code` (the server's) and its `hint` stay what they were, because
+ * agents branch on them. A key or token the server will not take says so, a
+ * sign-in it will not take says so, and a missing scope says what this
+ * credential cannot do and what to use, never the server's
+ * `Missing required scope(s)`.
  */
-function refusedCredential(err: AmdahlApiError): CliError | null {
-  const login = amdahlCommand('login')
+function plainMessage(err: AmdahlApiError): string | null {
   if (err.statusCode === 401 && err.credentialSource) {
-    const origin = keyOrigin(err.credentialSource)
-    if (origin) {
-      const drop = origin === '--api-key' ? 'Drop --api-key' : `Unset ${origin}`
-      return new CliError('invalid_key', `This key isn't valid (revoked or expired). ${drop}, then run ${login}.`, EXIT.unauthenticated)
-    }
-    return new CliError('invalid_grant', `Your sign-in is no longer valid. Run ${login}.`, EXIT.unauthenticated)
+    if (err.credentialSource === 'profile') return 'Your sign-in is no longer valid.'
+    // AMDAHL_ACCESS_TOKEN is an OAuth access token; the other sources are API keys.
+    const noun = err.credentialSource === 'env:AMDAHL_ACCESS_TOKEN' ? 'token' : 'key'
+    return `This ${noun} isn't valid (revoked or expired).`
   }
   if (err.errorCode === 'missing_scope' || /^Missing required scope/i.test(err.message)) {
     const verb = CALL_VERBS.find(([prefix]) => err.path.includes(prefix))?.[1] ?? 'do this'
-    return new CliError('missing_scope', `This credential cannot ${verb}.`, EXIT.forbidden, `Use a Customer agent key, or run \`${login}\` again.`)
+    return `This credential cannot ${verb}. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`
   }
   return null
 }
@@ -235,15 +229,13 @@ export function toCliError(err: unknown): CliError {
     const exit = exitForHttp(err.statusCode, err.errorCode)
     const details = errorDetails(err.responseBody)
     const retry = details.retry_after_seconds
-    const refused = refusedCredential(err)
-    if (refused) return refused
     const hint =
       exit === EXIT.unauthenticated
         ? `Run \`${amdahlCommand('login')}\`, or check AMDAHL_KEY.`
         : typeof retry === 'number'
           ? `Try again in ${retry} seconds.`
           : undefined
-    return new CliError(err.errorCode ?? `http_${err.statusCode}`, err.message, exit, hint)
+    return new CliError(err.errorCode ?? `http_${err.statusCode}`, plainMessage(err) ?? err.message, exit, hint)
   }
   const message = err instanceof Error ? err.message : String(err)
   return new CliError('network_error', `Could not reach the Amdahl API: ${message}`, EXIT.network, NETWORK_HINT)

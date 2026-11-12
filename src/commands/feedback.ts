@@ -12,8 +12,9 @@
 // `amdahl sent <run-id>` posts to POST /messages/report_send: the system that
 // sent a message says it went out. The flags are the schema's fields; a report
 // from a CLI sign-in is stored as `reported_via: cli`. The server stores a
-// report only when it can tell which send it is, so one of `--provider-send-id`,
-// `--recipient` or `--recipient-key-hash` is required (`missing_send_key`
+// report only when it can tell which send it is, so it needs at least one of
+// `--provider-send-id` and a recipient (`--recipient` or `--recipient-key-hash`,
+// never both): a send id with a recipient is fine (`missing_send_key`
 // otherwise), and the CLI says so before it sends anything. It reports one
 // send per command; the API takes up to 100 at once.
 //
@@ -128,9 +129,6 @@ const PROVIDER_IDS: Record<string, [string, number]> = {
   'thread-id': ['thread_id', 512],
 }
 
-/** The flags that tell the server which send this is: it needs at least one. */
-const SEND_KEYS = ['--provider-send-id', '--recipient', '--recipient-key-hash'] as const
-
 /**
  * `amdahl sent <run-id> --provider <p> --channel <c> --sent-as returned|edited
  * (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
@@ -200,9 +198,13 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   if (sentAs === 'edited' && sentPath === undefined) {
     throw usageError('--sent-as edited needs --sent-text <file>: the message as you sent it.', 'Amdahl keeps only a hash of the text. Use - to read it from standard input.')
   }
-  // The server stores a report only when it can tell which send it is: refuse here, before any request.
+  if (sentAs === 'edited' && !(typeof item.sent_text === 'string' && item.sent_text.trim())) {
+    throw usageError(`${sentPath === '-' ? 'Standard input' : `--sent-text ${sentPath}`} is empty. An edited send needs the message as you sent it.`)
+  }
+  // The server stores a report only when it can tell which send it is: at least one of a send id and
+  // a recipient. It takes both together, and refuses a recipient with a hash. Refuse here, before any request.
   if (!sendId?.trim() && !recipient?.trim() && !hash?.trim()) {
-    throw usageError(`Say which send this is with one of ${SEND_KEYS.join(', ')}.`, "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).")
+    throw usageError('Say which send this is: give --provider-send-id, a recipient (--recipient or --recipient-key-hash), or both.', "Amdahl matches a report to a send by its provider's own id, by the recipient (stored only as a hash), or both.")
   }
 
   const credential = await resolveCredential(ctx)

@@ -91,6 +91,10 @@ reads standard input. With no file, at a terminal, paste the message.
                                same list; the results go next to it.
   --force                      Replace a results file that already exists.
 
+In the results CSV, a cell that starts with =, +, - or @ gets a ' in front, so
+a spreadsheet does not run it as a formula. That includes a phone number such
+as +1 555 0100 or a negative number you copied through. Delete the ' to use it.
+
 Output: the rewrite goes to stdout. What Amdahl did, and the run id, go to
 stderr. With --json it prints {"ok", "file", "result"}: the rewritten message
 is .result.message and the run id is .result.run_id. Several files give an
@@ -156,8 +160,8 @@ ${GLOBAL}`,
 
   sent: `Usage: amdahl sent <run-id> --provider <provider> --channel <channel>
                    --sent-as returned|edited [--sent-at <time>]
-                   (--provider-send-id <id> | --recipient <email|url> |
-                    --recipient-key-hash <sha256>)
+                   [--provider-send-id <id>]
+                   [--recipient <email|url> | --recipient-key-hash <sha256>]
                    [--provider-campaign-id <id>] [--sequence-step <n>]
                    [--provider-variant-id <id>] [--provider-lead-id <id>]
                    [--thread-id <id>] [--sent-text <file> | -]
@@ -179,14 +183,15 @@ API takes up to 100 (POST /messages/report_send).
                       Message-ID header with its angle brackets.
   --recipient         An email address, or a LinkedIn profile URL for a LinkedIn
                       channel. Amdahl stores only a hash of it.
-  --recipient-key-hash  A SHA-256 you made, instead of --recipient. Not both.
+  --recipient-key-hash  A SHA-256 you made, instead of --recipient (not both).
   --provider-campaign-id, --sequence-step, --provider-variant-id,
   --provider-lead-id, --thread-id   The provider's ids, when you have them.
   --sent-text <file>  The text as sent (a file, or - for standard input). Only
                       a hash of it is kept.
 
-Give one of --provider-send-id, --recipient and --recipient-key-hash: Amdahl
-matches a report to a send by one of them.
+Give at least one of --provider-send-id and a recipient (--recipient or
+--recipient-key-hash, not both). A send id with a recipient is fine: Amdahl
+matches a report to a send by the id, the recipient, or both.
 ${GLOBAL}`,
 
   'keys create': `Usage: amdahl keys create --name <name>

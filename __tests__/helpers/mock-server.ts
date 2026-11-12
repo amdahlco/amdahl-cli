@@ -77,6 +77,9 @@ export interface MockOptions {
   connections?: Record<string, unknown>[]
   /** The connections list answers a 500. */
   connectionsError?: boolean
+  /** The error code the server sends with a 401 (default `Unauthorized`, the server's own) and with a missing scope (default `forbidden`). */
+  unauthenticatedCode?: string
+  forbiddenCode?: string
   /** Status reads of a batch before it completes. */
   batchPolls?: number
   /** Of those reads, how many answer "one item running, none done" (with a falling estimate) before the batch completes. */
@@ -85,6 +88,8 @@ export interface MockOptions {
   batchFailures?: number[]
   /** The message every batch item comes back with (default: `better: <draft>`). */
   batchMessage?: string
+  /** The one-line summary every batch item comes back with (default: `Tighter opener.`). */
+  batchSummary?: string
 }
 
 export interface MockServer {
@@ -262,10 +267,10 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       const kind = authKind(req)
-      if (path.startsWith('/api/') && !kind) return err(res, 401, 'unauthenticated', 'Authentication required')
+      if (path.startsWith('/api/') && !kind) return err(res, 401, options.unauthenticatedCode ?? 'Unauthorized', 'Authentication required')
       // The server refuses a call whose scope the credential lacks, in these words and as a 403 `forbidden`.
       const needsMessages = /^\/api\/platform\/v1\/messages\//.test(path)
-      if (needsMessages && kind === 'readonly') return err(res, 403, 'forbidden', 'Missing required scope(s): messages:execute')
+      if (needsMessages && kind === 'readonly') return err(res, 403, options.forbiddenCode ?? 'forbidden', 'Missing required scope(s): messages:execute')
 
       if (path === '/api/platform/v1/me/context') {
         return json(res, 200, {
@@ -420,7 +425,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
                 ? null
                 : options.batchFailures?.includes(index)
                   ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
-                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false },
+                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: options.batchSummary ?? 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false },
             })),
             next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
           },

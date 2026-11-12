@@ -14,7 +14,7 @@ export default defineConfig({
   entry: { amdahl: 'src/bin.ts' },
   format: ['esm'],
   platform: 'node',
-  target: 'node20',
+  target: 'node22',
   outDir: 'dist',
   clean: true,
   splitting: false,

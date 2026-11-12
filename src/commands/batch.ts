@@ -30,7 +30,8 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
-import { clip, count, field, record, records } from '../text'
+import { sentLines } from '../next-steps'
+import { clip, count, field, record, records, truthfulSummary } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -333,13 +334,13 @@ export function resultColumnNames(header: string[]): string[] {
 }
 
 /** One item's results cells: Amdahl's message, done or failed, its one-line summary, the run id, why it failed. */
-function resultCells(item: Record<string, unknown> | undefined): string[] {
+function resultCells(item: Record<string, unknown> | undefined, context: unknown): string[] {
   const result = record(item?.result)
   if (!item || !result) return ['', field(item?.status) || 'missing', '', '', '']
   if (result.ok === false) return ['', 'failed', '', field(result.run_id), `${field(result.reason)}: ${field(result.detail)}`.replace(/: $/, '')]
   // The message is the sender's own text: kept as sent, line breaks and all.
   const message = typeof result.message === 'string' ? result.message : ''
-  return [message, result.unchanged === true ? 'unchanged' : 'done', field(result.summary), field(result.run_id), '']
+  return [message, result.unchanged === true ? 'unchanged' : 'done', truthfulSummary(field(result.summary), context), field(result.run_id), '']
 }
 
 /** Where the results of a run go: next to its list, or `<id>.optimized.jsonl` here. */
@@ -358,13 +359,13 @@ function assertFree(path: string, force: boolean): void {
 }
 
 /** Write the results file for `list`. Returns its path. */
-function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean): string {
+function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean, contexts: unknown[]): string {
   const byIndex = new Map(items.map((i) => [i.index, i]))
   const path = resultsFile(list, id, cwd)
   // `wx` fails when the file appeared since the check, instead of replacing it.
   const flag = force ? 'w' : 'wx'
   if (list?.kind === 'csv' && list.header && list.rows) {
-    const rows = [[...list.header, ...resultColumnNames(list.header)], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i))])]
+    const rows = [[...list.header, ...resultColumnNames(list.header)], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i), contexts[i])])]
     writeFileSync(path, toCsv(rows.map((row) => row.map(neutralise))), { flag })
     return path
   }
@@ -451,12 +452,14 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     out.result({ ...batch, ok: failed === 0, items, next_cursor: null })
     return failed === 0 ? EXIT.ok : EXIT.general
   }
-  const path = writeResults(list, id, items, ctx.io.cwd, force)
+  // What each row was sent with, so a summary that speaks of the sender's facts and rules is kept only when there were some.
+  const contexts = list ? withDefaults(list.items, defaults).map((item) => item.context) : []
+  const path = writeResults(list, id, items, ctx.io.cwd, force, contexts)
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
   out.result({}, `Results: ${path}`)
   // What to do once the messages are sent, with a real run id from this batch.
   const runId = items.map((i) => field(record(i.result)?.run_id)).find(Boolean)
-  if (runId) out.info(`Sent one? ${amdahlCommand('sent')}|feedback ${runId} (each row has its run id)`)
+  for (const line of sentLines(runId, 'Sent one?')) out.info(line)
   return failed === 0 ? EXIT.ok : EXIT.general
 }
