@@ -7,9 +7,12 @@
 import { USAGE, parseCommandLine } from './args'
 import { setCommandName } from './command-name'
 import { authToken, login, logout, whoami } from './commands/auth'
+import { connect, connections, open } from './commands/connections'
+import { feedback, sent } from './commands/feedback'
 import { install } from './commands/install'
 import { keysCreate, keysList, keysRevoke } from './commands/keys'
 import { optimize } from './commands/optimize'
+import { search } from './commands/search'
 import { noSetupLine, setup, setupMode } from './commands/setup'
 import { skillsAdd } from './commands/skills'
 import { status, workspaceList, workspaceUse } from './commands/workspace-status'
@@ -28,6 +31,12 @@ const COMMANDS: Record<string, Handler> = {
   'auth token': (ctx) => authToken(ctx),
   status: (ctx) => status(ctx),
   optimize,
+  search,
+  connections: (ctx) => connections(ctx),
+  connect,
+  open: (ctx) => open(ctx),
+  feedback,
+  sent,
   'keys create': (ctx) => keysCreate(ctx),
   'keys list': (ctx) => keysList(ctx),
   'keys revoke': keysRevoke,
@@ -38,7 +47,7 @@ const COMMANDS: Record<string, Handler> = {
 }
 
 /** Commands that take no positional arguments. */
-const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'keys create', 'keys list', 'workspace list'])
+const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'connections', 'open', 'keys create', 'keys list', 'workspace list'])
 
 /**
  * Run the CLI.

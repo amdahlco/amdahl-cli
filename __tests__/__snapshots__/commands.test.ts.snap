@@ -12,7 +12,14 @@ What you can do:
                                  amdahl setup)
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
                                  (with no file, at a terminal, paste it)
+  amdahl optimize --list drafts.csv
+                                 Rewrite a whole list in one batch; results go
+                                 to drafts.optimized.csv
+  amdahl search "<question>"     Ask about your customers, calls and deals
+  amdahl connect hubspot         Add a CRM or call recorder in the console
+                                 (amdahl connections lists what is connected)
   amdahl status                  Check that this workspace can optimize
+  amdahl open                    Open this workspace in the console
   amdahl keys create --name ci   Make an API key for a server or CI
   amdahl install claude-code     Connect one AI client (also codex, cursor)
   amdahl skills add <publisher>/<skill>
@@ -31,6 +38,32 @@ Commands:
   optimize [<file>... | -] [--channel email|linkedin]
            [--evidence off|workspace] [--on-unsupported flag|remove]
            [--tries] [--context <file.json>]
+  optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force]
+           [the optimize flags above, for every message]
+           A CSV has a message column, and may have item_id, channel,
+           evidence, on_unsupported, facts and rules. --batch <id> picks up
+           a batch queued earlier, with the same list. --force replaces an
+           existing results file.
+  search "<question>" [--research] [--limit <n>]
+           --research  ask for a research job: a deeper, cited answer (needs
+                       a Customer agent key, amdahl keys create --preset
+                       agent; a sign-in gets the search answer)
+  connections [--all]                        Connected sources and health
+  connect [<connector>] [--no-browser]       Open the console's add page
+  open    [--no-browser]                     This workspace in the console
+  feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
+           [--outcome used|used_with_edits|not_used|unsure]
+           [--sent-text <file> | -] [--comment <text>]
+                                             What happened to a message
+  sent <run-id> --provider <provider> --channel <channel>
+           --sent-as returned|edited [--sent-at <time>]
+           (--provider-send-id <id> | --recipient <email|url> |
+            --recipient-key-hash <sha256>)
+           [--provider-campaign-id <id>] [--sequence-step <n>]
+           [--provider-variant-id <id>] [--provider-lead-id <id>]
+           [--thread-id <id>] [--sent-text <file> | -]
+           One send per command. It needs one of the three in brackets.
+                                             Report that a message went out
   keys create --name <name> [--preset read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]
   keys list

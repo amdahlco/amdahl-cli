@@ -331,7 +331,7 @@ describe('optimize', () => {
     expect(r.stderr).toBe('Tighter.\n')
   })
 
-  it('names a second-check concern, a missed evidence read and strips control characters', async () => {
+  it('names a second-check concern, a missed evidence read and strips control characters; an empty workspace gets the connect line', async () => {
     const io = await loggedIn({
       optimizeResult: {
         ok: true,
@@ -349,6 +349,7 @@ describe('optimize', () => {
         'Wrote this[2J message from the context you sent.',
         'Skipped checking claims against your calls: the workspace has none yet.',
         'Flagged a second-check concern (it leaves out your ask); check before sending.',
+        'Connect calls or a CRM so Amdahl checks claims against them: amdahl connect',
         '',
       ].join('\n')
     )

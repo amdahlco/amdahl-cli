@@ -200,10 +200,14 @@ function isExecutable(path: string): boolean {
   }
 }
 
-/** The browser opener for each platform. The URL is not a secret. */
-function openerFor(platform: NodeJS.Platform, url: string): [string, string[]] {
+/**
+ * The browser opener for each platform. The URL is not a secret. On Windows
+ * it is `rundll32`, which takes the URL whole: `cmd /c start` runs the text
+ * after an `&` in the URL as a second command.
+ */
+export function openerFor(platform: NodeJS.Platform, url: string): [string, string[]] {
   if (platform === 'darwin') return ['open', [url]]
-  if (platform === 'win32') return ['cmd', ['/c', 'start', '""', url]]
+  if (platform === 'win32') return ['rundll32', ['url.dll,FileProtocolHandler', url]]
   return ['xdg-open', [url]]
 }
 

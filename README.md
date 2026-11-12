@@ -1,9 +1,12 @@
 # @amdahl/cli
 
 The `amdahl` command line. It signs you in with your console account, checks
-that a workspace can optimize, rewrites messages, manages API keys (each one
-approved in the console), points MCP clients at Amdahl, and installs skills
-from the library at https://amdahl.ai/skills.
+that a workspace can optimize, rewrites messages one at a time or a whole
+list at once, answers questions about your customers, calls and deals, shows
+and adds connected sources, records what happened to a message after you
+sent it, manages API keys (each one approved in the console), points MCP
+clients at Amdahl, and installs skills from the library at
+https://amdahl.ai/skills.
 
 ## Using the Claude or ChatGPT app? You do not need this CLI
 
@@ -205,6 +208,18 @@ If not: quit and reopen Claude Code, type /mcp, pick amdahl, sign in.
 Want to try it here instead? Run: npx -y amdahl optimize
 ```
 
+If you are already signed in here (a saved `amdahl login` for this API host,
+or a key in `--api-key` or the environment), the last line is replaced by
+what to do next in this terminal:
+
+```
+Try it here: amdahl optimize or amdahl search "your question"
+Add data: amdahl connect, see it all: amdahl open
+```
+
+It still reads nothing from the network. An agent's run and a run with no
+terminal print exactly what they did before.
+
 An old copy of the Amdahl skill is brought up to date on the way. A tool it
 finds that does not point at Amdahl yet brings the menu back.
 `npx -y amdahl --verbose` also prints the files it wrote, the profile and
@@ -304,6 +319,13 @@ amdahl login                 # sign in through the browser with your console acc
 amdahl whoami                # the account, workspace and role you are signed in as
 amdahl status                # can this workspace optimize, and what blocks it
 amdahl optimize draft.md     # rewrite one message (or pipe it in with -, or run it bare and paste)
+amdahl optimize --list drafts.csv   # rewrite a whole list in one batch
+amdahl search "what objections came up in lost deals?"   # ask about your customers
+amdahl connections           # what is connected, and whether it is healthy
+amdahl connect hubspot       # open the console's add page, to add a CRM or call recorder
+amdahl open                  # open this workspace in the console
+amdahl feedback <run-id> --evidence did_it_myself --outcome used   # what happened to it
+amdahl sent <run-id> --provider gmail --channel email --sent-as returned --provider-send-id "<msg-id@mail>"   # it went out
 amdahl install claude-code   # connect an AI client and add the Amdahl skill (also codex, cursor)
 amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to this project
 ```
@@ -342,6 +364,18 @@ amdahl auth token
 amdahl status
 amdahl optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
                 [--on-unsupported flag|remove] [--tries] [--context <file.json>]
+amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force] [the optimize flags]
+amdahl search "<question>" [--research] [--limit <n>]
+amdahl connections [--all]
+amdahl connect [<connector>] [--no-browser]
+amdahl open [--no-browser]
+amdahl feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
+                [--outcome used|used_with_edits|not_used|unsure] [--sent-text <file>|-] [--comment <text>]
+amdahl sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited
+                (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+                [--sent-at <time>] [--provider-campaign-id <id>] [--sequence-step <n>]
+                [--provider-variant-id <id>] [--provider-lead-id <id>] [--thread-id <id>]
+                [--sent-text <file>|-]
 amdahl keys create --name <name> [--preset read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
 amdahl keys list
 amdahl keys revoke <id|prefix> [--yes] [--no-browser]
@@ -354,6 +388,194 @@ Global flags: `--profile`, `--api-url`, `--api-key`, `--json`, `--no-color`,
 `--verbose`, `-h`, `-v`. With `--json`, data goes to stdout and messages to
 stderr. An unknown option prints `Unknown option --foo.` and `Run \`amdahl
 --help\`.` (exit 2).
+
+## Search
+
+```sh
+amdahl search "What objections came up in lost deals last quarter?"
+```
+
+`search` asks one question about the workspace's customers, calls and deals
+(`POST /search/query`, with `answer: true`). It prints a short answer, with
+each citation said in plain words, and the rows it came from under `From:`,
+at most five. With no written answer it prints up to ten rows. Each row is
+one line (its title, who and when) and up to three lines of its text, in 80
+columns. `--limit <n>` asks for at most `n` rows, and `--json` prints the
+server's whole answer, every row included.
+
+Research is something search starts, never a command of its own. Search
+hands a statistical or long question to a research job by itself, and
+`--research` asks it to (`route: "research"`). The CLI then waits for the
+job (`GET /research/:id`, 45 seconds a read, up to 15 minutes) and prints its
+cited answer, then what the answer rests on under `Details:` (its
+`content_blocks`, in the order the job presented them), then up to three
+questions to ask next.
+
+Each table prints as a plain ASCII table that fits 80 columns: a long cell
+wraps (a column is narrowed to its longest word first, so an id or a timestamp
+stays whole), a cell past four lines is cut with `...`, a word wider than its
+column is split with a `-`, and a table with more columns than 80 columns hold
+prints each row as `label: value` lines, so no column is dropped. A table
+prints at most 25 rows and counts the rest. Text, callout, citation, metric and
+theme blocks print as plain text (an `<unverified>` figure is marked
+`(unverified)`). A chart prints one line that says so, and so does any block
+type this version does not know: both point to `--json`, where the whole block
+is. Starting research needs
+`conversations:write` and reading it back `conversations:read`. A CLI
+sign-in has neither, so the server runs the search instead and the CLI adds
+one line:
+
+```
+A deeper answer needs a Customer agent key: amdahl keys create --name research --preset agent
+```
+
+A workspace with nothing connected answers with `setup_needed`: the CLI
+prints its message, which carries the console link, then
+`Connect your CRM or call recorder: amdahl connect`. With no rows, it prints
+the server's one line on how fresh the data is, or `Nothing matched.`
+
+## Connections
+
+```sh
+amdahl connections
+```
+
+```
+HubSpot             crm    healthy        synced 2026-11-11
+Gong (Sales calls)  calls  needs sign-in  never synced
+Sign in to it again: https://console.amdahl.ai/acme/connections/c1
+```
+
+`connections` lists what the workspace has connected (`GET /connections`),
+each with its health in words and its last sync. Under the list, one line
+says where to fix what needs attention: the one connection's console page,
+or the Connections page when there are several. `--all` also lists
+disconnected and never-synced sources. With nothing connected it says so and
+names `amdahl connect`.
+
+`amdahl connect hubspot` checks the connector against the catalog
+(`GET /connections/catalog`; a type or a name, in any case), then opens the
+console's add page,
+`<console>/<workspace>/settings/connections?add=1&connector=hubspot`. The
+`connector` only fills the search box on that page: you pick HubSpot there and
+sign in to it. With no connector it opens the add page with an empty search
+box. The CLI never creates a connection itself. An unknown connector exits 2
+and lists the ones you can connect; one that is not offered yet exits 1 and
+says it is coming soon. It opens the browser only for a person at a terminal:
+stdin and stdout are terminals, `AMDAHL_NO_PROMPT=1` is not set, no agent runs
+it (`CLAUDECODE`, `CURSOR_AGENT`), it is not CI and there is no `--json`. So
+`amdahl connect hubspot | cat` opens nothing. Everywhere else, with
+`--no-browser`, or when the browser does not open, it prints the link on
+stdout instead (under `--json`, as `url` with `opened: false`).
+
+`amdahl open` opens this workspace in the console (the console home when you
+are not signed in), on the same terms. `--no-browser` prints the link.
+
+## Optimize a list
+
+```sh
+amdahl optimize --list drafts.csv
+```
+
+```
+Queued 40 messages as batch 7c1e....
+Ctrl+C stops waiting, not the batch. To pick it up later: amdahl optimize --list drafts.csv --batch 7c1e...
+12 of 40 done, about 3 min left
+40 of 40 messages optimized.
+Results: drafts.optimized.csv
+```
+
+`--list` sends a whole list as one batch (`POST /messages/optimize/batch`),
+which the server runs on spare capacity and never refuses as busy, then
+reads it back (`GET /messages/optimize/batches/:id`) until it completes. A
+file given without `--list` is still one message, as before.
+
+The list is a CSV file with a header row, or a JSONL file (`.jsonl` or
+`.ndjson`) with one batch item, a JSON object, per line. A CSV has a
+`message` column and may have `item_id`, `channel`, `evidence`,
+`on_unsupported`, `facts` and `rules`; facts and rules take one per line
+inside the cell. Any other column is refused by name before anything is
+sent, so a misspelled column is never dropped without a word (use JSONL for
+any other field a single optimize takes). The optimize flags (`--channel`,
+`--evidence`, `--on-unsupported`, `--tries`, `--context`) apply to every
+item that does not set its own; a row's facts and a `--context` file's rules
+and voice examples are both sent.
+
+The whole file is read and checked first. A header the CLI does not read, or a
+missing `message` column, says which headers it expects. Progress goes to
+stderr, in place at a terminal. When the batch completes, the results go next
+to the list: `drafts.csv` gets `drafts.optimized.csv` (every input column,
+then `optimized_message`, `status`, `what_changed`, `run_id` and `error`), and
+`x.jsonl` gets `x.optimized.jsonl` (one batch item per line, its `result`
+what a single optimize returns). With `--json`, the batch and every item go
+to stdout and no file is written. A failed item exits 1. A refused list
+names the line of the first item the server refused.
+
+A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula,
+so in the results CSV such a cell (and one that starts with a tab or a
+carriage return) starts with a `'`. The CLI does not replace a results file
+that already exists: it exits 2 before it queues anything, and `--force`
+replaces the file.
+
+`--no-wait` queues the batch, prints its id and the command that picks it up,
+and exits. `--batch <id>` picks up a batch queued earlier; with `--list`, the
+results go next to that list and the list must have as many messages as the
+batch has items (exit 2 otherwise), otherwise they go to `<id>.optimized.jsonl`
+here. `--no-wait` with `--batch` exits 2: it only queues a new list.
+
+## After you send
+
+```sh
+amdahl feedback <run-id> --evidence did_it_myself --outcome used_with_edits --sent-text sent.txt
+amdahl sent <run-id> --provider gmail --channel email --sent-as edited --provider-send-id "<msg-id@mail.gmail.com>"
+```
+
+`feedback` says what happened to the message one optimize run returned
+(`POST /messages/optimize/runs/:id/feedback`). `--evidence` is required:
+`did_it_myself`, `reported_to_me` or `inferred`. Send at least one of
+`--outcome` (`used`, `used_with_edits`, `not_used`, `unsure`), `--comment`
+(the sender's own words) and `--sent-text` (a file with the text as sent, or
+`-` for stdin). Amdahl learns the sender's preferences from an edit, unless
+the evidence is `inferred`. Each call stores one event, so running it twice
+stores two.
+
+`sent` is for the system that sent the message: it reports that it went out
+(`POST /messages/report_send`). A report from a CLI sign-in is stored as
+`reported_via: cli`. The flags are the report's fields: `--provider`
+(`lemlist`, `instantly`, `outreach`, `salesloft`, `hubspot`, `salesforce`,
+`gmail`, `heyreach`, `apollo`, `linkedin_manual`, `other`), `--channel`
+(`email`, `linkedin_invite`, `linkedin_message`, `linkedin_inmail`),
+`--sent-as` (`returned` or `edited`) and `--sent-at` (a time with a time
+zone; the current time when left out), then the optional ids.
+
+The server stores a report only when it can tell which send it is, so one of
+`--provider-send-id`, `--recipient` (an email address, or a LinkedIn profile
+URL for a LinkedIn channel) or `--recipient-key-hash` (a SHA-256) is required.
+A campaign, a lead and a step are not enough. Without one, the CLI exits 2
+before it sends anything. The id is the provider's own: for gmail, the
+`Message-ID` header with its angle brackets; never an email address (give that
+as `--recipient`; Amdahl stores only a hash of it). The command reports one
+send, so give one run id. To report many at once, call
+`POST /messages/report_send`, which takes up to 100 items. The CLI checks each
+value against the server's limits first, and a mistake is a usage error that
+names the flag. A send the server did not store prints why and exits 1.
+
+## Next steps
+
+Human output names the next step where there is one, in at most two extra
+lines; `--json` never carries them.
+
+- `amdahl optimize` on a workspace with no data connected ends with
+  `Connect calls or a CRM so Amdahl checks claims against them: amdahl connect`.
+  The CLI asks `GET /setup/status` beside the first rewrite, so it adds no
+  wait, and says nothing when it cannot tell. Only a person at a terminal
+  gets the line and the request (the same test as `optimize` with no file): a
+  pipe, an agent, CI, `AMDAHL_NO_PROMPT=1` and `--json` make exactly the
+  requests they made before.
+- `amdahl status` gives each blocked item its fix: no data, `amdahl connect`;
+  a connection that needs attention, its console page; a used-up quota, the
+  day it resets; a role too low, ask a workspace admin.
+- Bare `amdahl`, signed in, with every tool set up: what to try here.
 
 ## Skills
 
@@ -571,10 +793,10 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 | code | meaning |
 |---|---|
 | 0 | ok |
-| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
+| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a failed item in `optimize --list`, a send `sent` could not store, research that failed or is still running, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
 | 2 | usage (also bare `amdahl` in CI, with `AMDAHL_NO_PROMPT=1` or with `--json`) |
 | 3 | not signed in (401, `invalid_grant`, no credential) |
-| 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`) |
+| 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`, `missing_scope`; also research that started but this credential cannot read) |
 | 5 | no workspace |
 | 6 | rate limited or quota (429) |
 | 7 | approval denied, expired or locked out |

@@ -10,7 +10,8 @@
 // next steps; Codex, which runs in this same terminal, can sign in right away.
 // "This terminal" signs in through the browser, asks for a message to be
 // pasted and shows Amdahl's version of it. When every tool it finds already
-// points at Amdahl, it says so and asks nothing.
+// points at Amdahl, it says so and asks nothing; someone already signed in
+// here also gets the commands to try next (optimize, search, connect, open).
 //
 // An agent, or any run without a terminal, gets the tools set up with no
 // question and no sign-in. When Claude Code or Cursor says it runs the
@@ -21,7 +22,7 @@
 
 import { ciVariable } from '../ci'
 import { amdahlCommand } from '../command-name'
-import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
+import { apiClient, call, normaliseApiUrl, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT } from '../errors'
 import { PromptCancelled, type Io } from '../io'
 import { printable } from '../output'
@@ -87,18 +88,29 @@ export function toolScreen(name: string, already: boolean): string[] {
   ]
 }
 
-/** What a re-run says when every tool it finds already points at Amdahl. */
-export function allSetLines(names: string[]): string[] {
+/** What to try next in this terminal, for someone already signed in here: two lines that fit 80 columns. */
+export function whatNextLines(): string[] {
+  return [
+    `Try it here: ${amdahlCommand('optimize')} or ${amdahlCommand('search "your question"')}`,
+    `Add data: ${amdahlCommand('connect')}, see it all: ${amdahlCommand('open')}`,
+  ]
+}
+
+/**
+ * What a re-run says when every tool it finds already points at Amdahl.
+ * `signedIn` (a sign-in or key here) swaps the one try-it line for {@link whatNextLines}.
+ */
+export function allSetLines(names: string[], signedIn = false): string[] {
   const [only] = names
   if (only === undefined) return []
-  const tryHere = `Want to try it here instead? Run: ${amdahlCommand('optimize')}`
+  const tryHere = signedIn ? whatNextLines() : [`Want to try it here instead? Run: ${amdahlCommand('optimize')}`]
   if (names.length === 1) {
     const done: Record<string, [string, string]> = {
       'Claude Code': ["If you've already run /mcp, you're done.", 'If not: quit and reopen Claude Code, type /mcp, pick amdahl, sign in.'],
       Cursor: ["If you've already signed in under Customize > MCPs, you're done.", 'If not: quit and reopen Cursor, then sign in to amdahl there.'],
       Codex: [`If you've already run ${CODEX_LOGIN}, you're done.`, `If not, run it now in this terminal.`],
     }
-    return [`Amdahl is in ${only}. You're all set.`, `Paste an email there and say: ${ASK}`, ...(done[only] ?? []), tryHere]
+    return [`Amdahl is in ${only}. You're all set.`, `Paste an email there and say: ${ASK}`, ...(done[only] ?? []), ...tryHere]
   }
   const step: Record<string, string> = {
     'Claude Code': 'quit and reopen it, type /mcp, pick amdahl, sign in',
@@ -110,8 +122,21 @@ export function allSetLines(names: string[]): string[] {
     `Paste an email in ${names.length === 2 ? 'either' : 'any of them'} and say: ${ASK}`,
     "If you've already signed each one in, you're done. If not:",
     ...names.map((n) => `  ${n}: ${step[n] ?? ''}`),
-    tryHere,
+    ...tryHere,
   ]
+}
+
+/**
+ * Whether someone is signed in here, read with no request: a saved sign-in
+ * for this API host, or a key in --api-key or the environment.
+ */
+function signedInHere(ctx: Ctx): boolean {
+  if (ctx.flags['api-key'] || ['AMDAHL_KEY', 'AMDAHL_API_KEY', 'AMDAHL_ACCESS_TOKEN'].some((k) => ctx.io.env[k])) return true
+  try {
+    return ctx.profile !== null && normaliseApiUrl(ctx.profile.api_url) === ctx.apiUrl
+  } catch {
+    return false
+  }
 }
 
 /** What an empty pick says: how to try Amdahl after all. */
@@ -356,7 +381,7 @@ export async function setup(ctx: Ctx, mode: 'menu' | 'agent'): Promise<number> {
         for (const r of refreshed.ready) detail(r.detail)
         if (exit === EXIT.ok) exit = refreshed.exit
       }
-      for (const line of allSetLines(detected.map((c) => c.name))) say(line)
+      for (const line of allSetLines(detected.map((c) => c.name), signedInHere(ctx))) say(line)
       return exit
     }
   }

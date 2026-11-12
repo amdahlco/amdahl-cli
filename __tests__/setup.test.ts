@@ -461,6 +461,25 @@ describe('bare amdahl: already set up', () => {
     )
   })
 
+  it('signed in here: the try-it line becomes what to do next in this terminal; an agent run is unchanged', async () => {
+    const io = await atServer(true)
+    cursorSetUp(io, `${server!.url}/mcp`)
+    const r = await cli(io)
+    expect(r.code).toBe(0)
+    expect(io.prompts).toEqual([])
+    expect(r.stdout).toBe(
+      `${TITLE}Amdahl is in Cursor. You're all set.\nPaste an email there and say: ${ASK}\nIf you've already signed in under Customize > MCPs, you're done.\nIf not: quit and reopen Cursor, then sign in to amdahl there.\nTry it here: amdahl optimize or amdahl search "your question"\nAdd data: amdahl connect, see it all: amdahl open\n`
+    )
+    // Reads no network: the saved sign-in is enough.
+    const before = server!.log.length
+    await cli(io)
+    expect(server!.log.length).toBe(before)
+    const npx = await cli(Object.assign(io, { env: { ...io.env, npm_command: 'exec' } }))
+    for (const line of npx.stdout.split('\n')) expect(line.length).toBeLessThanOrEqual(80)
+    const agent = await cli(Object.assign(io, { stdinIsTTY: false, env: { ...io.env, npm_command: undefined } }))
+    expect(agent.stdout).toBe(`${TITLE}✓ Cursor already has Amdahl\n${CURSOR_TRY}\n`)
+  })
+
   it('Claude Code set up by an agent, never signed in here: all set, with no menu and no sign-in', async () => {
     const io = await atServer(false, { npm_command: 'exec' })
     mkdirSync(join(io.homedir, '.claude'))
