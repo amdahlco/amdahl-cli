@@ -151,6 +151,8 @@ export function reportSendRejection(item: Record<string, unknown>, now: number, 
   }
   let hasRecipient = false
   const recipient = s('recipient')
+  // The server refuses both: recipientHashOf in sendReports/index.ts.
+  if (recipient?.trim() && s('recipient_key_hash')?.trim()) return { reason: 'invalid_recipient', message: 'Send recipient or recipient_key_hash, not both.' }
   if (recipient?.trim()) {
     const ok = item.channel === 'email' ? EMAIL.test(recipient.trim()) : LINKEDIN.test(recipient.trim())
     if (!ok) return { reason: 'invalid_recipient', message: `recipient: send ${item.channel === 'email' ? 'an email address' : 'a LinkedIn profile URL'} for this channel.` }

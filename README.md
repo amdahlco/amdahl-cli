@@ -556,9 +556,13 @@ before it sends anything. The id is the provider's own: for gmail, the
 `Message-ID` header with its angle brackets; never an email address (give that
 as `--recipient`; Amdahl stores only a hash of it). The command reports one
 send, so give one run id. To report many at once, call
-`POST /messages/report_send`, which takes up to 100 items. The CLI checks each
-value against the server's limits first, and a mistake is a usage error that
-names the flag. A send the server did not store prints why and exits 1.
+`POST /messages/report_send`, which takes up to 100 items. Give `--recipient`
+or `--recipient-key-hash`, not both: the server refuses the pair as
+`invalid_recipient`, so the CLI exits 2 first. `--sent-at` needs an uppercase
+`T` and `Z`, as the server does. The CLI checks each value against the
+server's limits first, and a mistake is a usage error that names the flag. It
+counts a text's length as the server does, in UTF-16 units, so an emoji counts
+as two. A send the server did not store prints why and exits 1.
 
 ## Next steps
 
