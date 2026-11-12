@@ -2,7 +2,7 @@
 // written, then handed back.
 
 import { describe, expect, it } from 'vitest'
-import { realIo } from '../src/io'
+import { openerFor, realIo } from '../src/io'
 
 const nextTick = () => new Promise((resolve) => setImmediate(resolve))
 
@@ -30,5 +30,18 @@ describe('realIo().uninterruptible', () => {
     ).toThrow('disk full')
     await nextTick()
     expect(process.listenerCount('SIGINT')).toBe(before)
+  })
+})
+
+describe('openerFor', () => {
+  const url = 'https://console.example.com/acme/settings/connections?add=1&connector=hubspot'
+
+  it('hands Windows the whole URL: cmd would run the text after an & as a command', () => {
+    expect(openerFor('win32', url)).toEqual(['rundll32', ['url.dll,FileProtocolHandler', url]])
+  })
+
+  it('opens the URL as one argument on macOS and Linux', () => {
+    expect(openerFor('darwin', url)).toEqual(['open', [url]])
+    expect(openerFor('linux', url)).toEqual(['xdg-open', [url]])
   })
 })

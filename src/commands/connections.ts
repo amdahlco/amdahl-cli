@@ -9,12 +9,14 @@
 // The CLI never creates a connection itself: a sign-in has no
 // `connections:write`, and a CRM's own sign-in happens in the browser
 // anyway. `open` opens the workspace in the console. With `--no-browser`,
-// or when the browser does not open, both print the link instead.
+// under `--json`, for an agent, in CI, with no terminal, or when the browser
+// does not open, both print the link instead.
 
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
+import { atTerminal } from '../terminal'
 import { clip, day, field, record, records, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
@@ -75,12 +77,12 @@ export async function workspaceSlug(ctx: Ctx, credential: Credential): Promise<s
 }
 
 /**
- * Open `url` in the browser, unless `--no-browser`. Returns whether it opened;
- * the caller prints the link when it did not.
+ * Open `url` in the browser, only for a person at a terminal who did not say
+ * `--no-browser`: not under `--json`, for an agent, with no terminal or in CI.
+ * Returns whether it opened; the caller prints the link when it did not.
  */
 async function openOrPrint(ctx: Ctx, url: string): Promise<boolean> {
-  if (ctx.flags['no-browser'] === true) return false
-  ctx.out.event({ event: 'open_url', url })
+  if (ctx.flags['no-browser'] === true || ctx.out.json || !atTerminal(ctx)) return false
   return ctx.io.openUrl(url)
 }
 

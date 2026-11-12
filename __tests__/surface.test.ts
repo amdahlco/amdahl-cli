@@ -5,7 +5,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { parseCsv, progressLine, resultsPath, toCsv } from '../src/commands/batch'
+import { neutralise, parseCsv, progressLine, resultsPath, toCsv } from '../src/commands/batch'
 import { plainMarkdown, wrap } from '../src/text'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { API_KEY, startMockServer, type MockServer } from './helpers/mock-server'
@@ -80,6 +80,33 @@ describe('search', () => {
     expect(r.stderr).toBe('Amdahl started research on it. This can take a few minutes.\n')
     const json = await cli(io, 'search', 'why?', '--research', '--json')
     expect(json.json).toMatchObject({ ok: true, mode_ran: 'research', research: { status: 'complete', answer: { partial: false } } })
+  })
+
+  it('a research answer keeps its paragraphs and lists, wrapped to 80 columns, with control characters gone', async () => {
+    const long = 'The two lost deals name no rival product in any call, and that holds for both accounts we read in full.'
+    const text = `**Short answer.** ${long}\n\n\n\nWhat the data shows:\n- Cobalt: a [call recap](amdahl:cite?block=b1) after the close date, with a long list item that has to wrap onto a second line.\n- Alder: first call\u001b[2J later.\r\n\nGaps: none.`
+    const io = await withKey({ researchText: text })
+    const r = await cli(io, 'search', 'why do we lose?', '--research')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe(
+      [
+        'Short answer. The two lost deals name no rival product in any call, and that',
+        'holds for both accounts we read in full.',
+        '',
+        'What the data shows:',
+        '- Cobalt: a call recap after the close date, with a long list item that has to',
+        '  wrap onto a second line.',
+        '- Alder: first call[2J later.',
+        '',
+        'Gaps: none.',
+        '',
+        'Ask next:',
+        '- Which competitor came up most?',
+        '',
+      ].join('\n')
+    )
+    expect(r.stdout).not.toContain('\u001b')
+    for (const line of r.stdout.split('\n')) expect(line.length).toBeLessThanOrEqual(80)
   })
 
   it('a workspace with nothing connected prints the message and link, then the connect command', async () => {
@@ -199,6 +226,40 @@ describe('connections, connect and open', () => {
   })
 })
 
+describe('connect and open launch a browser only for a person at a terminal', () => {
+  const url = 'http://localhost:4000/acme/settings/connections?add=1&connector=hubspot'
+
+  it.each<[string, (io: FakeIo) => void]>([
+    ['--json', () => {}],
+    ['an agent (CLAUDECODE)', (io) => void (io.env.CLAUDECODE = '1')],
+    ['an agent (CURSOR_AGENT)', (io) => void (io.env.CURSOR_AGENT = '1')],
+    ['CI', (io) => void (io.env.CI = 'true')],
+    ['no terminal on stdin', (io) => void (io.stdinIsTTY = false)],
+    ['AMDAHL_NO_PROMPT=1', (io) => void (io.env.AMDAHL_NO_PROMPT = '1')],
+  ])('%s: connect and open print the link and open nothing', async (label, setup) => {
+    const io = await signedIn()
+    setup(io)
+    const json = label === '--json'
+    const connect = await cli(io, 'connect', 'hubspot', ...(json ? ['--json'] : []))
+    expect(connect.code).toBe(0)
+    if (json) expect(connect.json).toEqual({ ok: true, url, opened: false, connector: 'hubspot' })
+    else expect(connect.stdout).toBe(`${url}\n`)
+    const open = await cli(io, 'open', ...(json ? ['--json'] : []))
+    expect(open.code).toBe(0)
+    if (json) expect(open.json).toEqual({ ok: true, url: 'http://localhost:4000/acme', opened: false, workspace: 'acme' })
+    else expect(open.stdout).toBe('http://localhost:4000/acme\n')
+    expect(io.opened).toEqual([])
+    // --json prints no machine event either: nothing was opened.
+    expect(connect.stderr + open.stderr).not.toContain('open_url')
+  })
+
+  it('a person at a terminal still gets the browser', async () => {
+    const io = await signedIn()
+    expect((await cli(io, 'connect', 'hubspot')).code).toBe(0)
+    expect(io.opened).toEqual([url])
+  })
+})
+
 describe('optimize --list', () => {
   it('sends a CSV as one batch with the flags as defaults, shows progress and writes the results beside it', async () => {
     const io = await signedIn({ batchPolls: 2 })
@@ -306,6 +367,88 @@ describe('optimize --list', () => {
     expect(readFileSync(join(io.cwd, 'd.optimized.csv'), 'utf8')).toContain('better: a')
     // With no list, the items go to <id>.optimized.jsonl here.
     expect((await cli(io, 'optimize', '--batch', id)).stdout).toBe(`Results: ${join(io.cwd, `${id}.optimized.jsonl`)}\n`)
+  })
+
+  it('starts a results cell that a spreadsheet would run as a formula with a quote', async () => {
+    const io = await signedIn({ batchMessage: '+cmd|calc' })
+    const list = join(io.cwd, 'f.csv')
+    writeFileSync(list, 'item_id,message\n-5,=1+1\nok,"@me and a normal one"\n')
+    expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
+    expect(parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows.slice(1)).toEqual([
+      ["'-5", "'=1+1", "'+cmd|calc", 'done', 'Cut the opener.', 'run-0', ''],
+      ['ok', "'@me and a normal one", "'+cmd|calc", 'done', 'Cut the opener.', 'run-1', ''],
+    ])
+    expect([neutralise('=a'), neutralise('+a'), neutralise('-a'), neutralise('@a'), neutralise('\ta'), neutralise('\ra'), neutralise('a=b'), neutralise('')]).toEqual([
+      "'=a", "'+a", "'-a", "'@a", "'\ta", "'\ra", 'a=b', '',
+    ])
+  })
+
+  it('does not replace a results file that exists without --force, and queues nothing first', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'd.csv')
+    const out = join(io.cwd, 'd.optimized.csv')
+    writeFileSync(list, 'message\na\n')
+    writeFileSync(out, 'keep me\n')
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`Error: ${out} already exists.\nMove it, or add --force to replace it.\n`)
+    expect(readFileSync(out, 'utf8')).toBe('keep me\n')
+    expect(requests('/messages/optimize/batch')).toEqual([])
+    // --json writes no file, and --no-wait writes none yet: neither is refused.
+    expect((await cli(io, 'optimize', '--list', list, '--json')).code).toBe(0)
+    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).code).toBe(0)
+    expect(readFileSync(out, 'utf8')).toBe('keep me\n')
+    const forced = await cli(io, 'optimize', '--list', list, '--force')
+    expect(forced.code).toBe(0)
+    expect(readFileSync(out, 'utf8')).toContain('better: a')
+    // A pickup is refused the same way, before it reads the batch.
+    const id = /batch (\S+)\./.exec((await cli(io, 'optimize', '--list', list, '--no-wait')).stdout)?.[1] ?? ''
+    const reads = requests('/batches/').length
+    expect((await cli(io, 'optimize', '--list', list, '--batch', id)).code).toBe(2)
+    expect(requests('/batches/').length).toBe(reads)
+    expect((await cli(io, 'optimize', '--batch', id)).code).toBe(0)
+    expect((await cli(io, 'optimize', '--batch', id)).code).toBe(2)
+  })
+
+  it('--force and --no-wait mean nothing without a list, and --no-wait nothing with --batch', async () => {
+    const io = await signedIn()
+    const file = join(io.cwd, 'm.md')
+    writeFileSync(file, 'draft')
+    expect((await cli(io, 'optimize', file, '--force')).stderr).toBe('Error: --force goes with --list <file>.\n')
+    const batch = await cli(io, 'optimize', '--batch', 'b1', '--no-wait')
+    expect(batch).toMatchObject({ code: 2, stderr: 'Error: --no-wait does nothing with --batch: it only queues a new list.\n' })
+    expect(requests('/batches/')).toEqual([])
+  })
+
+  it('--batch with a list that has a different number of messages is refused before any wait', async () => {
+    const io = await signedIn()
+    const two = join(io.cwd, 'two.csv')
+    writeFileSync(two, 'message\na\nb\n')
+    const id = /batch (\S+)\./.exec((await cli(io, 'optimize', '--list', two, '--no-wait')).stdout)?.[1] ?? ''
+    const three = join(io.cwd, 'three.csv')
+    writeFileSync(three, 'message\na\nb\nc\n')
+    const r = await cli(io, 'optimize', '--list', three, '--batch', id)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`Error: ${three} has 3 messages, but batch ${id} has 2 items.\nUse the same list you queued the batch from.\n`)
+    expect(existsSync(join(io.cwd, 'three.optimized.csv'))).toBe(false)
+    expect((await cli(io, 'optimize', '--list', two, '--batch', id)).code).toBe(0)
+    expect(readFileSync(join(io.cwd, 'two.optimized.csv'), 'utf8')).toContain('better: b')
+  })
+
+  it('an unknown or missing header names the headers it expects; a message in the header row is cut short', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'h.csv')
+    const hint = 'The first row must name the columns, from: item_id, message, channel, evidence, on_unsupported, facts, rules (message is required). For any other field, use a JSONL file.'
+    writeFileSync(list, 'message,email\nhi,a@b.c\n')
+    expect((await cli(io, 'optimize', '--list', list)).stderr).toBe(`Error: ${list} has a column Amdahl doesn't read: "email".\n${hint}\n`)
+    writeFileSync(list, 'channel\nemail\n')
+    expect((await cli(io, 'optimize', '--list', list)).stderr).toBe(`Error: ${list} needs a "message" column.\n${hint}\n`)
+    // No header row: the first message is read as the header.
+    writeFileSync(list, `${'Hi Dana I saw your talk and wanted to ask about your data stack '.repeat(3)}\nsecond\n`)
+    const headerless = await cli(io, 'optimize', '--list', list)
+    expect(headerless.code).toBe(2)
+    expect(headerless.stderr.split('\n')[0]).toMatch(/column Amdahl doesn't read: "hi dana i saw your talk and wanted to\.\.\."\.$/)
+    expect(headerless.stderr).toContain(hint)
   })
 
   it('a file without --list is still one message; --list beside files, or --no-wait alone, is a usage error', async () => {
@@ -422,6 +565,41 @@ describe('next steps', () => {
     expect(requests('/setup/status').length).toBe(before)
     server!.options.noConnections = false
     expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\n')
+  })
+})
+
+describe('the optimize no-data line is only for a person at a terminal', () => {
+  // A workspace with no data, and a result that says so itself: both ways to the line are shut.
+  const noData = { noConnections: true, optimizeResult: { ok: true, message: 'Hi', summary: 'Tighter.', run_id: 'r1', setup_needed: { reason: 'no_sources_connected', message: 'x', connect_url: 'y' } } }
+
+  it.each<[string, (io: FakeIo) => void]>([
+    ['piped (no terminal on stdin)', (io) => void (io.stdinIsTTY = false)],
+    ['an agent (CLAUDECODE)', (io) => void (io.env.CLAUDECODE = '1')],
+    ['an agent (CURSOR_AGENT)', (io) => void (io.env.CURSOR_AGENT = '1')],
+    ['CI', (io) => void (io.env.CI = 'true')],
+    ['AMDAHL_NO_PROMPT=1', (io) => void (io.env.AMDAHL_NO_PROMPT = '1')],
+  ])('%s: no setup/status request and no line, in a file run and a piped one', async (_label, setup) => {
+    const io = await signedIn(noData)
+    setup(io)
+    const file = join(io.cwd, 'a.md')
+    writeFileSync(file, 'draft')
+    const before = requests('/setup/status').length
+    const r = await cli(io, 'optimize', file)
+    expect(r.code).toBe(0)
+    expect(r.stderr).not.toContain('amdahl connect')
+    io.stdinIsTTY = false
+    io.stdinText = 'draft'
+    expect((await cli(io, 'optimize', '-')).stderr).not.toContain('amdahl connect')
+    expect(requests('/setup/status').length).toBe(before)
+  })
+
+  it('at a terminal, a result that says the workspace has no data gets the line with no status request', async () => {
+    const io = await signedIn(noData)
+    const file = join(io.cwd, 'a.md')
+    writeFileSync(file, 'draft')
+    const r = await cli(io, 'optimize', file)
+    expect(r.stderr).toContain('Connect calls or a CRM so Amdahl checks claims against them: amdahl connect')
+    expect((await cli(io, 'optimize', file, '--json')).stderr).toBe('')
   })
 })
 

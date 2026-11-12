@@ -17,15 +17,18 @@
 // list (`drafts.csv` -> `drafts.optimized.csv`, `x.jsonl` ->
 // `x.optimized.jsonl`), or to stdout as one JSON document with `--json`.
 // `--no-wait` only queues the batch and prints its id; `--batch <id>` picks
-// up a batch queued earlier (with `--list`, its results go next to that list).
-// Ctrl+C stops the wait, not the batch.
+// up a batch queued earlier (with `--list`, its results go next to that list,
+// and the list must have as many messages as the batch has items). A results
+// file that already exists is not replaced without `--force`. A spreadsheet
+// runs a cell that starts with `=`, `+`, `-` or `@` as a formula, so the CSV
+// results start such a cell with a quote. Ctrl+C stops the wait, not the batch.
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
-import { count, field, record, records } from '../text'
+import { clip, count, field, record, records } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -133,10 +136,11 @@ function csvList(path: string, text: string): ListFile {
   if (!header) throw usageError(`${path} is empty.`)
   const names = header.map((h) => h.trim().toLowerCase())
   const unknown = names.find((n) => !CSV_COLUMNS.includes(n))
+  const headers = `The first row must name the columns, from: ${CSV_COLUMNS.join(', ')} (message is required). For any other field, use a JSONL file.`
   if (unknown !== undefined) {
-    throw usageError(`${path} has a column Amdahl doesn't read: "${unknown}".`, `Columns: ${CSV_COLUMNS.join(', ')} (message is required). For any other field, use a JSONL file.`)
+    throw usageError(`${path} has a column Amdahl doesn't read: "${clip(unknown, 40)}".`, headers)
   }
-  if (!names.includes('message')) throw usageError(`${path} needs a "message" column.`, `Columns: ${CSV_COLUMNS.join(', ')}.`)
+  if (!names.includes('message')) throw usageError(`${path} needs a "message" column.`, headers)
   const items = body.map((row, i) => {
     if (row.length !== names.length) {
       throw usageError(`Line ${lines[i + 1]} of ${path} has ${count(row.length, 'cell')}; the header has ${names.length}.`)
@@ -274,6 +278,15 @@ async function allItems(ctx: Ctx, credential: Credential, id: string): Promise<{
   return { batch, items }
 }
 
+/**
+ * A cell as a spreadsheet will not run it: one that starts with `=`, `+`, `-`,
+ * `@`, a tab or a carriage return gets a quote in front. Amdahl's own message
+ * can start with `-`, and a list's cells are the sender's: neither is a formula.
+ */
+export function neutralise(cell: string): string {
+  return /^[=+\-@\t\r]/.test(cell) ? `'${cell}` : cell
+}
+
 /** The results columns a CSV list gains. */
 export const RESULT_COLUMNS = ['optimized_message', 'status', 'what_changed', 'run_id', 'error']
 
@@ -287,17 +300,33 @@ function resultCells(item: Record<string, unknown> | undefined): string[] {
   return [message, result.unchanged === true ? 'unchanged' : 'done', field(result.what_changed), field(result.run_id), '']
 }
 
+/** Where the results of a run go: next to its list, or `<id>.optimized.jsonl` here. */
+function resultsFile(list: ListFile | null, id: string, cwd: string): string {
+  if (list) return resultsPath(list.path, list.kind)
+  return join(cwd, `${id}.optimized.jsonl`)
+}
+
+/**
+ * Refuse to replace a results file that exists, unless `--force`. Checked
+ * before anything is queued or waited for, so nothing is spent on a run whose
+ * results have nowhere to go.
+ */
+function assertFree(path: string, force: boolean): void {
+  if (!force && existsSync(path)) throw usageError(`${path} already exists.`, 'Move it, or add --force to replace it.')
+}
+
 /** Write the results file for `list`. Returns its path. */
-function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string): string {
+function writeResults(list: ListFile | null, id: string, items: Record<string, unknown>[], cwd: string, force: boolean): string {
   const byIndex = new Map(items.map((i) => [i.index, i]))
+  const path = resultsFile(list, id, cwd)
+  // `wx` fails when the file appeared since the check, instead of replacing it.
+  const flag = force ? 'w' : 'wx'
   if (list?.kind === 'csv' && list.header && list.rows) {
-    const path = resultsPath(list.path, 'csv')
     const rows = [[...list.header, ...RESULT_COLUMNS], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i))])]
-    writeFileSync(path, toCsv(rows))
+    writeFileSync(path, toCsv(rows.map((row) => row.map(neutralise))), { flag })
     return path
   }
-  const path = list ? resultsPath(list.path, 'jsonl') : join(cwd, `${id}.optimized.jsonl`)
-  writeFileSync(path, items.map((i) => JSON.stringify(i)).join('\n') + '\n')
+  writeFileSync(path, items.map((i) => JSON.stringify(i)).join('\n') + '\n', { flag })
   return path
 }
 
@@ -319,11 +348,25 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const listPath = str(flags.list)
   const resume = str(flags.batch)
   if (!listPath && !resume) throw usageError('Give a list with --list <file>, or a batch id with --batch <id>.')
+  if (resume && flags['no-wait'] === true) throw usageError('--no-wait does nothing with --batch: it only queues a new list.')
   const list = listPath ? readList(listPath) : null
+  const force = flags.force === true
+  // Nothing is queued, read or waited for while the results have nowhere to go.
+  if (!out.json && flags['no-wait'] !== true) assertFree(resultsFile(list, resume ?? '', ctx.io.cwd), force)
   const credential = await resolveCredential(ctx)
 
   let id = resume ?? ''
   let first: Record<string, unknown> | null = null
+  if (resume && list) {
+    // The rows of the results file are the rows of the list: a different list would be matched to the wrong results.
+    first = await call(() =>
+      apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize/batches/${encodeURIComponent(resume)}?limit=1`)
+    )
+    const total = record(first.counts)?.total
+    if (typeof total === 'number' && total !== list.items.length) {
+      throw usageError(`${list.path} has ${count(list.items.length, 'message')}, but batch ${resume} has ${count(total, 'item')}.`, 'Use the same list you queued the batch from.')
+    }
+  }
   if (!resume && list) {
     const items = withDefaults(list.items, defaults)
     try {
@@ -353,7 +396,7 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     out.result({ ...batch, ok: failed === 0, items, next_cursor: null })
     return failed === 0 ? EXIT.ok : EXIT.general
   }
-  const path = writeResults(list, id, items, ctx.io.cwd)
+  const path = writeResults(list, id, items, ctx.io.cwd, force)
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
   out.result({}, `Results: ${path}`)

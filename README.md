@@ -364,7 +364,7 @@ amdahl auth token
 amdahl status
 amdahl optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
                 [--on-unsupported flag|remove] [--tries] [--context <file.json>]
-amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [the optimize flags]
+amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force] [the optimize flags]
 amdahl search "<question>" [--research] [--limit <n>]
 amdahl connections [--all]
 amdahl connect [<connector>] [--no-browser]
@@ -447,11 +447,14 @@ console's add page for it,
 you sign in to HubSpot. With no connector it opens the add page with the
 whole list. The CLI never creates a connection itself. An unknown connector
 exits 2 and lists the ones you can connect; one that is not offered yet exits
-1. With `--no-browser`, or when the browser does not open, it prints the
-link on stdout instead.
+1. It opens the browser only for a person at a terminal: stdin is a terminal,
+`AMDAHL_NO_PROMPT=1` is not set, no agent runs it (`CLAUDECODE`,
+`CURSOR_AGENT`), it is not CI and there is no `--json`. Everywhere else, with
+`--no-browser`, or when the browser does not open, it prints the link on
+stdout instead (under `--json`, as `url` with `opened: false`).
 
 `amdahl open` opens this workspace in the console (the console home when you
-are not signed in). `--no-browser` prints the link.
+are not signed in), on the same terms. `--no-browser` prints the link.
 
 ## Optimize a list
 
@@ -483,18 +486,27 @@ any other field a single optimize takes). The optimize flags (`--channel`,
 item that does not set its own; a row's facts and a `--context` file's rules
 and voice examples are both sent.
 
-The whole file is read and checked first. Progress goes to stderr, in place
-at a terminal. When the batch completes, the results go next to the list:
-`drafts.csv` gets `drafts.optimized.csv` (every input column, then
-`optimized_message`, `status`, `what_changed`, `run_id` and `error`), and
+The whole file is read and checked first. A header the CLI does not read, or a
+missing `message` column, says which headers it expects. Progress goes to
+stderr, in place at a terminal. When the batch completes, the results go next
+to the list: `drafts.csv` gets `drafts.optimized.csv` (every input column,
+then `optimized_message`, `status`, `what_changed`, `run_id` and `error`), and
 `x.jsonl` gets `x.optimized.jsonl` (one batch item per line, its `result`
 what a single optimize returns). With `--json`, the batch and every item go
 to stdout and no file is written. A failed item exits 1. A refused list
 names the line of the first item the server refused.
 
+A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula,
+so in the results CSV such a cell (and one that starts with a tab or a
+carriage return) starts with a `'`. The CLI does not replace a results file
+that already exists: it exits 2 before it queues anything, and `--force`
+replaces the file.
+
 `--no-wait` queues the batch, prints its id and the command that picks it up,
 and exits. `--batch <id>` picks up a batch queued earlier; with `--list`, the
-results go next to that list, otherwise to `<id>.optimized.jsonl` here.
+results go next to that list and the list must have as many messages as the
+batch has items (exit 2 otherwise), otherwise they go to `<id>.optimized.jsonl`
+here. `--no-wait` with `--batch` exits 2: it only queues a new list.
 
 ## After you send
 
@@ -533,7 +545,10 @@ lines; `--json` never carries them.
 - `amdahl optimize` on a workspace with no data connected ends with
   `Connect calls or a CRM so Amdahl checks claims against them: amdahl connect`.
   The CLI asks `GET /setup/status` beside the first rewrite, so it adds no
-  wait, and says nothing when it cannot tell.
+  wait, and says nothing when it cannot tell. Only a person at a terminal
+  gets the line and the request (the same test as `optimize` with no file): a
+  pipe, an agent, CI, `AMDAHL_NO_PROMPT=1` and `--json` make exactly the
+  requests they made before.
 - `amdahl status` gives each blocked item its fix: no data, `amdahl connect`;
   a connection that needs attention, its console page; a used-up quota, the
   day it resets; a role too low, ask a workspace admin.

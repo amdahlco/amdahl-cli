@@ -15,6 +15,22 @@ export function field(value: unknown): string {
   return typeof value === 'string' ? printable(value).trim() : ''
 }
 
+/**
+ * A string field from the network that is prose: its line breaks stay (a
+ * research answer has paragraphs and lists), every other control character
+ * goes, and a run of blank lines becomes one.
+ */
+export function paragraphs(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => printable(line).trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
 /** A plain object, or null. */
 export function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null

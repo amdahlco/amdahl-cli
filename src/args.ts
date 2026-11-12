@@ -48,6 +48,7 @@ const COMMAND_OPTIONS: Record<string, OptionSpec> = {
     list: { type: 'string' },
     batch: { type: 'string' },
     'no-wait': { type: 'boolean' },
+    force: { type: 'boolean' },
   },
   search: { research: { type: 'boolean' }, limit: { type: 'string' } },
   connections: { all: { type: 'boolean' } },
@@ -233,11 +234,12 @@ Commands:
   optimize [<file>... | -] [--channel email|linkedin]
            [--evidence off|workspace] [--on-unsupported flag|remove]
            [--tries] [--context <file.json>]
-  optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>]
+  optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force]
            [the optimize flags above, for every message]
            A CSV has a message column, and may have item_id, channel,
            evidence, on_unsupported, facts and rules. --batch <id> picks up
-           a batch queued earlier.
+           a batch queued earlier, with the same list. --force replaces an
+           existing results file.
   search "<question>" [--research] [--limit <n>]
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset

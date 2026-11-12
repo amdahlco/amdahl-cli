@@ -19,7 +19,7 @@
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
-import { clip, count, day, field, plainMarkdown, record, records, wrap } from '../text'
+import { clip, count, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
 import { connectLine } from './connections'
 
 const PLATFORM = '/api/platform/v1'
@@ -94,8 +94,8 @@ export function searchLines(result: Record<string, unknown>): string[] {
   const lines: string[] = []
   const rows = rowsOf(result)
   const answer = record(result.answer)
-  const answered = answer?.status === 'answered' && field(answer.text)
-  if (answered) lines.push(...wrap(plainMarkdown(field(answer.text))), '')
+  const answered = answer?.status === 'answered' && paragraphs(answer.text)
+  if (answered) lines.push(...wrap(plainMarkdown(answered)), '')
   const shown = rows.slice(0, answered ? ROWS_UNDER_ANSWER : ROWS_ALONE)
   if (shown.length > 0) {
     if (answered) lines.push('From:')
@@ -118,7 +118,7 @@ function refusedForScope(notes: string[]): boolean {
 /** The research answer for a person: its cited text, then up to three questions to ask next. */
 export function researchLines(job: Record<string, unknown>): string[] {
   const answer = record(job.answer)
-  const lines = wrap(plainMarkdown(field(answer?.text)) || 'The research finished with no answer.')
+  const lines = wrap(plainMarkdown(paragraphs(answer?.text)) || 'The research finished with no answer.')
   if (answer?.partial === true) lines.push('', 'It stopped at its budget, so this answers from what it had read.')
   const next = (Array.isArray(answer?.follow_ups) ? answer.follow_ups : []).map(field).filter(Boolean).slice(0, 3)
   if (next.length > 0) {

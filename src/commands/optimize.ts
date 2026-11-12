@@ -16,20 +16,21 @@
 //
 // `--list <file>` (and `--batch <id>`) rewrite a whole list in one batch
 // instead: see batch.ts. A file given without `--list` is still one message.
-// Without `--json`, a run on a workspace with no data connected ends with one
-// line on connecting calls or a CRM, so claims can be checked against them.
+// For a person at a terminal (see terminal.ts), and not under `--json`, a run
+// on a workspace with no data connected ends with one line on connecting calls
+// or a CRM, so claims can be checked against them. An agent, a pipe and CI make
+// no request for it and print no line.
 
 import { readFileSync } from 'node:fs'
-import { ciVariable } from '../ci'
 import { amdahlCommand } from '../command-name'
 import { feedbackLinkOn } from '../config'
 import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
+import { atTerminal } from '../terminal'
 import { browserSignIn } from './auth'
 import { optimizeList } from './batch'
-import { runningAgent } from './skills-guide'
 
 /** Said before a first sign-in: it is also where a new user's workspace is made. */
 export const NEW_USER = 'New to Amdahl? The sign-in sets up your free workspace.'
@@ -267,12 +268,21 @@ export function noDataLine(): string {
 }
 
 /**
+ * Whether to say, after a run, that the workspace has no data connected: only
+ * for a person at a terminal, and never under `--json`.
+ */
+function tipsOn(ctx: Ctx): boolean {
+  return !ctx.out.json && atTerminal(ctx)
+}
+
+/**
  * Whether the setup status counts no connection, for the line after a run
- * (a result can also say so itself: {@link saysNoData}). Never rejects:
- * anything unknown is "has data", so a workspace that holds data is never
- * told to connect it.
+ * (a result can also say so itself: {@link saysNoData}). Asks the server only
+ * when {@link tipsOn}. Never rejects: anything unknown is "has data", so a
+ * workspace that holds data is never told to connect it.
  */
 async function noDataConnected(ctx: Ctx, credential: Credential): Promise<boolean> {
+  if (!tipsOn(ctx)) return false
   let timer: NodeJS.Timeout | undefined
   // A slow read never holds up the run's last line: past the cap, it says nothing.
   const cap = new Promise<boolean>((resolve) => {
@@ -359,7 +369,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
     return EXIT.ok
   }
   out.info('Amdahl is rewriting it. This can take a minute.')
-  const noData = out.json ? Promise.resolve(false) : noDataConnected(ctx, credential)
+  const noData = noDataConnected(ctx, credential)
   const result = await optimizeOne(ctx, credential, message, base, 'your message')
   if (result.ok === false) {
     if (out.json) out.result({ ok: false, file: '-', result })
@@ -374,7 +384,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
-  const connect = saysNoData(result) || (await noData) ? [noDataLine()] : []
+  const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
   out.info([...did, ...feedbackLines(ctx, result), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
@@ -387,10 +397,11 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     return optimizeList(ctx, requestOptions(ctx))
   }
   if (ctx.flags['no-wait'] === true) throw usageError('--no-wait goes with --list <file>.')
+  if (ctx.flags.force === true) throw usageError('--force goes with --list <file>.')
   let files = args
   if (files.length === 0) {
     // An agent may run commands in a terminal, and so may a CI job: neither can paste, so they get the usage.
-    if (io.stdinIsTTY && !ctx.nonInteractive && runningAgent(ctx) === null && !ciVariable(io.env)) return optimizePasted(ctx)
+    if (atTerminal(ctx)) return optimizePasted(ctx)
     if (io.stdinIsTTY) {
       throw usageError(
         'Give a file to optimize, or pipe the message on stdin.',
@@ -419,7 +430,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
 
   const credential = await resolveCredential(ctx)
   // Asked beside the first rewrite, so the line after the run adds no wait.
-  const noData = out.json ? Promise.resolve(false) : noDataConnected(ctx, credential)
+  const noData = noDataConnected(ctx, credential)
   const results: FileResult[] = []
   let exit: number = EXIT.ok
   for (const { file, message } of inputs) {
@@ -441,6 +452,6 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     }
   }
   if (out.json) out.result(results.length === 1 ? (results[0] as unknown as Record<string, unknown>) : (results as unknown as Record<string, unknown>[]))
-  else if (results.some((r) => r.ok) && (results.some((r) => saysNoData(r.result)) || (await noData))) out.info(noDataLine())
+  else if (tipsOn(ctx) && results.some((r) => r.ok) && (results.some((r) => saysNoData(r.result)) || (await noData))) out.info(noDataLine())
   return exit
 }

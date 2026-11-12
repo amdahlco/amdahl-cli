@@ -58,12 +58,16 @@ export interface MockOptions {
   searchResult?: Record<string, unknown>
   /** Research reads that answer `running` before the job completes. */
   researchPolls?: number
+  /** The research answer's text (default: one sentence). */
+  researchText?: string
   /** The connections list (inside `data`). */
   connections?: Record<string, unknown>[]
   /** Status reads of a batch before it completes. */
   batchPolls?: number
   /** Item indexes that fail in a batch. */
   batchFailures?: number[]
+  /** The message every batch item comes back with (default: `better: <draft>`). */
+  batchMessage?: string
 }
 
 export interface MockServer {
@@ -327,7 +331,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             status: done ? 'complete' : 'running',
             question: 'q',
             answer: done
-              ? { text: 'Deals with a pricing objection closed less often [1](amdahl:cite?block=b1).', partial: false, partial_reason: null, content_blocks: [], follow_ups: ['Which competitor came up most?'] }
+              ? { text: options.researchText ?? 'Deals with a pricing objection closed less often [1](amdahl:cite?block=b1).', partial: false, partial_reason: null, content_blocks: [], follow_ups: ['Which competitor came up most?'] }
               : null,
             error: null,
           },
@@ -384,7 +388,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
                 ? null
                 : options.batchFailures?.includes(index)
                   ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
-                  : { ok: true, message: `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: `run-${index}`, unchanged: false },
+                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: `run-${index}`, unchanged: false },
             })),
             next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
           },
