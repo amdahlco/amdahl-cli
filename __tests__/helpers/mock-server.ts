@@ -7,10 +7,17 @@
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { batchProblems, feedbackProblem, reportSendProblem, reportSendRejection, searchProblem } from './strict'
 
 export const BIZ = '11111111-1111-4111-8111-111111111111'
 export const USER = '22222222-2222-4222-8222-222222222222'
 export const API_KEY = `amdhl_${'a'.repeat(48)}`
+/** An optimize run this workspace has (made an hour ago): `feedback` and `sent` find it. */
+export const KNOWN_RUN = '88888888-8888-4888-8888-888888888888'
+/** A well-formed run id this workspace does not have. */
+export const UNKNOWN_RUN = '00000000-0000-4000-8000-000000000000'
+/** The run id of item `index` of any batch the mock ran. */
+export const batchRun = (index: number) => `99999999-9999-4999-8999-${String(index).padStart(12, '0')}`
 
 export interface LoggedRequest {
   method: string
@@ -60,6 +67,8 @@ export interface MockOptions {
   researchPolls?: number
   /** The research answer's text (default: one sentence). */
   researchText?: string
+  /** The research read is refused for want of `conversations:read`, though the key could start the job. */
+  researchReadRefused?: boolean
   /** The research answer's `content_blocks` (default: none). */
   researchBlocks?: Record<string, unknown>[]
   /** The connections list (inside `data`). */
@@ -91,6 +100,10 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   const revoked: string[] = []
   const keyRequests = new Map<string, Record<string, unknown>>()
   const batches = new Map<string, { items: Record<string, unknown>[]; polls: number }>()
+  // Run ids this workspace has, and when each was made.
+  const runs = new Map<string, number>([[KNOWN_RUN, Date.now() - 3_600_000]])
+  // Sends already reported, by run and send key.
+  const reports = new Map<string, number>()
   let researchReads = 0
   let workspaceCreated = false
   let refusals = 0
@@ -278,7 +291,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       // falls back to the search with the server's note, as amdahl-app does.
       if (path === '/api/platform/v1/search/query' && req.method === 'POST') {
         const input = JSON.parse(body) as { query?: string; route?: string }
-        if (!input.query) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: 'Provide a `query`.' } } })
+        const problem = searchProblem(input)
+        if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
         if (input.route === 'research') {
           if (kind === 'api_key') {
             return json(res, 200, {
@@ -323,7 +337,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
 
       const research = path.match(/^\/api\/platform\/v1\/research\/([^/]+)$/)
       if (research && req.method === 'GET') {
-        if (kind !== 'api_key') return err(res, 403, 'missing_scope', 'This credential lacks conversations:read.')
+        if (kind !== 'api_key' || options.researchReadRefused) return err(res, 403, 'missing_scope', 'This credential lacks conversations:read.')
         researchReads++
         const done = researchReads > (options.researchPolls ?? 1)
         return json(res, 200, {
@@ -352,26 +366,28 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       if (path === '/api/platform/v1/connections/catalog' && req.method === 'GET') {
         return json(res, 200, {
           data: [
-            { type: 'hubspot', name: 'HubSpot', category: 'crm', connectable: true, unavailable_reason: null },
-            { type: 'gong', name: 'Gong', category: 'calls', connectable: true, unavailable_reason: null },
-            { type: 'slack', name: 'Slack', category: 'comms', connectable: false, unavailable_reason: 'planned' },
+            { type: 'hubspot', name: 'HubSpot', category: 'crm', authMethod: 'oauth', connectable: true, unavailableReason: null, selfServeAllowed: true },
+            { type: 'gong', name: 'Gong', category: 'calls', authMethod: 'oauth', connectable: true, unavailableReason: null, selfServeAllowed: true },
+            { type: 'slack', name: 'Slack', category: 'comms', authMethod: 'oauth', connectable: false, unavailableReason: 'planned', selfServeAllowed: false },
           ],
         })
       }
 
       if (path === '/api/platform/v1/messages/optimize/batch' && req.method === 'POST') {
         const input = JSON.parse(body) as { items?: Record<string, unknown>[] }
+        const problems = batchProblems(input)
+        if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
         const items = input.items ?? []
-        const bad = items.findIndex((i) => typeof i.message !== 'string')
-        if (bad >= 0) return err(res, 400, 'invalid_input', `Input failed schema validation: $.items[${bad}].message: Required`)
         const id = `77777777-7777-4777-8777-${String(++n).padStart(12, '0')}`
         batches.set(id, { items, polls: 0 })
+        items.forEach((_, index) => runs.set(batchRun(index), Date.now()))
         return json(res, 202, { data: { ok: true, replayed: false, ...batchSummary(id, items, false) } })
       }
 
       const batch = path.match(/^\/api\/platform\/v1\/messages\/optimize\/batches\/([^/]+)$/)
       if (batch && req.method === 'GET') {
-        const entry = batches.get(batch[1] ?? '')
+        // A malformed id and an unknown id are one not-found, as on the real route.
+        const entry = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batch[1] ?? '') ? batches.get(batch[1] ?? '') : undefined
         if (!entry) return err(res, 404, 'not_found')
         entry.polls++
         const done = entry.polls > (options.batchPolls ?? 1)
@@ -390,7 +406,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
                 ? null
                 : options.batchFailures?.includes(index)
                   ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
-                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: `run-${index}`, unchanged: false },
+                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, what_changed: 'Cut the opener.', run_id: batchRun(index), unchanged: false },
             })),
             next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
           },
@@ -400,18 +416,25 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       const feedback = path.match(/^\/api\/platform\/v1\/messages\/optimize\/runs\/([^/]+)\/feedback$/)
       if (feedback && req.method === 'POST') {
         const input = JSON.parse(body) as Record<string, unknown>
-        if (!['did_it_myself', 'reported_to_me', 'inferred'].includes(String(input.evidence))) return err(res, 400, 'invalid_input')
-        if (feedback[1] === 'unknown') return json(res, 404, { data: { success: false, error: { code: 'not_found', message: 'No such run.' } } })
+        const problem = feedbackProblem(input)
+        if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
+        if (!runs.has(feedback[1] ?? '')) return json(res, 404, { data: { success: false, error: { code: 'not_found', message: 'No optimize run with this id from you in this workspace.' } } })
         return json(res, 200, { data: { success: true, feedback_id: 'fb1', run_id: feedback[1], rubric_miss: null, outcome: input.outcome ?? null, evidence: input.evidence } })
       }
 
       if (path === '/api/platform/v1/messages/report_send' && req.method === 'POST') {
         const input = JSON.parse(body) as { items: Record<string, unknown>[] }
-        const items = input.items.map((item, index) =>
-          item.run_id === 'bad'
-            ? { index, run_id: item.run_id, status: 'rejected', reason: 'run_not_found', message: 'No optimize run with this id.' }
-            : { index, run_id: item.run_id, status: 'accepted', result: 'created' }
-        )
+        const problem = reportSendProblem(input)
+        if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
+        const items = input.items.map((item, index) => {
+          const rejection = reportSendRejection(item, Date.now(), runs.get(String(item.run_id).toLowerCase()))
+          if (rejection) return { index, run_id: item.run_id, status: 'rejected', ...rejection }
+          // The same send key reported again updates the first report.
+          const key = `${String(item.run_id).toLowerCase()}|${String(item.provider_send_id ?? item.recipient ?? item.recipient_key_hash)}`
+          const again = reports.has(key)
+          reports.set(key, Date.now())
+          return { index, run_id: item.run_id, status: 'accepted', result: again ? 'updated' : 'created' }
+        })
         const rejected = items.filter((i) => i.status === 'rejected').length
         return json(res, 200, { data: { success: true, accepted: items.length - rejected, rejected, items } })
       }

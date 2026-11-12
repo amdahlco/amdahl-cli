@@ -6,10 +6,10 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { asciiTable, blockLines, wrapCell } from '../src/blocks'
-import { neutralise, parseCsv, progressLine, resultsPath, toCsv } from '../src/commands/batch'
+import { neutralise, parseCsv, progressLine, resultsPath, shellWord, toCsv } from '../src/commands/batch'
 import { plainMarkdown, wrap } from '../src/text'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
-import { API_KEY, startMockServer, type MockServer } from './helpers/mock-server'
+import { API_KEY, KNOWN_RUN, UNKNOWN_RUN, batchRun, startMockServer, type MockServer } from './helpers/mock-server'
 
 let server: MockServer | null = null
 afterEach(async () => {
@@ -23,6 +23,8 @@ async function signedIn(options: Parameters<typeof startMockServer>[0] = {}): Pr
   const io = fakeIo({ AMDAHL_API_URL: server.url })
   expect((await cli(io, 'login', '--json')).code).toBe(0)
   io.opened.length = 0
+  // A person at a terminal: stdout is one too. A test that pipes it says so.
+  io.stdoutIsTTY = true
   return io
 }
 
@@ -168,6 +170,22 @@ describe('search', () => {
     expect(json.json.research.answer.content_blocks).toHaveLength(blocks.length)
   })
 
+  it('research that started but cannot be read back is an error in --json too, with the search answer and the job id beside it', async () => {
+    const io = await withKey({ researchReadRefused: true })
+    const human = await cli(io, 'search', 'why do we lose?', '--research')
+    expect(human).toMatchObject({ code: 4, stdout: '' })
+    expect(human.stderr).toBe(
+      'Amdahl started research on it. This can take a few minutes.\n' +
+        "Error: Research 66666666-6666-4666-8666-666666666666 started, but this credential can't read it.\n" +
+        'A deeper answer needs a Customer agent key: amdahl keys create --name research --preset agent\n'
+    )
+    const json = await cli(io, 'search', 'why do we lose?', '--research', '--json')
+    expect(json.code).toBe(4)
+    expect(json.json.ok).toBe(false)
+    expect(json.json.error).toMatchObject({ code: 'missing_scope', hint: expect.stringContaining('Customer agent key') })
+    expect(json.json.research.research_id).toBe('66666666-6666-4666-8666-666666666666')
+  })
+
   it('a workspace with nothing connected prints the message and link, then the connect command', async () => {
     const setup = {
       success: true,
@@ -242,7 +260,7 @@ describe('connections, connect and open', () => {
     const r = await cli(io, 'connect', 'HubSpot')
     expect(r.code).toBe(0)
     expect(io.opened).toEqual(['http://localhost:4000/acme/settings/connections?add=1&connector=hubspot'])
-    expect(r.stderr).toBe('Opened the console to connect HubSpot. Finish there; then check it with `amdahl connections`.\n')
+    expect(r.stderr).toBe("Opened the console's add page, searching for HubSpot. Finish there; then check it with `amdahl connections`.\n")
     expect(requests('/connections/catalog')).toHaveLength(1)
     // The CLI never creates a connection itself.
     expect(server!.log.filter((l) => l.method === 'POST' && l.path.includes('/connections'))).toEqual([])
@@ -253,7 +271,7 @@ describe('connections, connect and open', () => {
     const r = await cli(io, 'connect', 'gong', '--no-browser')
     expect(io.opened).toEqual([])
     expect(r.stdout).toBe('http://localhost:4000/acme/settings/connections?add=1&connector=gong\n')
-    expect(r.stderr).toBe('Open this link to connect Gong:\n')
+    expect(r.stderr).toBe('Open this link to add a source (its search box starts on Gong):\n')
     const before = requests('/connections/catalog').length
     const bare = await cli(io, 'connect', '--json', '--no-browser')
     expect(bare.json).toEqual({ ok: true, url: 'http://localhost:4000/acme/settings/connections?add=1', opened: false, connector: null })
@@ -294,6 +312,7 @@ describe('connect and open launch a browser only for a person at a terminal', ()
     ['an agent (CURSOR_AGENT)', (io) => void (io.env.CURSOR_AGENT = '1')],
     ['CI', (io) => void (io.env.CI = 'true')],
     ['no terminal on stdin', (io) => void (io.stdinIsTTY = false)],
+    ['no terminal on stdout (connect | cat)', (io) => void (io.stdoutIsTTY = false)],
     ['AMDAHL_NO_PROMPT=1', (io) => void (io.env.AMDAHL_NO_PROMPT = '1')],
   ])('%s: connect and open print the link and open nothing', async (label, setup) => {
     const io = await signedIn()
@@ -347,8 +366,8 @@ describe('optimize --list', () => {
     expect(r.stdout).toBe(`Results: ${out}\n`)
     expect(parseCsv(readFileSync(out, 'utf8')).rows).toEqual([
       ['item_id', 'message', 'facts', 'optimized_message', 'status', 'what_changed', 'run_id', 'error'],
-      ['dana', 'Hi Dana, quick one', 'Dana runs ops', 'better: Hi Dana, quick one', 'done', 'Cut the opener.', 'run-0', ''],
-      ['sam', 'Hi Sam\nsecond line', 'Sam is new\nSam likes golf', 'better: Hi Sam\nsecond line', 'done', 'Cut the opener.', 'run-1', ''],
+      ['dana', 'Hi Dana, quick one', 'Dana runs ops', 'better: Hi Dana, quick one', 'done', 'Cut the opener.', batchRun(0), ''],
+      ['sam', 'Hi Sam\nsecond line', 'Sam is new\nSam likes golf', 'better: Hi Sam\nsecond line', 'done', 'Cut the opener.', batchRun(1), ''],
     ])
   })
 
@@ -434,8 +453,8 @@ describe('optimize --list', () => {
     writeFileSync(list, 'item_id,message\n-5,=1+1\nok,"@me and a normal one"\n')
     expect((await cli(io, 'optimize', '--list', list)).code).toBe(0)
     expect(parseCsv(readFileSync(join(io.cwd, 'f.optimized.csv'), 'utf8')).rows.slice(1)).toEqual([
-      ["'-5", "'=1+1", "'+cmd|calc", 'done', 'Cut the opener.', 'run-0', ''],
-      ['ok', "'@me and a normal one", "'+cmd|calc", 'done', 'Cut the opener.', 'run-1', ''],
+      ["'-5", "'=1+1", "'+cmd|calc", 'done', 'Cut the opener.', batchRun(0), ''],
+      ['ok', "'@me and a normal one", "'+cmd|calc", 'done', 'Cut the opener.', batchRun(1), ''],
     ])
     expect([neutralise('=a'), neutralise('+a'), neutralise('-a'), neutralise('@a'), neutralise('\ta'), neutralise('\ra'), neutralise('a=b'), neutralise('')]).toEqual([
       "'=a", "'+a", "'-a", "'@a", "'\ta", "'\ra", 'a=b', '',
@@ -510,6 +529,40 @@ describe('optimize --list', () => {
     expect(headerless.stderr).toContain(hint)
   })
 
+  it('refuses a list over the 500-message cap by naming it, before any request; 500 goes through', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'big.jsonl')
+    writeFileSync(list, Array.from({ length: 501 }, (_, i) => JSON.stringify({ message: `m${i}` })).join('\n'))
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`Error: A batch takes at most 500 messages, and ${list} has 501.\nSplit the list into files of 500 or fewer, and run each one.\n`)
+    expect(requests('/messages/optimize/batch')).toEqual([])
+    writeFileSync(list, Array.from({ length: 500 }, (_, i) => JSON.stringify({ message: `m${i}` })).join('\n'))
+    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).code).toBe(0)
+  })
+
+  it('quotes the list path in the pick-up line, and refuses a --batch id that is not a batch id before it reaches a path', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, "my drafts, v2's.csv")
+    writeFileSync(list, 'message\na\n')
+    const queued = await cli(io, 'optimize', '--list', list, '--no-wait')
+    const id = /batch (\S+)\./.exec(queued.stdout)?.[1] ?? ''
+    expect(queued.stdout).toBe(`Queued 1 message as batch ${id}.\nGet the results: amdahl optimize --list '${list.replace(/'/g, `'\\''`)}' --batch ${id}\n`)
+    const plain = join(io.cwd, 'plain.csv')
+    writeFileSync(plain, 'message\na\n')
+    expect((await cli(io, 'optimize', '--list', plain, '--no-wait')).stdout).toContain(`--list ${plain} --batch`)
+    const before = server!.log.length
+    for (const bad of ['../x', 'b1', `${id}/../x`, '..%2Fx', '']) {
+      const r = await cli(io, 'optimize', '--batch', bad)
+      expect(r.code).toBe(2)
+    }
+    expect((await cli(io, 'optimize', '--batch', '../x')).stderr).toBe('Error: --batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.\n')
+    expect(server!.log.length).toBe(before)
+    expect((await cli(io, 'optimize', '--list', '')).stderr).toBe('Error: --list needs a file.\n')
+    expect(shellWord('C:\\my files\\d.csv', 'win32')).toBe('"C:\\my files\\d.csv"')
+    expect(shellWord('/tmp/a.csv', 'linux')).toBe('/tmp/a.csv')
+  })
+
   it('a file without --list is still one message; --list beside files, or --no-wait alone, is a usage error', async () => {
     const io = await signedIn()
     const file = join(io.cwd, 'd.csv')
@@ -538,58 +591,154 @@ describe('feedback and sent', () => {
     const io = await signedIn()
     const text = join(io.cwd, 'sent.txt')
     writeFileSync(text, 'Hi Dana, as sent')
-    const r = await cli(io, 'feedback', 'run-1', '--evidence', 'did_it_myself', '--outcome', 'used_with_edits', '--sent-text', text, '--comment', 'Too formal')
+    const r = await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'did_it_myself', '--outcome', 'used_with_edits', '--sent-text', text, '--comment', 'Too formal')
     expect(r.code).toBe(0)
-    expect(sentBody('/api/platform/v1/messages/optimize/runs/run-1/feedback')).toEqual({
+    expect(sentBody(`/api/platform/v1/messages/optimize/runs/${KNOWN_RUN}/feedback`)).toEqual({
       evidence: 'did_it_myself',
       sent_text: 'Hi Dana, as sent',
       comment: 'Too formal',
       outcome: 'used_with_edits',
     })
-    expect(r.stdout).toBe('Feedback saved for run run-1. Amdahl learns your preferences from the edit.\n')
-    expect((await cli(io, 'feedback', 'run-1', '--outcome', 'used')).code).toBe(2)
-    expect((await cli(io, 'feedback', 'run-1', '--evidence', 'inferred')).code).toBe(2)
-    expect((await cli(io, 'feedback', 'run-1', '--evidence', 'guess', '--outcome', 'used')).code).toBe(2)
+    expect(r.stdout).toBe(`Feedback saved for run ${KNOWN_RUN}. Amdahl learns your preferences from the edit.\n`)
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--outcome', 'used')).code).toBe(2)
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred')).code).toBe(2)
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'guess', '--outcome', 'used')).code).toBe(2)
     expect((await cli(io, 'feedback', '--evidence', 'inferred', '--outcome', 'used')).code).toBe(2)
-    const json = await cli(io, 'feedback', 'run-2', '--evidence', 'reported_to_me', '--outcome', 'not_used', '--json')
-    expect(json.json).toMatchObject({ ok: true, success: true, feedback_id: 'fb1', run_id: 'run-2', outcome: 'not_used' })
-    const unknown = await cli(io, 'feedback', 'unknown', '--evidence', 'inferred', '--outcome', 'used')
-    expect(unknown).toMatchObject({ code: 1, stderr: 'Error: No such run.\n' })
+    const json = await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'reported_to_me', '--outcome', 'not_used', '--json')
+    expect(json.json).toMatchObject({ ok: true, success: true, feedback_id: 'fb1', run_id: KNOWN_RUN, outcome: 'not_used' })
+    const unknown = await cli(io, 'feedback', UNKNOWN_RUN, '--evidence', 'inferred', '--outcome', 'used')
+    expect(unknown).toMatchObject({ code: 1, stderr: 'Error: No optimize run with this id from you in this workspace.\n' })
   })
 
-  it('sent reports each run id with the shared fields; sent_at defaults to now', async () => {
+  it('feedback names a run id that is not one, and a comment or text over the limit, before any request', async () => {
     const io = await signedIn()
-    io.now = () => Date.parse('2026-11-12T09:30:00Z')
-    const r = await cli(io, 'sent', 'r1', 'r2', '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-campaign-id', 'cam_1', '--sequence-step', '0')
+    const before = server!.log.length
+    const bad = await cli(io, 'feedback', '../x', '--evidence', 'inferred', '--outcome', 'used')
+    expect(bad.code).toBe(2)
+    expect(bad.stderr).toContain('"../x" is not a run id.')
+    expect(bad.stderr).toContain('A run id looks like 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16')
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--comment', 'x'.repeat(2001))).stderr).toBe('Error: --comment is at most 2000 characters.\n')
+    const big = join(io.cwd, 'big.txt')
+    writeFileSync(big, 'x'.repeat(10_001))
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--sent-text', big)).stderr).toBe('Error: --sent-text is at most 10000 characters.\n')
+    expect(server!.log.length).toBe(before)
+  })
+
+  const send = ['--provider', 'gmail', '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', '<abc@mail.gmail.com>']
+
+  it('sent reports one send with its send key; sent_at defaults to now; a repeat updates the first report', async () => {
+    const io = await signedIn()
+    // The run was made an hour ago: a send time before it would be refused (sent_at_before_run).
+    const now = Date.now()
+    io.now = () => now
+    const r = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'act_1', '--provider-campaign-id', 'cam_1', '--sequence-step', '0')
     expect(r.code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/report_send')).toEqual({
-      items: ['r1', 'r2'].map((run_id) => ({
-        run_id,
-        provider: 'lemlist',
-        channel: 'email',
-        sent_as: 'returned',
-        sent_at: '2026-11-12T09:30:00.000Z',
-        provider_campaign_id: 'cam_1',
-        sequence_step: 0,
-      })),
+      items: [{ run_id: KNOWN_RUN, provider: 'lemlist', channel: 'email', sent_as: 'returned', sent_at: new Date(now).toISOString(), provider_send_id: 'act_1', provider_campaign_id: 'cam_1', sequence_step: 0 }],
     })
-    expect(r.stdout).toBe('Reported 2 sends.\n')
+    expect(r.stdout).toBe('Reported the send.\n')
+    const again = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', 'act_1')
+    expect(again.stdout).toBe('Updated the earlier report of this send.\n')
+    const json = await cli(io, 'sent', KNOWN_RUN, ...send, '--json')
+    expect(json.json).toMatchObject({ ok: true, success: true, accepted: 1, rejected: 0, items: [{ status: 'accepted', result: 'created' }] })
   })
 
-  it('sent: a rejected item exits 1 and says why; a one-send flag takes one run id; bad values are usage errors', async () => {
+  it('sent needs one send key, and says so before any request (the real server refuses a report without one)', async () => {
     const io = await signedIn()
-    const base = ['--provider', 'gmail', '--channel', 'email', '--sent-as', 'edited']
-    const r = await cli(io, 'sent', 'ok1', 'bad', ...base)
-    expect(r.code).toBe(1)
-    expect(r.stdout).toBe('Reported 1 send.\nNot stored: bad: No optimize run with this id.\n')
-    expect((await cli(io, 'sent', 'a', 'b', ...base, '--provider-send-id', '<m@x>')).stderr).toContain('--provider-send-id names one send')
-    expect((await cli(io, 'sent', 'a', '--provider', 'fax', '--channel', 'email', '--sent-as', 'returned')).code).toBe(2)
-    expect((await cli(io, 'sent', 'a', ...base, '--sent-at', 'yesterday')).code).toBe(2)
-    expect((await cli(io, 'sent', 'a', ...base, '--sent-at', '2026-11-12T09:30:00')).code).toBe(2)
-    expect((await cli(io, 'sent', 'a', '--channel', 'email', '--sent-as', 'edited')).code).toBe(2)
-    const one = await cli(io, 'sent', 'a', ...base, '--provider-send-id', '<m@x>', '--recipient', 'dana@x.com', '--json')
-    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider_send_id: '<m@x>', recipient: 'dana@x.com' })
-    expect(one.json).toMatchObject({ ok: true, accepted: 1, rejected: 0 })
+    const before = server!.log.length
+    const none = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned')
+    expect(none.code).toBe(2)
+    expect(none.stderr).toBe(
+      'Error: Say which send this is with one of --provider-send-id, --recipient, --recipient-key-hash.\n' +
+        "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).\n"
+    )
+    // A campaign, lead and step alone are not a send key either.
+    const lemlist = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned', '--provider-campaign-id', 'c1', '--provider-lead-id', 'lea_1', '--sequence-step', '0')
+    expect(lemlist.code).toBe(2)
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', ' ')).code).toBe(2)
+    expect(server!.log.length).toBe(before)
+    // Each of the three keys is enough.
+    const base = ['--provider', 'other', '--channel', 'email', '--sent-as', 'returned']
+    expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--provider-send-id', 'x1')).code).toBe(0)
+    expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--recipient', 'dana@example.com')).code).toBe(0)
+    expect((await cli(io, 'sent', KNOWN_RUN, ...base, '--recipient-key-hash', 'a'.repeat(64))).code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ recipient_key_hash: 'a'.repeat(64) })
+  })
+
+  it('sent takes one run id, which must be one; the API takes many', async () => {
+    const io = await signedIn()
+    const before = server!.log.length
+    const two = await cli(io, 'sent', KNOWN_RUN, batchRun(0), ...send)
+    expect(two.code).toBe(2)
+    expect(two.stderr).toContain('Report one send at a time: give one run id.')
+    expect(two.stderr).toContain('The API takes up to 100 at once (POST /messages/report_send).')
+    expect((await cli(io, 'sent', 'r1', ...send)).stderr).toContain('"r1" is not a run id.')
+    expect((await cli(io, 'sent', ...send)).code).toBe(2)
+    expect(server!.log.length).toBe(before)
+  })
+
+  it('sent: a rejected report exits 1 and says why; bad values are usage errors before any request', async () => {
+    const io = await signedIn()
+    const unknown = await cli(io, 'sent', UNKNOWN_RUN, ...send)
+    expect(unknown).toMatchObject({ code: 1, stdout: 'Not stored: No optimize run with this run_id in this workspace.\n' })
+    expect(unknown.stdout).not.toContain('Reported')
+    // The mock refuses what the real server refuses beyond the CLI's own checks: a send time in the future.
+    const future = await cli(io, 'sent', KNOWN_RUN, ...send, '--sent-at', '2099-01-01T00:00:00Z')
+    expect(future).toMatchObject({ code: 1, stdout: 'Not stored: sent_at is in the future.\n' })
+    const before = server!.log.length
+    const bad: [string[], string][] = [
+      [['--provider', 'fax', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x'], '--provider must be one of'],
+      [['--provider', 'other', '--channel', 'sms', '--sent-as', 'returned', '--provider-send-id', 'x'], '--channel must be one of'],
+      [['--provider', 'other', '--channel', 'email', '--sent-as', 'maybe', '--provider-send-id', 'x'], '--sent-as must be one of'],
+      [[...send, '--sent-at', 'yesterday'], '--sent-at must be a time with a time zone'],
+      [[...send, '--sent-at', '2026-11-12T09:30:00'], '--sent-at must be a time with a time zone'],
+      [[...send, '--sent-at', '2026-11-12'], '--sent-at must be a time with a time zone'],
+      [['--provider', 'gmail', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'abc@mail.gmail.com'], 'is the provider\'s own id, not an email address'],
+      [['--provider', 'gmail', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'abc123'], 'For gmail, --provider-send-id is the Message-ID header with its angle brackets'],
+      [['--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x', '--provider-lead-id', 'https://www.linkedin.com/in/dana'], '--provider-lead-id is the provider\'s own id'],
+      [[...send, '--sequence-step=-1'], '--sequence-step must be a whole number from 0 to 1000'],
+      [[...send, '--recipient-key-hash', 'abc'], '--recipient-key-hash is 64 hexadecimal characters'],
+      [[...send, '--provider-campaign-id', 'x'.repeat(257)], '--provider-campaign-id is at most 256 characters'],
+      [['--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x', '--thread-id', 'x'.repeat(513)], '--thread-id is at most 512 characters'],
+    ]
+    for (const [flags, message] of bad) {
+      const r = await cli(io, 'sent', KNOWN_RUN, ...flags)
+      expect([r.code, r.stderr]).toEqual([2, expect.stringContaining(message)])
+    }
+    expect((await cli(io, 'sent', KNOWN_RUN, '--channel', 'email', '--sent-as', 'edited', '--provider-send-id', 'x')).code).toBe(2)
+    expect(server!.log.length).toBe(before)
+  })
+
+  it('the mock refuses what the real server refuses, so a request prod rejects cannot pass a test', async () => {
+    server = await startMockServer()
+    const post = (path: string, body: unknown) => fetch(`${server!.url}/api/platform/v1${path}`, { method: 'POST', headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }))
+    const item = { run_id: KNOWN_RUN, provider: 'other', channel: 'email', sent_as: 'returned', sent_at: new Date().toISOString() }
+    // report_send: no send key is a per-item rejection; a bad body is a 400 for the call.
+    const keyless = await post('/messages/report_send', { items: [item] })
+    expect(keyless?.body.data.items[0]).toMatchObject({ status: 'rejected', reason: 'missing_send_key' })
+    expect((await post('/messages/report_send', { items: [{ ...item, run_id: 'r1', provider_send_id: 'x' }] }))?.status).toBe(400)
+    expect((await post('/messages/report_send', { items: [{ ...item, provider_send_id: 'x', extra: 1 }] }))?.status).toBe(400)
+    expect((await post('/messages/report_send', { items: [{ ...item, provider_send_id: 'x', sent_at: '2026-11-12' }] }))?.status).toBe(400)
+    expect((await post('/messages/report_send', { items: [] }))?.status).toBe(400)
+    expect((await post('/messages/report_send', { items: Array.from({ length: 101 }, () => ({ ...item, provider_send_id: 'x' })) }))?.status).toBe(400)
+    // feedback: evidence, and one of the rest.
+    expect((await post(`/messages/optimize/runs/${KNOWN_RUN}/feedback`, { outcome: 'used' }))?.status).toBe(400)
+    expect((await post(`/messages/optimize/runs/${KNOWN_RUN}/feedback`, { evidence: 'inferred' }))?.status).toBe(400)
+    // search: a query, and a limit that is a positive whole number.
+    expect((await post('/search/query', { answer: true }))?.status).toBe(400)
+    expect((await post('/search/query', { query: 'x', limit: 0 }))?.status).toBe(400)
+    // batch: strict keys at every level, the 500 cap, enums, ids, and context limits.
+    const ok = { message: 'a' }
+    const batch = (body: unknown) => post('/messages/optimize/batch', body)
+    expect((await batch({ items: [ok], extra: 1 }))?.status).toBe(400)
+    expect((await batch({ items: [{ ...ok, typo: 1 }] }))?.status).toBe(400)
+    expect((await batch({ items: [] }))?.status).toBe(400)
+    expect((await batch({ items: Array.from({ length: 501 }, () => ok) }))?.body.error.message).toContain('at most 500')
+    expect((await batch({ items: [{ ...ok, channel: 'fax' }] }))?.status).toBe(400)
+    expect((await batch({ items: [{ ...ok, item_id: 'a' }, { ...ok, item_id: 'a' }] }))?.status).toBe(400)
+    expect((await batch({ items: [{ ...ok, context: { fact: ['x'] } }] }))?.status).toBe(400)
+    expect((await batch({ items: [{ ...ok, context: { facts: Array.from({ length: 11 }, () => 'f') } }] }))?.status).toBe(400)
+    expect((await batch({ items: [ok] }))?.status).toBe(202)
   })
 })
 

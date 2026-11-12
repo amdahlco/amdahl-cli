@@ -322,10 +322,10 @@ amdahl optimize draft.md     # rewrite one message (or pipe it in with -, or run
 amdahl optimize --list drafts.csv   # rewrite a whole list in one batch
 amdahl search "what objections came up in lost deals?"   # ask about your customers
 amdahl connections           # what is connected, and whether it is healthy
-amdahl connect hubspot       # open the console to connect a CRM or call recorder
+amdahl connect hubspot       # open the console's add page, to add a CRM or call recorder
 amdahl open                  # open this workspace in the console
 amdahl feedback <run-id> --evidence did_it_myself --outcome used   # what happened to it
-amdahl sent <run-id> --provider gmail --channel email --sent-as returned   # it went out
+amdahl sent <run-id> --provider gmail --channel email --sent-as returned --provider-send-id "<msg-id@mail>"   # it went out
 amdahl install claude-code   # connect an AI client and add the Amdahl skill (also codex, cursor)
 amdahl skills add <publisher>/<skill>   # add a skill from amdahl.ai/skills to this project
 ```
@@ -371,10 +371,10 @@ amdahl connect [<connector>] [--no-browser]
 amdahl open [--no-browser]
 amdahl feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
                 [--outcome used|used_with_edits|not_used|unsure] [--sent-text <file>|-] [--comment <text>]
-amdahl sent <run-id>... --provider <provider> --channel <channel> --sent-as returned|edited
-                [--sent-at <time>] [--provider-send-id <id>] [--provider-campaign-id <id>]
-                [--sequence-step <n>] [--provider-variant-id <id>] [--provider-lead-id <id>]
-                [--thread-id <id>] [--recipient <email|url>] [--recipient-key-hash <sha256>]
+amdahl sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited
+                (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+                [--sent-at <time>] [--provider-campaign-id <id>] [--sequence-step <n>]
+                [--provider-variant-id <id>] [--provider-lead-id <id>] [--thread-id <id>]
                 [--sent-text <file>|-]
 amdahl keys create --name <name> [--preset read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
 amdahl keys list
@@ -455,14 +455,16 @@ names `amdahl connect`.
 
 `amdahl connect hubspot` checks the connector against the catalog
 (`GET /connections/catalog`; a type or a name, in any case), then opens the
-console's add page for it,
-`<console>/<workspace>/settings/connections?add=1&connector=hubspot`, where
-you sign in to HubSpot. With no connector it opens the add page with the
-whole list. The CLI never creates a connection itself. An unknown connector
-exits 2 and lists the ones you can connect; one that is not offered yet exits
-1. It opens the browser only for a person at a terminal: stdin is a terminal,
-`AMDAHL_NO_PROMPT=1` is not set, no agent runs it (`CLAUDECODE`,
-`CURSOR_AGENT`), it is not CI and there is no `--json`. Everywhere else, with
+console's add page,
+`<console>/<workspace>/settings/connections?add=1&connector=hubspot`. The
+`connector` only fills the search box on that page: you pick HubSpot there and
+sign in to it. With no connector it opens the add page with an empty search
+box. The CLI never creates a connection itself. An unknown connector exits 2
+and lists the ones you can connect; one that is not offered yet exits 1 and
+says it is coming soon. It opens the browser only for a person at a terminal:
+stdin and stdout are terminals, `AMDAHL_NO_PROMPT=1` is not set, no agent runs
+it (`CLAUDECODE`, `CURSOR_AGENT`), it is not CI and there is no `--json`. So
+`amdahl connect hubspot | cat` opens nothing. Everywhere else, with
 `--no-browser`, or when the browser does not open, it prints the link on
 stdout instead (under `--json`, as `url` with `opened: false`).
 
@@ -525,7 +527,7 @@ here. `--no-wait` with `--batch` exits 2: it only queues a new list.
 
 ```sh
 amdahl feedback <run-id> --evidence did_it_myself --outcome used_with_edits --sent-text sent.txt
-amdahl sent <run-id> --provider gmail --channel email --sent-as edited --provider-send-id "<msg-id@mail>"
+amdahl sent <run-id> --provider gmail --channel email --sent-as edited --provider-send-id "<msg-id@mail.gmail.com>"
 ```
 
 `feedback` says what happened to the message one optimize run returned
@@ -544,11 +546,19 @@ stores two.
 `gmail`, `heyreach`, `apollo`, `linkedin_manual`, `other`), `--channel`
 (`email`, `linkedin_invite`, `linkedin_message`, `linkedin_inmail`),
 `--sent-as` (`returned` or `edited`) and `--sent-at` (a time with a time
-zone; the current time when left out), then the optional ids. Up to 100 run
-ids report the same details each; the flags that name one send
-(`--provider-send-id`, `--provider-lead-id`, `--thread-id`, `--recipient`,
-`--recipient-key-hash`, `--sent-text`) take one run id. A send the server
-did not store prints why and exits 1.
+zone; the current time when left out), then the optional ids.
+
+The server stores a report only when it can tell which send it is, so one of
+`--provider-send-id`, `--recipient` (an email address, or a LinkedIn profile
+URL for a LinkedIn channel) or `--recipient-key-hash` (a SHA-256) is required.
+A campaign, a lead and a step are not enough. Without one, the CLI exits 2
+before it sends anything. The id is the provider's own: for gmail, the
+`Message-ID` header with its angle brackets; never an email address (give that
+as `--recipient`; Amdahl stores only a hash of it). The command reports one
+send, so give one run id. To report many at once, call
+`POST /messages/report_send`, which takes up to 100 items. The CLI checks each
+value against the server's limits first, and a mistake is a usage error that
+names the flag. A send the server did not store prints why and exits 1.
 
 ## Next steps
 

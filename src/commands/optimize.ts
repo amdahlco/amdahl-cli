@@ -392,7 +392,8 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
 /** `amdahl optimize [<file>... | -]`. */
 export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   const { io, out } = ctx
-  if (str(ctx.flags.list) || str(ctx.flags.batch)) {
+  // A flag given with an empty value is still the flag: it is refused in optimizeList, not ignored.
+  if (typeof ctx.flags.list === 'string' || typeof ctx.flags.batch === 'string') {
     if (args.length > 0) throw usageError('Give the messages with --list <file>, or as files, not both.')
     return optimizeList(ctx, requestOptions(ctx))
   }

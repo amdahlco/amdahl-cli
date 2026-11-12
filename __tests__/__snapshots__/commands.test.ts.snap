@@ -16,8 +16,8 @@ What you can do:
                                  Rewrite a whole list in one batch; results go
                                  to drafts.optimized.csv
   amdahl search "<question>"     Ask about your customers, calls and deals
-  amdahl connect hubspot         Connect a CRM or call recorder (opens the
-                                 console; amdahl connections lists them)
+  amdahl connect hubspot         Add a CRM or call recorder in the console
+                                 (amdahl connections lists what is connected)
   amdahl status                  Check that this workspace can optimize
   amdahl open                    Open this workspace in the console
   amdahl keys create --name ci   Make an API key for a server or CI
@@ -49,19 +49,20 @@ Commands:
                        a Customer agent key, amdahl keys create --preset
                        agent; a sign-in gets the search answer)
   connections [--all]                        Connected sources and health
-  connect [<connector>] [--no-browser]       Open the console to connect one
+  connect [<connector>] [--no-browser]       Open the console's add page
   open    [--no-browser]                     This workspace in the console
   feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
            [--outcome used|used_with_edits|not_used|unsure]
            [--sent-text <file> | -] [--comment <text>]
                                              What happened to a message
-  sent <run-id>... --provider <provider> --channel <channel>
+  sent <run-id> --provider <provider> --channel <channel>
            --sent-as returned|edited [--sent-at <time>]
-           [--provider-send-id <id>] [--provider-campaign-id <id>]
-           [--sequence-step <n>] [--provider-variant-id <id>]
-           [--provider-lead-id <id>] [--thread-id <id>]
-           [--recipient <email|url>] [--recipient-key-hash <sha256>]
-           [--sent-text <file> | -]
+           (--provider-send-id <id> | --recipient <email|url> |
+            --recipient-key-hash <sha256>)
+           [--provider-campaign-id <id>] [--sequence-step <n>]
+           [--provider-variant-id <id>] [--provider-lead-id <id>]
+           [--thread-id <id>] [--sent-text <file> | -]
+           One send per command. It needs one of the three in brackets.
                                              Report that a message went out
   keys create --name <name> [--preset read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]

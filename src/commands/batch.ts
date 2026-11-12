@@ -38,6 +38,21 @@ export const BATCH_WAIT_MS = 15_000
 /** Items per status page when the results are read (the server's most). */
 const PAGE = 100
 
+/** The most messages one batch takes (the server's default cap). */
+export const MAX_BATCH_ITEMS = 500
+
+/** A batch id is a UUID. It goes into a request path and a file name, so nothing else is used. */
+const BATCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * A path as a shell reads it back as one word: as it is when it holds only
+ * plain characters, else in quotes (single on macOS and Linux, double on Windows).
+ */
+export function shellWord(path: string, platform: NodeJS.Platform = process.platform): string {
+  if (/^[A-Za-z0-9_./:@%+=,~-]+$/.test(path)) return path
+  return platform === 'win32' ? `"${path.replace(/"/g, '""')}"` : `'${path.replace(/'/g, `'\\''`)}'`
+}
+
 /** The CSV columns a list may have. */
 export const CSV_COLUMNS = ['item_id', 'message', 'channel', 'evidence', 'on_unsupported', 'facts', 'rules']
 
@@ -347,9 +362,17 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
   const { out, flags } = ctx
   const listPath = str(flags.list)
   const resume = str(flags.batch)
+  if (typeof flags.list === 'string' && !listPath) throw usageError('--list needs a file.')
+  if (typeof flags.batch === 'string' && !resume) throw usageError('--batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.')
   if (!listPath && !resume) throw usageError('Give a list with --list <file>, or a batch id with --batch <id>.')
   if (resume && flags['no-wait'] === true) throw usageError('--no-wait does nothing with --batch: it only queues a new list.')
+  if (resume && !BATCH_ID.test(resume)) {
+    throw usageError('--batch needs a batch id: a UUID like the one `amdahl optimize --list` printed.')
+  }
   const list = listPath ? readList(listPath) : null
+  if (!resume && list && list.items.length > MAX_BATCH_ITEMS) {
+    throw usageError(`A batch takes at most ${MAX_BATCH_ITEMS} messages, and ${list.path} has ${list.items.length}.`, 'Split the list into files of 500 or fewer, and run each one.')
+  }
   const force = flags.force === true
   // Nothing is queued, read or waited for while the results have nowhere to go.
   if (!out.json && flags['no-wait'] !== true) assertFree(resultsFile(list, resume ?? '', ctx.io.cwd), force)
@@ -378,7 +401,7 @@ export async function optimizeList(ctx: Ctx, defaults: Record<string, unknown>):
     }
     id = field(first.batch_id)
     if (!id) throw new CliError('no_batch_id', 'Amdahl accepted the list but sent no batch id.', EXIT.general)
-    const pickUp = amdahlCommand(`optimize --list ${listPath} --batch ${id}`)
+    const pickUp = amdahlCommand(`optimize --list ${shellWord(listPath ?? '', ctx.io.platform)} --batch ${id}`)
     if (flags['no-wait'] === true) {
       out.result({ ...first, ok: true }, `Queued ${count(list.items.length, 'message')} as batch ${id}.\nGet the results: ${pickUp}`)
       return EXIT.ok

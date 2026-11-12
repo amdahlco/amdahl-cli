@@ -8,15 +8,17 @@
 // add page for it: `<console>/<slug>/settings/connections?add=1&connector=<type>`.
 // The CLI never creates a connection itself: a sign-in has no
 // `connections:write`, and a CRM's own sign-in happens in the browser
-// anyway. `open` opens the workspace in the console. With `--no-browser`,
-// under `--json`, for an agent, in CI, with no terminal, or when the browser
-// does not open, both print the link instead.
+// anyway. The `connector` in the link only fills the add page's search box;
+// the person still picks the connector there. `open` opens the workspace in
+// the console. With `--no-browser`, under `--json`, for an agent, in CI, with
+// no terminal on stdin or stdout, or when the browser does not open, both
+// print the link instead.
 
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
-import { atTerminal } from '../terminal'
+import { canOpenBrowser } from '../terminal'
 import { clip, day, field, record, records, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
@@ -57,7 +59,7 @@ export function connectionsUrl(consoleUrl: string, slug: string): string {
   return `${consoleUrl}/${encodeURIComponent(slug)}/settings/connections`
 }
 
-/** The console's add page, opened on one connector when given. */
+/** The console's add page. With a connector, its search box starts on that connector's type. */
 export function connectUrl(consoleUrl: string, slug: string, connector?: string): string {
   const query = new URLSearchParams({ add: '1' })
   if (connector) query.set('connector', connector)
@@ -78,11 +80,12 @@ export async function workspaceSlug(ctx: Ctx, credential: Credential): Promise<s
 
 /**
  * Open `url` in the browser, only for a person at a terminal who did not say
- * `--no-browser`: not under `--json`, for an agent, with no terminal or in CI.
- * Returns whether it opened; the caller prints the link when it did not.
+ * `--no-browser`: not under `--json`, for an agent, with no terminal on stdin
+ * or stdout (`connect | cat`) or in CI. Returns whether it opened; the caller
+ * prints the link when it did not.
  */
 async function openOrPrint(ctx: Ctx, url: string): Promise<boolean> {
-  if (ctx.flags['no-browser'] === true || ctx.out.json || !atTerminal(ctx)) return false
+  if (ctx.flags['no-browser'] === true || ctx.out.json || !canOpenBrowser(ctx)) return false
   return ctx.io.openUrl(url)
 }
 
@@ -123,9 +126,10 @@ function catalogEntries(body: unknown): CatalogEntry[] {
     type: field(c.type),
     name: field(c.name) || field(c.type),
     category: field(c.category),
-    // An older catalog has no flag: everything it lists is connectable.
+    // An older catalog has no flag: everything it lists is connectable. The catalog is camelCase
+    // (`unavailableReason`); the snake_case spelling is read too.
     connectable: c.connectable !== false,
-    reason: field(c.unavailable_reason ?? c.reason),
+    reason: field(c.unavailableReason ?? c.unavailable_reason),
   }))
 }
 
@@ -160,12 +164,11 @@ export async function connect(ctx: Ctx, args: string[]): Promise<number> {
     ctx.out.result({ ok: true, url, opened, connector: entry?.type ?? null })
     return EXIT.ok
   }
-  const what = entry ? entry.name : 'a source'
   if (opened) {
-    ctx.out.info(`Opened the console to connect ${what}. Finish there; then check it with \`${amdahlCommand('connections')}\`.`)
+    ctx.out.info(`Opened the console's add page${entry ? `, searching for ${entry.name}` : ''}. Finish there; then check it with \`${amdahlCommand('connections')}\`.`)
     return EXIT.ok
   }
-  ctx.out.info(`Open this link to connect ${what}:`)
+  ctx.out.info(`Open this link to add a source${entry ? ` (its search box starts on ${entry.name})` : ''}:`)
   ctx.out.result({}, url)
   return EXIT.ok
 }

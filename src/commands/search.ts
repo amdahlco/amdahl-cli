@@ -26,6 +26,9 @@ import { connectLine } from './connections'
 
 const PLATFORM = '/api/platform/v1'
 
+/** The longest question the server takes. */
+const MAX_QUESTION_CHARS = 10_000
+
 /** How long one research read waits on the server (its cap is 45 s). */
 export const RESEARCH_WAIT_MS = 45_000
 
@@ -154,6 +157,7 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   const { out } = ctx
   const question = args.join(' ').trim()
   if (!question) throw usageError('Ask a question.', `Usage: ${amdahlCommand('search "<question>" [--research]')}`)
+  if ([...question].length > MAX_QUESTION_CHARS) throw usageError(`A question is at most ${MAX_QUESTION_CHARS} characters.`)
   const body: Record<string, unknown> = { query: question, answer: true }
   if (ctx.flags.research === true) body.route = 'research'
   const limit = str(ctx.flags.limit)
@@ -178,11 +182,10 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
     try {
       job = await waitForResearch(ctx, credential, field(handoff.research_id))
     } catch (err) {
-      // The job started but this credential cannot read it back.
+      // The job started but this credential cannot read it back: an error, in --json too, with the
+      // search answer (and the job's id) beside it.
       if (err instanceof CliError && err.exit === EXIT.forbidden) {
-        if (out.json) out.result({ ...result, ok: true })
-        else out.info(`Research ${field(handoff.research_id)} started, but this credential can't read it.\n${researchKeyLine()}`)
-        return EXIT.forbidden
+        throw new CliError('missing_scope', `Research ${field(handoff.research_id)} started, but this credential can't read it.`, EXIT.forbidden, researchKeyLine(), undefined, result)
       }
       throw err
     }

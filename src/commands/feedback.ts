@@ -9,17 +9,22 @@
 // from an edit, unless the evidence is `inferred`. Each call stores one event,
 // so running it twice stores two.
 //
-// `amdahl sent <run-id>...` posts to POST /messages/report_send: the system
-// that sent a message says it went out. The flags are the schema's fields; a
-// report from a CLI sign-in is stored as `reported_via: cli`. Several run ids
-// report the same send details for each; the fields that name one send
-// (`--provider-send-id`, `--recipient` and the like) take one run id.
+// `amdahl sent <run-id>` posts to POST /messages/report_send: the system that
+// sent a message says it went out. The flags are the schema's fields; a report
+// from a CLI sign-in is stored as `reported_via: cli`. The server stores a
+// report only when it can tell which send it is, so one of `--provider-send-id`,
+// `--recipient` or `--recipient-key-hash` is required (`missing_send_key`
+// otherwise), and the CLI says so before it sends anything. It reports one
+// send per command; the API takes up to 100 at once.
+//
+// Every value is checked here against the server's own limits first, so a
+// mistake is a usage error (exit 2) that names the flag, not a refusal.
 
 import { readFileSync } from 'node:fs'
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
-import { count, field, records } from '../text'
+import { field, records } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -29,12 +34,38 @@ export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
 export const SENT_AS = ['returned', 'edited']
 
-/** The most sends one report may carry (the server's own limit). */
-export const MAX_SEND_REPORTS = 100
+/** The longest message (`--sent-text`) and comment the server takes, in characters. */
+const MAX_MESSAGE_CHARS = 10_000
+const MAX_COMMENT_CHARS = 2_000
+
+/** A run id is a UUID. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A time with a time zone, as the server reads it: `2026-11-12T09:30:00Z`, an offset, optional fraction. */
+const TIME_WITH_ZONE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d(:?\d\d)?)$/i
+
+// What the server refuses in a provider's own id: an email address or a LinkedIn profile.
+const EMAIL_WHOLE_VALUE = /^(?:mailto:)?[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/i
+const LINKEDIN_PROFILE = /linkedin\.com\/(?:in|pub|sales\/(?:lead|people))\//i
+const BRACKETED_MESSAGE_ID = /^<[^<>\s]+>$/
 
 function oneOf(flag: string, value: string | undefined, allowed: string[]): string | undefined {
   if (value === undefined) return undefined
   if (!allowed.includes(value)) throw usageError(`--${flag} must be one of: ${allowed.join(', ')}.`)
+  return value
+}
+
+/** The run id the command was given, which must be one `amdahl optimize` printed. */
+function runId(value: string, usage: string): string {
+  if (!UUID.test(value)) throw usageError(`"${value.length > 40 ? `${value.slice(0, 37)}...` : value}" is not a run id.`, `A run id looks like 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16; \`amdahl optimize\` prints it after each run. ${usage}`)
+  return value
+}
+
+/** A flag's text, at most `max` characters, with no NUL character. */
+function text(flag: string, value: string | undefined, max: number): string | undefined {
+  if (value === undefined) return undefined
+  if ([...value].length > max) throw usageError(`--${flag} is at most ${max} characters.`)
+  if (value.includes('\u0000')) throw usageError(`--${flag} must not contain a NUL character.`)
   return value
 }
 
@@ -50,14 +81,15 @@ async function readText(ctx: Ctx, path: string): Promise<string> {
 /** `amdahl feedback <run-id> --evidence <how> [--sent-text <file>] [--comment <text>] [--outcome <what>]`. */
 export async function feedback(ctx: Ctx, args: string[]): Promise<number> {
   const usage = `Usage: ${amdahlCommand('feedback <run-id> --evidence did_it_myself [--outcome used] [--sent-text <file>] [--comment <text>]')}`
-  const [runId, ...rest] = args
-  if (!runId || rest.length > 0) throw usageError('Give one run id: the one `amdahl optimize` printed.', usage)
+  const [rawId, ...rest] = args
+  if (!rawId || rest.length > 0) throw usageError('Give one run id: the one `amdahl optimize` printed.', usage)
+  const id = runId(rawId, usage)
   const evidence = oneOf('evidence', str(ctx.flags.evidence), FEEDBACK_EVIDENCE)
   if (!evidence) throw usageError(`Say how you know with --evidence: ${FEEDBACK_EVIDENCE.join(', ')}.`, usage)
   const outcome = oneOf('outcome', str(ctx.flags.outcome), FEEDBACK_OUTCOMES)
-  const comment = str(ctx.flags.comment)
+  const comment = text('comment', str(ctx.flags.comment), MAX_COMMENT_CHARS)
   const sentPath = str(ctx.flags['sent-text'])
-  const sentText = sentPath ? await readText(ctx, sentPath) : undefined
+  const sentText = sentPath ? text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS) : undefined
   if (!sentText?.trim() && !comment?.trim() && !outcome) {
     throw usageError('Send at least one of --sent-text, --comment or --outcome.', usage)
   }
@@ -68,38 +100,42 @@ export async function feedback(ctx: Ctx, args: string[]): Promise<number> {
 
   const credential = await resolveCredential(ctx)
   const result = await call(() =>
-    apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize/runs/${encodeURIComponent(runId)}/feedback`, {
+    apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize/runs/${encodeURIComponent(id)}/feedback`, {
       method: 'POST',
       body,
     })
   )
   const learns = body.sent_text !== undefined && evidence !== 'inferred' ? ' Amdahl learns your preferences from the edit.' : ''
-  ctx.out.result({ ...result, ok: true }, `Feedback saved for run ${field(result.run_id) || runId}.${learns}`)
+  ctx.out.result({ ...result, ok: true }, `Feedback saved for run ${field(result.run_id) || id}.${learns}`)
   return EXIT.ok
 }
 
-/** The `sent` flags that name one send, by their field. */
-const ONE_SEND: Record<string, string> = {
-  'provider-send-id': 'provider_send_id',
-  'provider-lead-id': 'provider_lead_id',
-  'thread-id': 'thread_id',
-  recipient: 'recipient',
-  'recipient-key-hash': 'recipient_key_hash',
-  'sent-text': 'sent_text',
+/** Flags that hold a provider's own id, by their field, with the most characters each may have. */
+const PROVIDER_IDS: Record<string, [string, number]> = {
+  'provider-send-id': ['provider_send_id', 256],
+  'provider-campaign-id': ['provider_campaign_id', 256],
+  'provider-variant-id': ['provider_variant_id', 256],
+  'provider-lead-id': ['provider_lead_id', 256],
+  'thread-id': ['thread_id', 512],
 }
 
-/** The `sent` flags shared by every run id, by their field. */
-const SHARED: Record<string, string> = {
-  'provider-campaign-id': 'provider_campaign_id',
-  'provider-variant-id': 'provider_variant_id',
-}
+/** The flags that tell the server which send this is: it needs at least one. */
+const SEND_KEYS = ['--provider-send-id', '--recipient', '--recipient-key-hash'] as const
 
-/** `amdahl sent <run-id>... --provider <p> --channel <c> --sent-as returned|edited [--sent-at <time>] ...`. */
+/**
+ * `amdahl sent <run-id> --provider <p> --channel <c> --sent-as returned|edited
+ * (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+ * [--sent-at <time>] ...`.
+ */
 export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   const { flags } = ctx
-  const usage = `Usage: ${amdahlCommand('sent <run-id>... --provider <provider> --channel <channel> --sent-as returned|edited')}`
-  if (args.length === 0) throw usageError('Give the run id of each message that was sent.', usage)
-  if (args.length > MAX_SEND_REPORTS) throw usageError(`Report at most ${MAX_SEND_REPORTS} sends at a time.`)
+  const usage = `Usage: ${amdahlCommand('sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited --provider-send-id <id>')}`
+  const [rawId, ...rest] = args
+  if (!rawId) throw usageError('Give the run id of the message that was sent.', usage)
+  if (rest.length > 0) {
+    throw usageError('Report one send at a time: give one run id.', 'Each send needs its own --provider-send-id or --recipient, so run it once for each. The API takes up to 100 at once (POST /messages/report_send).')
+  }
+  const id = runId(rawId, usage)
   const provider = oneOf('provider', str(flags.provider), SEND_PROVIDERS)
   const channel = oneOf('channel', str(flags.channel), SEND_CHANNELS)
   const sentAs = oneOf('sent-as', str(flags['sent-as']), SENT_AS)
@@ -107,40 +143,54 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   if (!channel) throw usageError(`Say what was sent with --channel: ${SEND_CHANNELS.join(', ')}.`, usage)
   if (!sentAs) throw usageError('Say whether it was sent as Amdahl returned it with --sent-as: returned, edited.', usage)
   const sentAt = str(flags['sent-at']) ?? new Date(ctx.io.now()).toISOString()
-  if (!Number.isFinite(Date.parse(sentAt)) || !/(Z|[+-]\d\d:?\d\d)$/i.test(sentAt)) {
+  if (!TIME_WITH_ZONE.test(sentAt) || !Number.isFinite(Date.parse(sentAt))) {
     throw usageError('--sent-at must be a time with a time zone, for example 2026-11-12T09:30:00Z.')
   }
 
-  const base: Record<string, unknown> = { provider, channel, sent_as: sentAs, sent_at: sentAt }
-  for (const [flag, key] of Object.entries(SHARED)) {
-    const value = str(flags[flag])
-    if (value !== undefined) base[key] = value
+  const item: Record<string, unknown> = { run_id: id, provider, channel, sent_as: sentAs, sent_at: sentAt }
+  for (const [flag, [key, max]] of Object.entries(PROVIDER_IDS)) {
+    const value = text(flag, str(flags[flag]), max)
+    if (value === undefined) continue
+    if (EMAIL_WHOLE_VALUE.test(value.trim()) || LINKEDIN_PROFILE.test(value.trim())) {
+      throw usageError(`--${flag} is the provider's own id, not an email address or a LinkedIn profile URL.`, 'Amdahl stores a person only as a hash: give the address with --recipient.')
+    }
+    item[key] = value
+  }
+  const sendId = typeof item.provider_send_id === 'string' ? item.provider_send_id : undefined
+  if (provider === 'gmail' && sendId !== undefined && !BRACKETED_MESSAGE_ID.test(sendId.trim())) {
+    throw usageError('For gmail, --provider-send-id is the Message-ID header with its angle brackets, such as <abc@mail.gmail.com>.')
   }
   const step = str(flags['sequence-step'])
   if (step !== undefined) {
     const n = Number(step)
     if (!Number.isInteger(n) || n < 0 || n > 1000) throw usageError('--sequence-step must be a whole number from 0 to 1000.')
-    base.sequence_step = n
+    item.sequence_step = n
   }
-  for (const [flag, key] of Object.entries(ONE_SEND)) {
-    const value = str(flags[flag])
-    if (value === undefined) continue
-    if (args.length > 1) throw usageError(`--${flag} names one send, so give one run id with it.`)
-    base[key] = key === 'sent_text' ? await readText(ctx, value) : value
+  const recipient = text('recipient', str(flags.recipient), 512)
+  if (recipient !== undefined) item.recipient = recipient
+  const hash = str(flags['recipient-key-hash'])
+  if (hash !== undefined) {
+    if (!/^[0-9a-f]{64}$/i.test(hash)) throw usageError('--recipient-key-hash is 64 hexadecimal characters: a SHA-256.')
+    item.recipient_key_hash = hash
   }
-  const items = args.map((run_id) => ({ run_id, ...base }))
+  const sentPath = str(flags['sent-text'])
+  if (sentPath !== undefined) item.sent_text = text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS)
+  // The server stores a report only when it can tell which send it is: refuse here, before any request.
+  if (!sendId?.trim() && !recipient?.trim() && hash === undefined) {
+    throw usageError(`Say which send this is with one of ${SEND_KEYS.join(', ')}.`, "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).")
+  }
 
   const credential = await resolveCredential(ctx)
   const result = await call(() =>
-    apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/report_send`, { method: 'POST', body: { items } })
+    apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/report_send`, { method: 'POST', body: { items: [item] } })
   )
-  const outcomes = records(result.items)
-  const rejected = outcomes.filter((i) => i.status === 'rejected')
-  const accepted = typeof result.accepted === 'number' ? result.accepted : outcomes.length - rejected.length
-  const lines = [accepted > 0 ? `Reported ${count(accepted, 'send')}.` : 'Nothing was reported.']
-  for (const r of rejected) {
-    lines.push(`Not stored: ${field(r.run_id)}: ${field(r.message) || field(r.reason) || 'rejected'}`)
-  }
-  ctx.out.result({ ...result, ok: rejected.length === 0 }, lines.join('\n'))
-  return rejected.length === 0 ? EXIT.ok : EXIT.general
+  const [outcome] = records(result.items)
+  const rejected = outcome?.status === 'rejected'
+  const human = rejected
+    ? `Not stored: ${field(outcome?.message) || field(outcome?.reason) || 'rejected'}`
+    : outcome?.result === 'updated'
+      ? 'Updated the earlier report of this send.'
+      : 'Reported the send.'
+  ctx.out.result({ ...result, ok: !rejected }, human)
+  return rejected ? EXIT.general : EXIT.ok
 }
