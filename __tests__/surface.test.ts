@@ -709,6 +709,79 @@ describe('feedback and sent', () => {
     expect(server!.log.length).toBe(before)
   })
 
+  it('--recipient with --recipient-key-hash is a usage error before any request; the mock refuses both too', async () => {
+    const io = await signedIn()
+    const before = server!.log.length
+    const both = await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--recipient', 'dana@example.com', '--recipient-key-hash', 'a'.repeat(64))
+    expect(both.code).toBe(2)
+    expect(both.stderr).toBe('Error: Give --recipient or --recipient-key-hash, not both.\nAmdahl hashes the recipient itself. --recipient-key-hash is for a SHA-256 you already made.\n')
+    // Even with a send id beside them: the server refuses the pair itself.
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--recipient', 'dana@example.com', '--recipient-key-hash', 'a'.repeat(64))).code).toBe(2)
+    expect(server!.log.length).toBe(before)
+    // Each one alone is still fine.
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--recipient', 'dana@example.com')).code).toBe(0)
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--recipient-key-hash', 'a'.repeat(64))).code).toBe(0)
+    // The mock answers a body with both as the real server does: that item is rejected as invalid_recipient.
+    const item = { run_id: KNOWN_RUN, provider: 'other', channel: 'email', sent_as: 'returned', sent_at: new Date().toISOString(), provider_send_id: 'x', recipient: 'dana@example.com', recipient_key_hash: 'a'.repeat(64) }
+    const res = await fetch(`${server!.url}/api/platform/v1/messages/report_send`, { method: 'POST', headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [item] }) })
+    expect(((await res.json()) as any).data.items[0]).toMatchObject({ status: 'rejected', reason: 'invalid_recipient', message: 'Send recipient or recipient_key_hash, not both.' })
+  })
+
+  it('counts a text cap with .length, as the server does, so an emoji counts as two', async () => {
+    const io = await signedIn()
+    const emoji = (n: number) => '\u{1F600}'.repeat(n)
+    expect(emoji(1).length).toBe(2)
+    // A comment of 1000 emoji is 2000 units, the cap; 1001 is over it, though it is only 1001 characters.
+    const before = server!.log.length
+    const over = await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--comment', emoji(1001))
+    expect(over).toMatchObject({ code: 2, stderr: 'Error: --comment is at most 2000 characters.\n' })
+    expect(server!.log.length).toBe(before)
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--comment', emoji(1000))).code).toBe(0)
+    // Text from a file: 5000 emoji are 10000 units; 5001 are over.
+    const file = join(io.cwd, 'emoji.txt')
+    writeFileSync(file, emoji(5001))
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--sent-text', file)).stderr).toBe('Error: --sent-text is at most 10000 characters.\n')
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--sent-text', file)).code).toBe(2)
+    writeFileSync(file, emoji(5000))
+    expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--sent-text', file)).code).toBe(0)
+    // A provider id: 128 emoji are 256 units.
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', emoji(128))).code).toBe(0)
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', emoji(129))).stderr).toBe('Error: --provider-send-id is at most 256 characters.\n')
+    // A question: 5000 emoji are 10000 units.
+    expect((await cli(io, 'search', emoji(5001))).stderr).toBe('Error: A question is at most 10000 characters.\n')
+    expect((await cli(io, 'search', emoji(5000))).code).toBe(0)
+    // The mock counts the same way, so a body the server would refuse is refused there too.
+    const post = (path: string, body: unknown) => fetch(`${server!.url}/api/platform/v1${path}`, { method: 'POST', headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.status)
+    expect(await post(`/messages/optimize/runs/${KNOWN_RUN}/feedback`, { evidence: 'inferred', comment: emoji(1001) })).toBe(400)
+    expect(await post(`/messages/optimize/runs/${KNOWN_RUN}/feedback`, { evidence: 'inferred', comment: emoji(1000) })).toBe(200)
+    expect(await post('/search/query', { query: emoji(5001) })).toBe(400)
+    expect(await post('/search/query', { query: emoji(5000) })).toBe(200)
+    const item = { run_id: KNOWN_RUN, provider: 'other', channel: 'email', sent_as: 'returned', sent_at: new Date().toISOString() }
+    expect(await post('/messages/report_send', { items: [{ ...item, provider_send_id: emoji(129) }] })).toBe(400)
+    expect(await post('/messages/report_send', { items: [{ ...item, provider_send_id: emoji(128) }] })).toBe(200)
+    expect(await post('/messages/optimize/batch', { items: [{ message: emoji(5001) }] })).toBe(400)
+  })
+
+  it('--sent-at needs an uppercase T and Z, as the server does; the mock refuses lowercase too', async () => {
+    const io = await signedIn()
+    const before = server!.log.length
+    for (const bad of ['2026-11-12t09:30:00Z', '2026-11-12T09:30:00z', '2026-11-12t09:30:00z']) {
+      const r = await cli(io, 'sent', KNOWN_RUN, ...send, '--sent-at', bad)
+      expect(r.code).toBe(2)
+      expect(r.stderr).toBe('Error: --sent-at must be a time with a time zone, for example 2026-11-12T09:30:00Z.\n')
+    }
+    expect(server!.log.length).toBe(before)
+    // Uppercase, with an offset or a fraction, is fine.
+    const now = new Date(Date.now() - 60_000).toISOString()
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--sent-at', now)).code).toBe(0)
+    expect((await cli(io, 'sent', KNOWN_RUN, ...send, '--sent-at', now.replace('Z', '+00:00'))).code).toBe(0)
+    const item = { run_id: KNOWN_RUN, provider: 'other', channel: 'email', sent_as: 'returned', provider_send_id: 'x' }
+    const post = (sent_at: string) => fetch(`${server!.url}/api/platform/v1/messages/report_send`, { method: 'POST', headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ ...item, sent_at }] }) }).then((r) => r.status)
+    expect(await post(now.toLowerCase())).toBe(400)
+    expect(await post(now.replace('Z', 'z'))).toBe(400)
+    expect(await post(now)).toBe(200)
+  })
+
   it('the mock refuses what the real server refuses, so a request prod rejects cannot pass a test', async () => {
     server = await startMockServer()
     const post = (path: string, body: unknown) => fetch(`${server!.url}/api/platform/v1${path}`, { method: 'POST', headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(async (r) => ({ status: r.status, body: (await r.json()) as any }))

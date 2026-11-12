@@ -26,7 +26,7 @@ import { connectLine } from './connections'
 
 const PLATFORM = '/api/platform/v1'
 
-/** The longest question the server takes. */
+/** The longest question the server takes, counted with `.length` (UTF-16 units) as the server counts it. */
 const MAX_QUESTION_CHARS = 10_000
 
 /** How long one research read waits on the server (its cap is 45 s). */
@@ -157,7 +157,7 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   const { out } = ctx
   const question = args.join(' ').trim()
   if (!question) throw usageError('Ask a question.', `Usage: ${amdahlCommand('search "<question>" [--research]')}`)
-  if ([...question].length > MAX_QUESTION_CHARS) throw usageError(`A question is at most ${MAX_QUESTION_CHARS} characters.`)
+  if (question.length > MAX_QUESTION_CHARS) throw usageError(`A question is at most ${MAX_QUESTION_CHARS} characters.`)
   const body: Record<string, unknown> = { query: question, answer: true }
   if (ctx.flags.research === true) body.route = 'research'
   const limit = str(ctx.flags.limit)

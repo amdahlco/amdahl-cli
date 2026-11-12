@@ -128,8 +128,8 @@ describe('exit codes', () => {
 
   it('--version and --help', async () => {
     const io = fakeIo()
-    expect((await cli(io, '--version')).stdout).toBe('0.3.7\n')
-    expect((await cli(io, '-v')).stdout).toBe('0.3.7\n')
+    expect((await cli(io, '--version')).stdout).toBe('0.4.0\n')
+    expect((await cli(io, '-v')).stdout).toBe('0.4.0\n')
     expect((await cli(io, '--help')).stdout).toContain('Usage: amdahl')
     expect(VERSION).toBe(pkg.version)
   })

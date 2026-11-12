@@ -41,8 +41,12 @@ const MAX_COMMENT_CHARS = 2_000
 /** A run id is a UUID. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** A time with a time zone, as the server reads it: `2026-11-12T09:30:00Z`, an offset, optional fraction. */
-const TIME_WITH_ZONE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d(:?\d\d)?)$/i
+/**
+ * A time with a time zone, as the server reads it: `2026-11-12T09:30:00Z`, an
+ * offset, optional fraction. Case matters: the server refuses a lowercase `t`
+ * or `z`, so this does too (no `i` flag).
+ */
+const TIME_WITH_ZONE = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(Z|[+-]\d\d(:?\d\d)?)$/
 
 // What the server refuses in a provider's own id: an email address or a LinkedIn profile.
 const EMAIL_WHOLE_VALUE = /^(?:mailto:)?[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/i
@@ -61,10 +65,14 @@ function runId(value: string, usage: string): string {
   return value
 }
 
-/** A flag's text, at most `max` characters, with no NUL character. */
+/**
+ * A flag's text, at most `max` characters, with no NUL character. Characters
+ * are counted with `.length` (UTF-16 units), as the server counts them, so an
+ * emoji is two: a text the server would refuse is refused here too.
+ */
 function text(flag: string, value: string | undefined, max: number): string | undefined {
   if (value === undefined) return undefined
-  if ([...value].length > max) throw usageError(`--${flag} is at most ${max} characters.`)
+  if (value.length > max) throw usageError(`--${flag} is at most ${max} characters.`)
   if (value.includes('\u0000')) throw usageError(`--${flag} must not contain a NUL character.`)
   return value
 }
@@ -169,6 +177,9 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   const recipient = text('recipient', str(flags.recipient), 512)
   if (recipient !== undefined) item.recipient = recipient
   const hash = str(flags['recipient-key-hash'])
+  if (recipient?.trim() && hash?.trim()) {
+    throw usageError('Give --recipient or --recipient-key-hash, not both.', 'Amdahl hashes the recipient itself. --recipient-key-hash is for a SHA-256 you already made.')
+  }
   if (hash !== undefined) {
     if (!/^[0-9a-f]{64}$/i.test(hash)) throw usageError('--recipient-key-hash is 64 hexadecimal characters: a SHA-256.')
     item.recipient_key_hash = hash
@@ -176,7 +187,7 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   const sentPath = str(flags['sent-text'])
   if (sentPath !== undefined) item.sent_text = text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS)
   // The server stores a report only when it can tell which send it is: refuse here, before any request.
-  if (!sendId?.trim() && !recipient?.trim() && hash === undefined) {
+  if (!sendId?.trim() && !recipient?.trim() && !hash?.trim()) {
     throw usageError(`Say which send this is with one of ${SEND_KEYS.join(', ')}.`, "Amdahl matches a report to a send by its provider's own id, or by the recipient (stored only as a hash).")
   }
 
