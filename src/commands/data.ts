@@ -14,7 +14,7 @@
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
-import { clip, count, day, field, records, wrap } from '../text'
+import { count, day, field, firstSentence, records, wrap } from '../text'
 import { connectLine } from './connections'
 
 const PLATFORM = '/api/platform/v1'
@@ -32,7 +32,7 @@ function grouped(n: number): string {
 }
 
 /** One surface's line of the overview. */
-function overviewLine(row: Record<string, unknown>, labelWidth: number): string {
+function overviewLine(row: Record<string, unknown>, labelWidth: number, columns: number): string[] {
   const surface = field(row.surface)
   const label = (SURFACES[surface] ?? surface).padEnd(labelWidth)
   const rows = typeof row.row_count === 'number' ? row.row_count : null
@@ -41,34 +41,37 @@ function overviewLine(row: Record<string, unknown>, labelWidth: number): string 
   const to = day(row.latest_at)
   const span = from && to ? `, ${from} to ${to}` : ''
   const by = span && field(row.time_field) ? ` by ${field(row.time_field)}` : ''
-  return `  ${label}  ${size}${span}${by}`
+  const whole = `  ${label}  ${size}${span}${by}`
+  // A narrow terminal: the size on one line, the span under it, rather than a line cut at the edge.
+  if ([...whole].length <= columns) return [whole]
+  return [`  ${label}  ${size}`, ...wrap(`${span.replace(/^, /, '')}${by}`, columns, '    ').filter(Boolean)]
 }
 
 /** The overview as lines: what the workspace holds, one line a surface. */
-export function overviewLines(overview: Record<string, unknown>): string[] {
+export function overviewLines(overview: Record<string, unknown>, columns = 80): string[] {
   const rows = records(overview.surfaces)
   const width = Math.max(0, ...rows.map((r) => (SURFACES[field(r.surface)] ?? field(r.surface)).length))
-  const lines = ['What this workspace holds:', ...rows.map((r) => overviewLine(r, width))]
+  const lines = ['What this workspace holds:', ...rows.flatMap((r) => overviewLine(r, width, columns))]
   const known = rows.filter((r) => typeof r.row_count === 'number')
-  if (known.length > 0 && known.every((r) => r.row_count === 0)) lines.push('', 'Nothing has synced yet.', connectLine())
+  if (known.length > 0 && known.every((r) => r.row_count === 0)) lines.push('', 'Nothing has synced yet.', ...wrap(connectLine(), columns))
   return lines
 }
 
 /** The plain view of the fields: each surface's names, wrapped. */
-function fieldNames(surfaces: Record<string, unknown>[]): string[] {
+function fieldNames(surfaces: Record<string, unknown>[], width: number): string[] {
   const lines: string[] = []
   for (const surface of surfaces) {
     const name = field(surface.surface)
     const fields = records(surface.fields)
     lines.push('', `${SURFACES[name] ?? name}: ${count(fields.length, 'field')} to filter on (${name})`)
-    lines.push(...wrap(fields.map((f) => field(f.name)).filter(Boolean).join(', '), 80, '  '))
+    lines.push(...wrap(fields.map((f) => field(f.name)).filter(Boolean).join(', '), width, '  '))
   }
-  lines.push('', `One surface's fields, with type and meaning: ${amdahlCommand('data --surface deals')}`)
+  lines.push('', ...wrap(`One surface's fields, with type and meaning: ${amdahlCommand('data --surface deals')}`, width))
   return lines
 }
 
 /** One surface's fields: name and type, what it means, and its known values. */
-function fieldDetails(surfaces: Record<string, unknown>[]): string[] {
+function fieldDetails(surfaces: Record<string, unknown>[], width: number): string[] {
   const lines: string[] = []
   for (const surface of surfaces) {
     const name = field(surface.surface)
@@ -77,9 +80,9 @@ function fieldDetails(surfaces: Record<string, unknown>[]): string[] {
     for (const f of fields) {
       lines.push(`  ${field(f.name)} (${field(f.type)})`)
       const about = field(f.description)
-      if (about) lines.push(...wrap(clip(about, 200), 80, '      '))
+      if (about) lines.push(...wrap(firstSentence(about, 2 * width), width, '      '))
       const values = (Array.isArray(f.sample_values) ? f.sample_values : []).map(field).filter(Boolean)
-      if (values.length > 0) lines.push(...wrap(`Values: ${values.join(', ')}`, 80, '      '))
+      if (values.length > 0) lines.push(...wrap(`Values: ${values.join(', ')}`, width, '      '))
     }
   }
   return lines
@@ -102,8 +105,10 @@ export async function data(ctx: Ctx): Promise<number> {
     out.result({ ok: true, overview, fields })
     return EXIT.ok
   }
+  // The terminal's width when it is narrower than 80, never wider; a pipe or an unknown width is 80.
+  const width = Math.max(40, Math.min(ctx.io.columns() ?? 80, 80))
   const surfaces = records(fields.surfaces)
   const shownOverview = surface ? { ...overview, surfaces: records(overview.surfaces).filter((r) => field(r.surface) === surface) } : overview
-  out.result({}, [...overviewLines(shownOverview), ...(surface ? fieldDetails(surfaces) : fieldNames(surfaces))].join('\n'))
+  out.result({}, [...overviewLines(shownOverview, width), ...(surface ? fieldDetails(surfaces, width) : fieldNames(surfaces, width))].join('\n'))
   return EXIT.ok
 }

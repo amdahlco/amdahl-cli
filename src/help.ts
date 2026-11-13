@@ -142,7 +142,9 @@ with the rows it came from.
                 Search prints the id when a job starts. It needs a key that
                 can read research, the one that started the job.
 
-With --json it prints the server's whole answer, every row included.
+With no rows it says why, in the server's words. A search the server cut at its
+deadline says it ran out of time and exits 1; add --research, which can run
+longer. With --json it prints the server's whole answer, every row included.
 ${GLOBAL}`,
 
   grade: `Usage: amdahl grade <file|-> [--channel email|linkedin]

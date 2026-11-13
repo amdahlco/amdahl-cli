@@ -25,7 +25,7 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
-import { currentProfile, findRun } from '../history'
+import { findRun } from '../history'
 import { atTerminal } from '../terminal'
 import { clip, field, records } from '../text'
 
@@ -263,8 +263,15 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
     answered.provider = SEND_PROVIDERS[await io.select('Where did it go out?', choices)]
   }
   if (needKey) {
-    const who = (await io.prompt('Who was it sent to? An email address, or a LinkedIn profile URL: ')).trim()
+    const ask = 'Who was it sent to? An email address, or a LinkedIn profile URL: '
+    let who = (await io.prompt(ask)).trim()
     if (!who) throw usageError('Say which send this is: give a recipient, or --provider-send-id.', usage)
+    // A name ("priya") is not a recipient the server can match to a send: ask once more, then stop.
+    if (!isRecipient(who)) {
+      io.stderr(`"${who.slice(0, 60)}" is not an email address or a LinkedIn profile URL.\n`)
+      who = (await io.prompt(ask)).trim()
+      if (!isRecipient(who)) throw usageError('A recipient is an email address or a LinkedIn profile URL.', usage)
+    }
     answered.recipient = who
   }
   if (needHow) {
@@ -283,6 +290,11 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
   return { flags: answered, ...(pasted !== undefined ? { pasted } : {}) }
 }
 
+/** Whether `text` is a recipient the server can match: an email address, or a LinkedIn profile URL. */
+function isRecipient(text: string): boolean {
+  return EMAIL_WHOLE_VALUE.test(text) || LINKEDIN_PROFILE.test(text)
+}
+
 /** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
 function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string {
   // The recipient says what was sent: an email address is an email, a LinkedIn profile is a LinkedIn message.
@@ -290,7 +302,7 @@ function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string
   const recipient = str(flags.recipient)?.trim()
   if (recipient && EMAIL_WHOLE_VALUE.test(recipient)) return 'email'
   if (recipient && LINKEDIN_PROFILE.test(recipient)) return 'linkedin_message'
-  const remembered = findRun(ctx, runIdValue, currentProfile(ctx))?.channel
+  const remembered = findRun(ctx, runIdValue)?.channel
   if (remembered) return CHANNEL_ALIASES[remembered] ?? remembered
   return flags.provider === 'heyreach' || flags.provider === 'linkedin_manual' ? 'linkedin_message' : 'email'
 }

@@ -26,7 +26,7 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { blockLines } from '../blocks'
-import { clip, count, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
+import { clip, count, cutAtWord, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
 import { FILL_MAX } from '../recipes-data'
 import { connectLine } from './connections'
 import { FILL_FLAGS, recipeById, recipeQuestion } from './recipes'
@@ -121,8 +121,62 @@ function noAnswerLines(status: string, rows: number): string[] {
   return []
 }
 
-/** The search answer for a person: the cited answer or the rows, and what the server noted. */
-export function searchLines(result: Record<string, unknown>): string[] {
+/** The freeform lane's own envelope (`detail.internal`): its status, its explanation and note, and whether a deadline cut it. */
+function internalOf(result: Record<string, unknown>): Record<string, unknown> | null {
+  return record(record(result.detail)?.internal)
+}
+
+/**
+ * Whether the search ran out of time or could not read: a part cut by its
+ * deadline (`cut_by: "deadline"`, on the lane or on any sub-question) or a failed
+ * read (`corpus.empty_reason: "read_failed"`). Neither is an honest "no match".
+ */
+export function ranOutOfTime(result: Record<string, unknown>): boolean {
+  if (internalOf(result)?.cut_by === 'deadline') return true
+  if (records(record(result.detail)?.groups).some((g) => record(g.internal)?.cut_by === 'deadline')) return true
+  return record(result.corpus)?.empty_reason === 'read_failed'
+}
+
+/** What the server said about an empty or unsupported result, in its own words: the explanation, else the note. Trimmed. */
+function serverReason(result: Record<string, unknown>): string {
+  const internal = internalOf(result)
+  const said = field(internal?.explanation) || field(internal?.note) || field(record(result.detail)?.message)
+  return said ? cutAtWord(said, 300) : ''
+}
+
+/** What an empty result's reason code says, for a server that gave no sentence of its own. */
+const EMPTY_WORDS: Record<string, string> = {
+  unsupported: "Amdahl couldn't turn that question into a search it can run.",
+  not_synced: "Your data hasn't synced yet, so there was nothing to search.",
+  scope_disjoint: "That filter is outside the data this credential can read.",
+  weak_matches_only: 'Only weak matches were found, none about the question.',
+  spelling_variants_unsearched: 'The search could not look for that spelling. Try the exact words as they are written.',
+}
+
+/** A why or compare question: the kind a single search does not answer, and research does. */
+const WHY_OR_COMPARE = /\b(why|compar(?:e|es|ed|ing|ison)|versus|vs\.?|differ(?:s|ence|ent)?|how come)\b/i
+
+/** The one next step for an empty or unsupported why or compare question. */
+function nextStepLine(): string {
+  return wrap('Next: add --research, which can answer a why or compare question (it needs a Customer agent key), or name the company exactly as your CRM spells it.').join('\n')
+}
+
+/** The line for a search cut short, with the one way on: research can run longer. */
+export function outOfTimeLines(rows: number): string[] {
+  return wrap(
+    rows === 0
+      ? `The search ran out of time before it found anything. Run the same command with --research: it can run longer. ${researchKeyLine()}`
+      : `Part of the search ran out of time, so these rows may be incomplete. Run the same command with --research: it can run longer. ${researchKeyLine()}`
+  )
+}
+
+/**
+ * The search answer for a person: the cited answer or the rows, and what the
+ * server noted. With no rows it says why in the server's words (its
+ * explanation or note), never a bare "Nothing matched", and for a why or
+ * compare `question` it adds the one next step.
+ */
+export function searchLines(result: Record<string, unknown>, question = '', researchAsked = false): string[] {
   const lines: string[] = []
   const rows = rowsOf(result)
   const answer = record(result.answer)
@@ -136,7 +190,13 @@ export function searchLines(result: Record<string, unknown>): string[] {
     if (rows.length > shown.length) lines.push(`And ${count(rows.length - shown.length, 'more row')} (all of them: add --json).`)
   } else if (!answered) {
     const freshness = field(record(result.data_freshness)?.message)
-    lines.push(freshness || 'Nothing matched.')
+    const reason = serverReason(result)
+    const code = field(record(result.corpus)?.empty_reason) || field(internalOf(result)?.status)
+    const said = reason || (code && code !== 'no_match' && code !== 'empty' ? EMPTY_WORDS[code] ?? '' : '')
+    if (said) lines.push(...wrap(said))
+    if (freshness) lines.push(...wrap(freshness))
+    if (!said && !freshness) lines.push('Nothing matched.')
+    if (!researchAsked && WHY_OR_COMPARE.test(question)) lines.push('', nextStepLine())
   }
   const gap = field(record(result.statistical_gap)?.message)
   if (gap) lines.push(...wrap(gap))
@@ -209,6 +269,10 @@ async function readResearch(ctx: Ctx, args: string[]): Promise<number> {
     if (err instanceof CliError && err.exit === EXIT.forbidden) {
       throw new CliError('missing_scope', `This credential can't read research ${id}.`, EXIT.forbidden, researchKeyLine())
     }
+    // An id that is no job of this workspace's: the server's own words name a `research://` address, which is no use to a person.
+    if (err instanceof CliError && (err.code === 'not_found' || err.code === 'http_404' || /research:\/\//i.test(err.message))) {
+      throw new CliError('not_found', 'No research job with that id in this workspace.', err.exit, `Check the id: search prints it when a job starts. A job started in another workspace can't be read here. ${usage}`)
+    }
     throw err
   }
   return printResearch(ctx, {}, job)
@@ -275,10 +339,21 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   }
   if (handoff && field(handoff.status)) return printResearch(ctx, result, handoff)
 
+  const rows = rowsOf(result)
+  const answered = record(result.answer)?.status === 'answered'
+  // A search cut by its deadline (or a failed read) found nothing because it ran out of time: that is
+  // not "no matches". With nothing to show it is a failure (exit 1) that points at research.
+  const cut = !setup && ranOutOfTime(result)
   if (out.json) {
-    out.result({ ...result, ok: true })
-    return EXIT.ok
+    const failed = cut && rows.length === 0 && !answered
+    out.result({ ...result, ok: !failed })
+    return failed ? EXIT.general : EXIT.ok
   }
+  if (cut && rows.length === 0 && !answered) {
+    out.info(outOfTimeLines(0).join('\n'))
+    return EXIT.general
+  }
+  if (cut && ctx.flags.research !== true) out.info(outOfTimeLines(rows.length).join('\n'))
   if (setup) {
     out.result({}, [...wrap(field(setup.message) || 'This workspace has no data connected yet.'), connectLine()].join('\n'))
     return EXIT.ok
@@ -289,7 +364,7 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
     const refused = notes.find((n) => /ran search instead/i.test(n))
     if (refused) out.info(wrap(refused).join('\n'))
   }
-  out.result({}, searchLines(result).join('\n'))
+  out.result({}, searchLines(result, question, ctx.flags.research === true).join('\n'))
   return EXIT.ok
 }
 

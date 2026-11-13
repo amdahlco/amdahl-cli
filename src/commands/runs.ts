@@ -15,8 +15,9 @@
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
-import { currentProfile, recentRuns, type RunRecord } from '../history'
+import { currentOwner, findRun, recentRuns, type RunRecord } from '../history'
 import { count, field, paragraphs, record, records, wrap } from '../text'
+import { gradeLines } from './grade'
 import { runId } from './feedback'
 
 const PLATFORM = '/api/platform/v1'
@@ -41,10 +42,11 @@ export async function runs(ctx: Ctx): Promise<number> {
     limit = Number(limitFlag)
     if (!Number.isInteger(limit) || limit < 1) throw usageError('--limit must be a whole number above 0.')
   }
-  const all = recentRuns(ctx, currentProfile(ctx))
+  const owner = currentOwner(ctx)
+  const all = recentRuns(ctx, owner)
   const shown = all.slice(0, limit)
   if (out.json) {
-    out.result({ ok: true, source: 'this_computer', note: NOTE, total: all.length, runs: shown.map(({ run_id, created_at, kind, channel }) => ({ run_id, created_at, kind, ...(channel ? { channel } : {}) })) })
+    out.result({ ok: true, source: 'this_computer', note: NOTE, ...(owner.key ? { key: owner.key } : {}), total: all.length, runs: shown.map(({ run_id, created_at, kind, channel }) => ({ run_id, created_at, kind, ...(channel ? { channel } : {}) })) })
     return EXIT.ok
   }
   if (all.length === 0) {
@@ -53,7 +55,12 @@ export async function runs(ctx: Ctx): Promise<number> {
   }
   const row = (r: RunRecord) => `${r.run_id}  ${minute(r.created_at)}  ${r.kind.padEnd(9)}${r.channel ?? ''}`.trimEnd()
   const more = all.length > shown.length ? [`And ${count(all.length - shown.length, 'older run')} (all of them: add --limit ${all.length}).`] : []
-  out.result({}, ['Your latest runs, newest first (times are UTC):', ...shown.map(row), '', ...wrap(NOTE), ...more, `Open one: ${amdahlCommand('run <run-id>')}`].join('\n'))
+  // A key's runs are its own: say which key, so a list is never read as another workspace's or a sign-in's.
+  const whose = owner.key ? ` made with the key ${owner.key}...` : ''
+  out.result(
+    {},
+    [`Your latest runs${whose}, newest first (times are UTC):`, ...shown.map(row), '', ...wrap(NOTE), ...more, `Open one: ${amdahlCommand('run <run-id>')}`, `Prompt runs: ${amdahlCommand('prompt --run <run-id>')}`].join('\n')
+  )
   return EXIT.ok
 }
 
@@ -69,8 +76,15 @@ function contextLine(context: unknown): string {
   return parts.length ? `You sent ${parts.join(', ')}.` : ''
 }
 
-/** One run for a person: the draft, then the message, then what was left out. */
-export function runLines(run: Record<string, unknown>): string[] {
+/** What a run read back says of its grade: the grade itself when the API returned it, else that it is not stored. */
+const gradeNotStored = () => `A run does not keep its grade, so it cannot be shown again. Grade the draft again: ${amdahlCommand('grade <file>')}.`
+
+/**
+ * One run for a person: the draft, then the message, then what was left out.
+ * `madeAsGrade`: this computer's history says the run was a grade, so a grade
+ * is expected, and a run that does not return one says it is not stored.
+ */
+export function runLines(run: Record<string, unknown>, madeAsGrade = false): string[] {
   const id = field(run.run_id)
   const when = minute(field(run.created_at))
   const draft = paragraphs(run.draft)
@@ -89,6 +103,10 @@ export function runLines(run: Record<string, unknown>): string[] {
   }
   const sent = contextLine(run.context)
   if (sent) lines.push('', sent)
+  // A grade, when the API returned one with the run; otherwise, for a run known to be a grade (made here as
+  // one, or whose message is the draft), that it is not stored. A rewrite has no grade to show.
+  if (record(run.grade)) lines.push('', ...gradeLines(run))
+  else if (madeAsGrade || (message && draft && message === draft)) lines.push('', ...wrap(gradeNotStored()))
   return lines
 }
 
@@ -110,6 +128,6 @@ export async function run(ctx: Ctx, args: string[]): Promise<number> {
     }
     throw err
   }
-  ctx.out.result({ ...result, ok: true }, runLines(result).join('\n'))
+  ctx.out.result({ ...result, ok: true }, runLines(result, findRun(ctx, id)?.kind === 'grade').join('\n'))
   return EXIT.ok
 }

@@ -87,6 +87,8 @@ export interface MockOptions {
   researchText?: string
   /** The research read is refused for want of `conversations:read`, though the key could start the job. */
   researchReadRefused?: boolean
+  /** The research id is no job of this workspace: the server's own not-found, naming a `research://` address. */
+  researchUnknown?: boolean
   /** The research answer's `content_blocks` (default: none). */
   researchBlocks?: Record<string, unknown>[]
   /** The grade a `mode: "grade"` optimize returns (inside `data`); the default is the docs' example, with the evidence lines abstaining unless evidence was asked for. */
@@ -384,6 +386,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       const research = path.match(/^\/api\/platform\/v1\/research\/([^/]+)$/)
       if (research && req.method === 'GET') {
         if (kind !== 'api_key' || options.researchReadRefused) return err(res, 403, 'missing_scope', 'This credential lacks conversations:read.')
+        if (options.researchUnknown) return err(res, 404, 'not_found', `research://${research[1]} not found`)
         researchReads++
         const done = researchReads > (options.researchPolls ?? 1)
         return json(res, 200, {

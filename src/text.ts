@@ -86,6 +86,26 @@ export function clip(text: string, max: number): string {
   return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 3).join('')}...`
 }
 
+/**
+ * The first sentence of `text`, whole words only: up to the first `. `, `? ` or
+ * `! ` (or the end), and when that is longer than `max`, cut at a word with an
+ * ellipsis, never in the middle of one.
+ */
+export function firstSentence(text: string, max = 160): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  const end = /[.!?](?=\s|$)/.exec(flat)
+  return cutAtWord(end ? flat.slice(0, end.index + 1) : flat, max)
+}
+
+/** `text` on one line, cut to `max` characters at a word (never inside one), with an ellipsis when cut. */
+export function cutAtWord(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if ([...flat].length <= max) return flat
+  const cut = [...flat].slice(0, max - 3).join('')
+  const space = cut.lastIndexOf(' ')
+  return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, '')}...`
+}
+
 /** An ISO timestamp as its day (`2026-11-12`), or '' when it does not parse. */
 export function day(iso: unknown): string {
   if (typeof iso !== 'string') return ''

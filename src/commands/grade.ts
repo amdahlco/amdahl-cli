@@ -38,6 +38,9 @@ const NOT_EVALUATED: Record<string, string> = {
   corpus_empty: 'no calls are synced yet',
   evidence_read_failed: 'Amdahl could not read your calls (our outage, not a fault in the message)',
   evidence_unavailable: 'this environment does not read your calls',
+  // Evidence was simply not asked for: the grade ran without reading the calls.
+  no_retrieval_configured: 'evidence was off (add --evidence workspace)',
+  retrieval_not_configured: 'evidence was off (add --evidence workspace)',
 }
 
 /** What the evidence lines read, when they are not evaluated because no evidence was asked for. */
@@ -45,8 +48,15 @@ const READS_CALLS = 'Four of the five lines read your customers\' calls; add --e
 
 /** `corpus_empty` as `no calls are synced yet`; an unknown code as itself with spaces. */
 function reasonWords(code: string): string {
-  if (NOT_EVALUATED[code]) return NOT_EVALUATED[code]
+  // The server's prose form ("no retrieval configured") reads as its code.
+  const key = code.trim().toLowerCase().replace(/[\s-]+/g, '_')
+  if (NOT_EVALUATED[key]) return NOT_EVALUATED[key]
   return /^[a-z][a-z0-9_]*$/.test(code) ? code.replace(/_/g, ' ') : code
+}
+
+/** `1 line`, `5 lines`. */
+function lineCount(n: number): string {
+  return `${n} ${n === 1 ? 'line' : 'lines'}`
 }
 
 const MARK = { pass: 'pass', fail: 'fail', none: 'n/a ' }
@@ -68,12 +78,13 @@ export function gradeLines(result: Record<string, unknown>): string[] {
     const why = field(grade?.not_applicable_reason)
     if (why) lines.push(...wrap(`No line could be evaluated: ${reasonWords(why)}.`))
   } else {
-    const of = passed !== null && total !== null ? `: ${passed} of ${total} lines passed` : ''
-    lines.push(`Grade ${score} of 5${of}.`)
-    if (bar !== null && typeof grade?.passes_bar === 'boolean') lines.push(`It ${grade.passes_bar ? 'meets' : 'is below'} the bar of ${bar}.`)
-    // A score over fewer lines than the rubric has says so: 1 of 1 passing is 5, but it is one line.
+    // The score's coverage is in the headline: a 5 over one line is not a 5 over five.
     const rubricSize = records(grade?.lines).length
-    if (total !== null && rubricSize > 0 && total < rubricSize) lines.push(...wrap(`It rests on ${total} of the ${rubricSize} lines; the others were not evaluated.`))
+    const partial = total !== null && rubricSize > 0 && total < rubricSize
+    const passedOf = passed !== null && total !== null ? `${passed} of ${lineCount(total)} passed` : ''
+    const coverage = partial ? `, on ${total} of the ${rubricSize} lines${passedOf ? ` (${passedOf})` : ''}` : passedOf ? `: ${passedOf}` : ''
+    lines.push(`Grade ${score} of 5${coverage}.`)
+    if (bar !== null && typeof grade?.passes_bar === 'boolean') lines.push(`It ${grade.passes_bar ? 'meets' : 'is below'} the bar of ${bar}.`)
   }
 
   const rubric = records(grade?.lines)
@@ -175,7 +186,7 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
     out.info(`Not graded (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)
     return EXIT.general
   }
-  rememberRun(ctx, { run_id: result.run_id, kind: 'grade', channel: channelOf(base) }, credential.profile)
+  rememberRun(ctx, { run_id: result.run_id, kind: 'grade', channel: channelOf(base) }, credential)
   if (out.json) {
     out.result({ ok: true, file, result })
     return EXIT.ok

@@ -380,7 +380,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.info('Amdahl is rewriting it. This can take a minute.')
   const noData = noDataConnected(ctx, credential)
   const result = await optimizeOne(ctx, credential, message, base, 'your message')
-  if (result.ok !== false) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential.profile)
+  if (result.ok !== false) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential)
   if (result.ok === false) {
     if (out.json) out.result({ ok: false, file: '-', result })
     out.info(`Not optimized (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)
@@ -444,7 +444,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     const result = await optimizeOne(ctx, credential, message, base, file)
     const ok = result.ok !== false
     results.push({ ok, file, result })
-    if (ok) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential.profile)
+    if (ok) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential)
     if (!ok) {
       exit = EXIT.general
       out.info(`${file}: not optimized (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)

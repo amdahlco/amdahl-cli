@@ -61,9 +61,14 @@ const LIFT_WHY: Record<string, string> = {
   a_side_not_graded: 'one side could not be graded',
 }
 
-/** A mean as the API returns it, or "not graded" for null: never 0. */
+/** A number to one decimal, no trailing zero: `3.7`, `4`. */
+function oneDecimal(n: number): string {
+  return String(Math.round(n * 10) / 10)
+}
+
+/** A mean to one decimal, or "not graded" for null: never 0. */
 function mean(value: unknown): string {
-  return typeof value === 'number' && Number.isFinite(value) ? String(value) : 'not graded'
+  return typeof value === 'number' && Number.isFinite(value) ? oneDecimal(value) : 'not graded'
 }
 
 function count(n: unknown, one: string, many = `${one}s`): string {
@@ -146,8 +151,12 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
   }
   if (outcome === 'improved' || outcome === 'unchanged') {
     if (run.lift_reportable === true && typeof run.lift === 'number') {
-      const kept = outcome === 'improved'
-      lines.push(`${kept ? 'Lift' : "The revision's lift"} on the held-out recipients${kept ? '' : ' (not kept)'}: ${run.lift > 0 ? '+' : ''}${run.lift}.`)
+      const lift = run.lift
+      const points = oneDecimal(Math.abs(lift))
+      const gap = Math.abs(lift) < 0.05 ? 'no different from yours' : `${points} ${points === '1' ? 'point' : 'points'} ${lift > 0 ? 'higher' : 'lower'}`
+      if (outcome === 'improved') lines.push(`Lift on the held-out recipients: ${lift > 0 ? '+' : ''}${oneDecimal(lift)} points.`)
+      else if (typeof revised?.mean === 'number') lines.push(...wrap(`The revision averaged ${mean(revised.mean)} of 5, ${gap}, not kept.`))
+      else lines.push(...wrap(`The revision's lift on the held-out recipients (not kept): ${lift > 0 ? '+' : ''}${oneDecimal(lift)} points.`))
     } else {
       const why = field(run.lift_not_reportable_reason)
       lines.push(...wrap(`No lift is reported${why ? `: ${LIFT_WHY[why] ?? why.replace(/_/g, ' ')}` : ''}.`))
@@ -315,7 +324,7 @@ export async function prompt(ctx: Ctx, args: string[]): Promise<number> {
   const started = await call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize_prompt`, { method: 'POST', body }))
   const id = field(started.run_id)
   if (!id) throw new CliError('unexpected_response', 'The prompt run started, but the server sent no run id.', EXIT.general)
-  rememberRun(ctx, { run_id: id, kind: 'prompt', channel }, credential.profile)
+  rememberRun(ctx, { run_id: id, kind: 'prompt', channel }, credential)
 
   const rawLabels = record(started.recipients)?.labels
   const labels = Array.isArray(rawLabels) ? rawLabels.map(field).filter(Boolean) : []
