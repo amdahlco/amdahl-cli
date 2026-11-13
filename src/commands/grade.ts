@@ -127,7 +127,7 @@ export function gradeLines(result: Record<string, unknown>): string[] {
   lines.push(
     '',
     ...wrap(
-      `This is one reading${judge ? ` by ${judge}` : ''}. It measures the message against the rubric and your evidence. It does not predict replies.` +
+      `This is one reading${judge ? ` by ${judge}` : ''}. It measures the message against the rubric${evidence?.used === true ? ' and your evidence' : ''}. It does not predict replies.` +
         (share !== null && moved !== null ? ` On a repeat, about ${share}% of texts scored more than ${moved} apart.` : '')
     )
   )
@@ -166,7 +166,11 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
   } else {
     message = file === '-' ? await io.readStdin() : readTextFile(file)
   }
-  if (!message.trim()) throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
+  if (!message.trim()) {
+    // No file and nothing piped (a script with no terminal): say what to give, not "Stdin is empty".
+    if (args.length === 0) throw usageError('Give a file to grade, or pipe the message in.', `Usage: ${amdahlCommand('grade <file|->')}`)
+    throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
+  }
   if (message.length > MAX_MESSAGE_CHARS) throw usageError(`A message is at most ${MAX_MESSAGE_CHARS} characters; ${file === '-' ? 'this one' : file} has ${message.length}.`)
 
   credential ??= await resolveCredential(ctx)

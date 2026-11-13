@@ -111,7 +111,7 @@ describe('grade', () => {
     expect(r.stdout).not.toMatch(/Grade 0|of 5: 0/)
     expect(r.stdout).not.toContain('fail')
     expect(r.stdout).toContain('Not checked against your calls: no calls are synced yet.')
-    expect(r.stdout).toContain('does not predict replies')
+    expect(flat(r.stdout)).toContain('does not predict replies')
     fits80(r.stdout)
   })
 
@@ -403,7 +403,7 @@ describe('runs and run', () => {
     expect(runLines({ run_id: GRADE_RUN, draft: 'My draft', message: null, created_at: '2026-11-12T08:00:00Z' }).join('\n')).toContain('Amdahl wrote no message for this run (a grade writes none).')
     const missing = await cli(io, 'run', UNKNOWN_RUN)
     expect(missing.code).toBe(1)
-    expect(missing.stderr).toBe(`Error: No run ${UNKNOWN_RUN} from you in this workspace.\nOnly the person who made a run can open it. A prompt run? amdahl prompt --run ${UNKNOWN_RUN}\n`)
+    expect(missing.stderr).toBe(`Error: No run ${UNKNOWN_RUN} from you in this workspace.\nOnly the person who made a run can open it. amdahl runs lists the ones this computer made.\n`)
     const promptRun = await cli(io, 'run', PROMPT_RUN)
     expect(promptRun).toMatchObject({ code: 2, stderr: `Error: ${PROMPT_RUN} is a prompt run.\nRead it with: amdahl prompt --run ${PROMPT_RUN}\n` })
     expect((await cli(io, 'run', 'nope')).code).toBe(2)
@@ -474,7 +474,7 @@ describe('recipes and search --recipe', () => {
     const io = await signedIn()
     const r = await cli(io, 'recipes')
     expect(r.code).toBe(0)
-    expect(r.stdout).toContain('Accounts\n  account-brief         Account brief\n    What they told us, who we know, open deals and who is missing\n    Reads your CRM and calls. Needs --account <Account>.')
+    expect(r.stdout).toContain('Accounts\n  account-brief          Account brief\n    What they told us, who we know, open deals and who is missing\n    Reads your CRM and calls. Needs --account <Account>.')
     expect(r.stdout).toContain('Expansion\n  expansion-signals')
     expect(r.stdout).not.toContain('Outbound')
     for (const recipe of RECIPES) expect(r.stdout).toContain(recipe.id)
@@ -587,8 +587,8 @@ describe('sent and feedback ask at a terminal', () => {
     const r = await cli(io, 'sent', KNOWN_RUN)
     expect(r.code).toBe(0)
     expect(io.prompts).toHaveLength(3)
-    expect(io.prompts[0]).toContain('Where did it go out? [lemlist | instantly')
-    expect(io.prompts[0]).toContain('smartlead')
+    expect(io.prompts[0]).toContain('Where did it go out? [lemlist | Instantly')
+    expect(io.prompts[0]).toContain('Smartlead')
     expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ run_id: KNOWN_RUN, provider: 'smartlead', channel: 'email', sent_as: 'returned', recipient: 'dana@example.com' })
     expect(r.stderr).toContain('Reporting: smartlead, email, sent as returned.')
     expect(r.stdout).toBe('Reported the send.\n')
@@ -814,10 +814,10 @@ describe('review fixes from the QA round', () => {
     const r2 = await cli(io2, 'sent', KNOWN_RUN, '--recipient', 'https://www.linkedin.com/in/dana-x')
     expect(r2.code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ channel: 'linkedin_message' })
-    // No recipient shape to go by: the run's channel, then the provider's.
+    // No recipient shape to go by: the run's channel when the provider can send it, else the provider's (HeyReach sends LinkedIn only).
     io2.answers = ['8', '']
     expect((await cli(io2, 'sent', KNOWN_RUN, '--provider-send-id', 'x9')).code).toBe(0)
-    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'heyreach', channel: 'email' })
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'heyreach', channel: 'linkedin_message' })
   })
 
   it('sent with only --channel missing asks nothing and is the usage error, and the help says so', async () => {
@@ -895,7 +895,7 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     const io = await signedIn({ searchResult: AUTOMAT })
     const r = await q(io, 'why did we lose the automat deal last time, in their own words')
     expect(r.code).toBe(0)
-    expect(r.stdout).not.toBe('Nothing matched.\n')
+    expect(r.stdout).not.toBe('No matches.\n')
     expect(flat(r.stdout)).toContain('Which account do you mean? Please clarify the account name: "automat" matched no company exactly.')
     expect(flat(r.stdout)).toContain('Next: add --research, which can answer a why or compare question (it needs a Customer agent key), or name the company exactly as your CRM spells it.')
     fits80(r.stdout)
@@ -918,14 +918,14 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect(cutAtWord('alpha beta gamma delta', 14)).toBe('alpha beta...')
   })
 
-  it('with no sentence from the server, the reason code is said in words; with neither, it is "Nothing matched."', async () => {
+  it('with no sentence from the server, the reason code is said in words; with neither, it is "No matches."', async () => {
     const io = await signedIn({ searchResult: { success: true, results: [], corpus: { empty_reason: 'unsupported' } } })
     expect((await q(io, 'compare Acme and Globex')).stdout).toContain("Amdahl couldn't turn that question into a search it can run.")
     expect((await q(io, 'compare Acme and Globex')).stdout).toContain('Next: add --research')
     server!.options.searchResult = { success: true, results: [], corpus: { empty_reason: 'not_synced' } }
     expect((await q(io, 'x')).stdout).toBe("Your data hasn't synced yet, so there was nothing to search.\n")
     server!.options.searchResult = { success: true, results: [] }
-    expect((await q(io, 'x')).stdout).toBe('Nothing matched.\n')
+    expect((await q(io, 'x')).stdout).toBe('No matches.\n')
   })
 
   // 2 and 3. The grade headline carries its coverage; "evidence was off" in words.
@@ -1049,6 +1049,95 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect(r.code).toBe(1)
     expect(r.stderr).toContain('No research job with that id in this workspace.')
     expect(r.stderr).not.toContain('research://')
+  })
+
+  // The nits from Dom's second pass.
+  it('recipes: the id column is as wide as the longest id plus two, so no id runs into its title', async () => {
+    const io = await signedIn()
+    const out = (await cli(io, 'recipes')).stdout
+    const longest = Math.max(...RECIPES.map((r) => r.id.length))
+    for (const r of RECIPES) expect(out).toContain(`  ${r.id.padEnd(longest + 2)}${r.title}\n`)
+    expect(out).toContain(`  positioning-vs-buyers  Positioning vs buyer words\n`)
+  })
+
+  it('recipes, runs and data with an argument say where the argument goes', async () => {
+    const io = await signedIn()
+    const r = await cli(io, 'recipes', 'extra')
+    expect(r).toMatchObject({ code: 2, stderr: 'Error: Unexpected argument: extra\nTo run one: amdahl search --recipe <id>\n' })
+    expect((await cli(io, 'runs', 'x')).stderr).toContain('To open one: amdahl run <run-id>')
+    expect((await cli(io, 'data', 'deals')).stderr).toContain('A surface goes after --surface: amdahl data --surface deals')
+    // Another command with no arguments still says something useful.
+    expect((await cli(io, 'whoami', 'x')).stderr).toContain('amdahl whoami --help shows what it takes.')
+  })
+
+  it('sent with a prompt run id says a prompt run cannot be reported as sent, not "not a run id"', async () => {
+    const io = await signedIn()
+    const commands = [
+      ['sent', PROMPT_RUN, '--provider', 'other', '--channel', 'email', '--sent-as', 'returned', '--provider-send-id', 'x'],
+      ['feedback', PROMPT_RUN, '--evidence', 'did_it_myself', '--outcome', 'used'],
+    ]
+    for (const args of commands) {
+      const r = await cli(io, ...(args as [string, ...string[]]))
+      expect(r.code).toBe(2)
+      expect(r.stderr).toContain(`${PROMPT_RUN} is a prompt run: a prompt run can't be reported as sent or given feedback.`)
+      expect(r.stderr).not.toContain('is not a run id')
+    }
+    expect(requests('/messages/report_send')).toHaveLength(0)
+  })
+
+  it('grade and prompt with no file and nothing piped (a script) say what to give, not "Stdin is empty"', async () => {
+    const io = await signedIn()
+    io.stdinIsTTY = false
+    io.stdinText = ''
+    const g = await cli(io, 'grade')
+    expect(g).toMatchObject({ code: 2 })
+    expect(g.stderr).toContain('Give a file to grade, or pipe the message in.')
+    expect(g.stderr).not.toContain('Stdin is empty')
+    expect((await cli(io, 'prompt')).stderr).toContain('Give a file with the prompt, or pipe the prompt in.')
+    // An explicit "-" with nothing piped is still an empty stdin.
+    expect((await cli(io, 'grade', '-')).stderr).toContain('Stdin is empty.')
+  })
+
+  it('the sent menu shows tool names, and a tool and a channel that cannot go together are refused before anything is sent', async () => {
+    const io = await signedIn()
+    io.answers = ['', 'dana@example.com', '']
+    await cli(io, 'sent', KNOWN_RUN)
+    const menu = io.prompts[0]!
+    for (const name of ['Instantly', 'Reply.io', 'La Growth Machine', 'LinkedIn (sent by hand)', 'Other (any sender not listed)', 'HeyReach']) expect(menu).toContain(name)
+    for (const id of ['reply_io', 'lgm', 'linkedin_manual']) expect(menu).not.toContain(id)
+    // instantly with a LinkedIn profile: refused, with nothing sent.
+    const bad = await signedIn()
+    bad.answers = ['2', 'https://www.linkedin.com/in/priya-s', '']
+    const r = await cli(bad, 'sent', KNOWN_RUN)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Instantly sends email only, and this is a LinkedIn message.')
+    expect(requests('/messages/report_send')).toHaveLength(0)
+    // The same with flags: a LinkedIn-only tool with an email, and an email-only tool with a LinkedIn channel.
+    const flags = await signedIn()
+    const args = (provider: string, channel: string) => ['sent', KNOWN_RUN, '--provider', provider, '--channel', channel, '--sent-as', 'returned', '--provider-send-id', 'x1']
+    expect((await cli(flags, ...args('heyreach', 'email'))).stderr).toContain('HeyReach sends LinkedIn only, and this is an email.')
+    expect((await cli(flags, ...args('instantly', 'linkedin_message'))).code).toBe(2)
+    expect((await cli(flags, ...args('lemlist', 'linkedin'))).code).toBe(0)
+    expect((await cli(flags, ...args('other', 'linkedin'))).code).toBe(0)
+    expect((await cli(flags, ...args('heyreach', 'linkedin'))).code).toBe(0)
+  })
+
+  it('the grade says "and your evidence" only when evidence was used', async () => {
+    const io = await signedIn()
+    const none = await cli(io, 'grade', write(io, 'd.txt', 'Hello there'))
+    expect(flat(none.stdout)).toContain('It measures the message against the rubric. It does not predict replies.')
+    expect(none.stdout).not.toContain('your evidence')
+    const used = await signedIn({
+      gradeResult: { ok: true, outcome: 'graded', run_id: GRADE_RUN, evidence: { requested: 'workspace', used: true }, grade: { score: 5, passed: 1, total: 1, bar: 4.2, passes_bar: true, judge: { model: 'm', judge_version: 'v', role: 'final' }, lines: [{ id: 'cta_clarity', pass: true, applicable: true, reason: 'ok' }] }, disclosures: { single_run: true, not_reply_prediction: true, repeat_spread: null } },
+    })
+    expect(flat((await cli(used, 'grade', write(used, 'd.txt', 'Hello there'), '--evidence', 'workspace')).stdout)).toContain('against the rubric and your evidence. It does not predict replies.')
+  })
+
+  it('--help puts feedback\'s terminal note after its description, and says nothing is asked with --json, in an agent or in CI', async () => {
+    const help = (await cli(fakeIo({}), '--help')).stdout
+    const block = help.slice(help.indexOf('  feedback <run-id>'), help.indexOf('  sent <run-id>'))
+    expect(block.indexOf('What happened to a message')).toBeLessThan(block.indexOf('At a terminal'))
+    expect(flat(block)).toContain('with --json, in an agent or in CI, nothing is asked')
   })
 
   // 11. Keys keep their own runs.

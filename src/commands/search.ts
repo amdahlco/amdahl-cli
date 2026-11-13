@@ -173,7 +173,7 @@ export function outOfTimeLines(rows: number): string[] {
 /**
  * The search answer for a person: the cited answer or the rows, and what the
  * server noted. With no rows it says why in the server's words (its
- * explanation or note), never a bare "Nothing matched", and for a why or
+ * explanation or note), never a bare "No matches.", and for a why or
  * compare `question` it adds the one next step.
  */
 export function searchLines(result: Record<string, unknown>, question = '', researchAsked = false): string[] {
@@ -195,7 +195,7 @@ export function searchLines(result: Record<string, unknown>, question = '', rese
     const said = reason || (code && code !== 'no_match' && code !== 'empty' ? EMPTY_WORDS[code] ?? '' : '')
     if (said) lines.push(...wrap(said))
     if (freshness) lines.push(...wrap(freshness))
-    if (!said && !freshness) lines.push('Nothing matched.')
+    if (!said && !freshness) lines.push('No matches.')
     if (!researchAsked && WHY_OR_COMPARE.test(question)) lines.push('', nextStepLine())
   }
   const gap = field(record(result.statistical_gap)?.message)

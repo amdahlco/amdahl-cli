@@ -79,13 +79,15 @@ export async function recipes(ctx: Ctx): Promise<number> {
     })
     return EXIT.ok
   }
+  // Every id's column is as wide as the longest id and two spaces, so no id runs into its title.
+  const idWidth = Math.max(...RECIPES.map((r) => r.id.length)) + 2
   const lines: string[] = ['Questions the console\'s recipe library asks as a search.']
   for (const category of RECIPE_CATEGORIES) {
     const rows = RECIPES.filter((r) => r.category === category.id)
     if (rows.length === 0) continue
     lines.push('', category.label)
     for (const r of rows) {
-      lines.push(`  ${r.id.padEnd(22)}${r.title}`, ...wrap(r.blurb, 80, '    '))
+      lines.push(`  ${r.id.padEnd(idWidth)}${r.title}`, ...wrap(r.blurb, 80, '    '))
       const needs = NEEDS_LABEL[r.needs]
       const meta = [needs ? `Reads ${needs}.` : '', r.fills.length > 0 ? `Needs ${fillUsage(r)}.` : ''].filter(Boolean).join(' ')
       if (meta) lines.push(...wrap(meta, 80, '    '))

@@ -5,7 +5,7 @@
 // instead of exiting, so tests drive the whole CLI in-process.
 
 import { USAGE, helpWords, parseCommandLine } from './args'
-import { setCommandName } from './command-name'
+import { amdahlCommand, setCommandName } from './command-name'
 import { authToken, login, logout, whoami } from './commands/auth'
 import { connect, connections, open } from './commands/connections'
 import { data } from './commands/data'
@@ -66,6 +66,13 @@ function helpFor(words: string[]): string {
 /** Commands that take no positional arguments. */
 const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'connections', 'open', 'runs', 'data', 'recipes', 'keys create', 'keys list', 'workspace list'])
 
+/** What to say after "Unexpected argument" for the commands that take none, when the person likely wanted another command. */
+const NO_ARGS_HINT: Record<string, string> = {
+  recipes: `To run one: ${amdahlCommand('search --recipe <id>')}`,
+  runs: `To open one: ${amdahlCommand('run <run-id>')}`,
+  data: `A surface goes after --surface: ${amdahlCommand('data --surface deals')}`,
+}
+
 /**
  * Run the CLI.
  *
@@ -100,7 +107,7 @@ export async function runCli(argv: string[], io: Io): Promise<number> {
       return EXIT.ok
     }
     if (NO_ARGS.has(parsed.command ?? '') && parsed.args.length > 0) {
-      throw new CliError('usage', `Unexpected argument: ${parsed.args[0]}`, EXIT.usage)
+      throw new CliError('usage', `Unexpected argument: ${parsed.args[0]}`, EXIT.usage, NO_ARGS_HINT[parsed.command ?? ''] ?? `${amdahlCommand(`${parsed.command} --help`)} shows what it takes.`)
     }
     if (!parsed.command || parsed.command === 'setup') {
       // Bare `amdahl` (or `amdahl setup`) is the guided setup: the menu in a person's terminal, no

@@ -185,7 +185,7 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
   if (trained > 0) lines.push('', ...wrap(`${count(trained, 'email')} trained the revision. Their scores are not lift; they are in --json.`))
 
   const judge = field(record(record(run.judges)?.final)?.model)
-  lines.push('', ...wrap(`This is one reading${judge ? ` by ${judge}` : ''}. It measures the emails against the rubric and your evidence. It does not predict replies.`))
+  lines.push('', ...wrap(`This is one reading${judge ? ` by ${judge}` : ''}. It measures the emails against the rubric${record(run.evidence)?.used === true ? ' and your evidence' : ''}. It does not predict replies.`))
   return lines
 }
 
@@ -316,7 +316,10 @@ export async function prompt(ctx: Ctx, args: string[]): Promise<number> {
   } else {
     text = file === '-' ? await io.readStdin() : readTextFile(file)
   }
-  if (!text.trim()) throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
+  if (!text.trim()) {
+    if (args.length === 0) throw usageError('Give a file with the prompt, or pipe the prompt in.', usage)
+    throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
+  }
   if (text.length > MAX_PROMPT_CHARS) throw usageError(`A prompt is at most ${MAX_PROMPT_CHARS} characters; this one has ${text.length}.`)
   body.prompt = text
 

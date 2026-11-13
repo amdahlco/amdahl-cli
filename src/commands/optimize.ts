@@ -31,7 +31,7 @@ import { printable } from '../output'
 import { rememberRun } from '../history'
 import { sentLines } from '../next-steps'
 import { truthfulSummary } from '../text'
-import { atTerminal } from '../terminal'
+import { atTerminal, canAsk } from '../terminal'
 import { browserSignIn } from './auth'
 import { optimizeList } from './batch'
 
@@ -395,7 +395,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
   const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
-  out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result.run_id), ...connect, nextTimeLine(ctx)].join('\n'))
+  out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx)), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
 
@@ -455,7 +455,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
       else if (typeof result.summary === 'string' && truthfulSummary(result.summary, base.context)) out.info(truthfulSummary(result.summary, base.context))
       out.result({}, String(result.message ?? ''))
-      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result.run_id)]
+      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx))]
       if (lines.length) out.info(lines.join('\n'))
     }
   }

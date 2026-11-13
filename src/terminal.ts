@@ -19,6 +19,14 @@ export function atTerminal(ctx: Ctx): boolean {
 }
 
 /**
+ * True when a person can be asked and shown a question: {@link atTerminal}, stdout a terminal and no
+ * `--json`. `sent` and `feedback` ask for what is missing exactly when this holds.
+ */
+export function canAsk(ctx: Ctx): boolean {
+  return atTerminal(ctx) && ctx.io.stdoutIsTTY && !ctx.out.json
+}
+
+/**
  * True when {@link atTerminal} and stdout is a terminal too: `amdahl connect |
  * cat` is a script reading the link, and opens no browser.
  */

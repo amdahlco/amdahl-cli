@@ -488,7 +488,7 @@ A workspace with nothing connected answers with `setup_needed`: the CLI
 prints its message, which carries the console link, then
 `Connect your CRM or call recorder: amdahl connect`. With no rows, it says why
 in the server's own words (its explanation or note, then its line on how fresh
-the data is), and `Nothing matched.` only when the server said nothing. For an
+the data is), and `No matches.` only when the server said nothing. For an
 empty or unsupported why or compare question it adds one next step: `--research`
 (which needs a Customer agent key), or name the company exactly. A search the
 server cut at its deadline, or could not read, is not "no matches": the CLI says
@@ -827,7 +827,7 @@ At a terminal, `feedback` and `sent` ask for what you leave out instead of
 exiting 2, with a default for each, and never more than three questions.
 `feedback <run-id>` asks how you know (`--evidence`), then what happened
 (`--outcome`) when you gave no outcome, text or comment. `sent <run-id>` asks
-where it went out (the providers, a menu), who it went to (a recipient, when
+where it went out (a menu of tool names: Instantly, Reply.io, La Growth Machine, ...), who it went to (a recipient, when
 you gave no send id or recipient; it must be an email address or a LinkedIn
 profile URL, and a name such as `priya` is asked for once more, then refused)
 and whether you changed it first (paste the
@@ -836,12 +836,17 @@ yes or no). It never asks for the channel. When it asks for something else
 and `--channel` is not given, it picks one and prints it before it sends: email
 for an email address as the recipient, LinkedIn for a LinkedIn profile, else the
 run's channel (when this computer made the run), else the provider's. If
-`--channel` is the only thing missing, it is a usage error: give it. What you gave is checked first,
+`--channel` is the only thing missing, it is a usage error: give it. A tool and a
+channel that cannot go together (Instantly with a LinkedIn profile, HeyReach with an
+email) are refused before anything is sent; `other` sends both. A prompt run's id
+(`opt_...`) can't be reported as sent or given feedback. What you gave is checked first,
 so a typo costs no answers, and Ctrl+C sends nothing. With `--json`, in an
 agent (`CLAUDECODE`, `CURSOR_AGENT`), in CI, with `AMDAHL_NO_PROMPT=1` or with
 stdin or stdout not a terminal (`amdahl sent <id> | tee`), nothing is asked and a
 missing flag is the usage error it always was. `grade` and `prompt` with no
-file paste only under the same rule.
+file paste only under the same rule. After an `optimize`, the two
+next-step lines are `amdahl sent <id>` and `amdahl feedback <id>` where they ask
+for what is missing, and the full commands with every flag anywhere else.
 
 ## Next steps
 

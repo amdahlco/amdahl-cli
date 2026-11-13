@@ -124,7 +124,7 @@ export async function run(ctx: Ctx, args: string[]): Promise<number> {
     result = await call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize/runs/${encodeURIComponent(id)}`))
   } catch (err) {
     if (err instanceof CliError && (err.code === 'not_found' || err.code === 'http_404')) {
-      throw new CliError(err.code, `No run ${id} from you in this workspace.`, err.exit, `Only the person who made a run can open it. A prompt run? ${amdahlCommand(`prompt --run ${id}`)}`)
+      throw new CliError(err.code, `No run ${id} from you in this workspace.`, err.exit, `Only the person who made a run can open it. ${amdahlCommand('runs')} lists the ones this computer made.`)
     }
     throw err
   }
