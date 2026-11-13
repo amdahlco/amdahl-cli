@@ -135,18 +135,28 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
     lines.push(...wrap(`Amdahl revised your prompt. On the emails held out of the revising it averages ${now ?? 'not graded'}; yours averaged ${was ?? 'not graded'}.`))
   } else if (outcome === 'improved') {
     lines.push(...wrap(`Amdahl kept a revised prompt. Your original averages ${was ?? 'not graded'} on the emails held out of the revising.`))
+  } else if (outcome === 'unchanged' && reportable && (run.lift as number) > 0) {
+    // The sidecar keeps the prompt when the better revision left placeholders (or another note says why):
+    // a revision did score higher, and it was not kept. `notes` below say why.
+    lines.push(...wrap(`A revision scored higher on the held-out emails, but Amdahl did not keep it, so your prompt stays as it is. ${was ? `Your prompt averages ${was}.` : ''}`.trim()))
   } else if (outcome === 'unchanged') {
     lines.push(...wrap(`No revision wrote better email on the held-out recipients, so your prompt stays as it is. ${was ? `It averages ${was}.` : 'Its emails could not be graded.'}`))
   } else {
     lines.push(...wrap(was ? `Prompt grade: ${was}.` : 'Not graded: none of its emails could be graded.'))
   }
   if (outcome === 'improved' || outcome === 'unchanged') {
-    if (run.lift_reportable === true && typeof run.lift === 'number') lines.push(`Lift on the held-out recipients: ${run.lift > 0 ? '+' : ''}${run.lift}.`)
-    else {
+    if (run.lift_reportable === true && typeof run.lift === 'number') {
+      const kept = outcome === 'improved'
+      lines.push(`${kept ? 'Lift' : "The revision's lift"} on the held-out recipients${kept ? '' : ' (not kept)'}: ${run.lift > 0 ? '+' : ''}${run.lift}.`)
+    } else {
       const why = field(run.lift_not_reportable_reason)
       lines.push(...wrap(`No lift is reported${why ? `: ${LIFT_WHY[why] ?? why.replace(/_/g, ' ')}` : ''}.`))
     }
   }
+
+  // What the sidecar says about this run, as it says it (why a better revision was not kept, for one).
+  const says = records(run.notes).map((n) => field(n.says)).filter(Boolean)
+  for (const note of says) lines.push(...wrap(note))
 
   const rates = lineRates(original)
   if (rates.length > 0) {
@@ -193,8 +203,9 @@ function readRecipients(path: string, mode: string): unknown[] {
 }
 
 /** One read of a run, holding up to {@link PROMPT_WAIT_MS}. */
-async function readRun(ctx: Ctx, credential: Credential, id: string): Promise<Record<string, unknown>> {
-  return call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize_prompt/${encodeURIComponent(id)}?wait_ms=${PROMPT_WAIT_MS}`))
+async function readRun(ctx: Ctx, credential: Credential, id: string, wait = true): Promise<Record<string, unknown>> {
+  const query = wait ? `?wait_ms=${PROMPT_WAIT_MS}` : ''
+  return call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize_prompt/${encodeURIComponent(id)}${query}`))
 }
 
 /** The states a run does not leave. */
@@ -259,7 +270,7 @@ export async function prompt(ctx: Ctx, args: string[]): Promise<number> {
       if (flags[flag] !== undefined) throw usageError(`--${flag} goes with a prompt to run, not with --run.`)
     }
     const credential = await resolveCredential(ctx)
-    if (flags['no-wait'] === true) return printRun(ctx, undefined, null, await readRun(ctx, credential, runId))
+    if (flags['no-wait'] === true) return printRun(ctx, undefined, null, await readRun(ctx, credential, runId, false))
     if (!out.json && io.stderrIsTTY) out.info('Reading the run. It may still be going.')
     return printRun(ctx, undefined, null, await waitForRun(ctx, credential, runId))
   }

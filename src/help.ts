@@ -318,8 +318,11 @@ Give at least one of --provider-send-id and a recipient (--recipient or
 matches a report to a send by the id, the recipient, or both.
 
 At a terminal, what you leave out is asked (three questions at most): where it
-went out, who it went to, and whether you changed it first. The channel comes
-from the run, the recipient or the provider. With --json, in an agent or in CI,
+went out, who it went to, and whether you changed it first. It never asks for
+the channel. When it asks for something else, it picks the channel without
+--channel: email for an email address, linkedin for a LinkedIn profile, else
+the run's, else the provider's, and prints it. If --channel is the only thing
+missing, give it: that is a usage error. With --json, in an agent or in CI,
 nothing is asked: a missing flag is a usage error.
 ${GLOBAL}`,
 

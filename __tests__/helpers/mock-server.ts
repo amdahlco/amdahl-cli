@@ -38,6 +38,8 @@ export const batchRun = (index: number) => `99999999-9999-4999-8999-${String(ind
 export interface LoggedRequest {
   method: string
   path: string
+  /** The query string, with its `?`, or ''. */
+  query: string
   headers: Record<string, string | string[] | undefined>
   body: string
 }
@@ -194,7 +196,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
     req.on('end', () => {
       const url = new URL(req.url ?? '/', base)
       const path = url.pathname
-      log.push({ method: req.method ?? 'GET', path, headers: req.headers, body })
+      log.push({ method: req.method ?? 'GET', path, query: url.search, headers: req.headers, body })
       const form = () => {
         if (!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded')) return null
         return new URLSearchParams(body)

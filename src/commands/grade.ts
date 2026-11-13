@@ -17,7 +17,7 @@
 
 import { amdahlCommand } from '../command-name'
 import { resolveCredential, type Ctx } from '../context'
-import { EXIT, usageError } from '../errors'
+import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { rememberRun } from '../history'
 import { field, record, records, wrap } from '../text'
@@ -160,7 +160,16 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
 
   credential ??= await resolveCredential(ctx)
   if (!out.json && io.stderrIsTTY) out.info('Grading it...')
-  const result = await optimizeOne(ctx, credential, message, base, file ?? '-')
+  let result: Record<string, unknown>
+  try {
+    result = await optimizeOne(ctx, credential, message, base, file ?? '-')
+  } catch (err) {
+    // The refusal names the call by its path, which a grade shares with a rewrite: say what was asked.
+    if (err instanceof CliError && err.message.startsWith('This credential cannot optimize.')) {
+      throw new CliError(err.code, err.message.replace('cannot optimize', 'cannot grade'), err.exit, err.hint, err.detail, err.data)
+    }
+    throw err
+  }
   if (result.ok === false) {
     if (out.json) out.result({ ok: false, file, result })
     out.info(`Not graded (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)

@@ -816,9 +816,11 @@ exiting 2, with a default for each, and never more than three questions.
 where it went out (the providers, a menu), who it went to (a recipient, when
 you gave no send id or recipient) and whether you changed it first (paste the
 message as sent, or press Enter for as returned; with `--sent-text` given, a
-yes or no). It does not ask for the channel: that comes from `--channel`, the
-recipient, the run (when this computer made it) or the provider, and the
-command prints what it chose before it sends. What you gave is checked first,
+yes or no). It never asks for the channel. When it asks for something else
+and `--channel` is not given, it picks one and prints it before it sends: email
+for an email address as the recipient, LinkedIn for a LinkedIn profile, else the
+run's channel (when this computer made the run), else the provider's. If
+`--channel` is the only thing missing, it is a usage error: give it. What you gave is checked first,
 so a typo costs no answers, and Ctrl+C sends nothing. With `--json`, in an
 agent (`CLAUDECODE`, `CURSOR_AGENT`), in CI, with `AMDAHL_NO_PROMPT=1` or with
 stdin or stdout not a terminal (`amdahl sent <id> | tee`), nothing is asked and a

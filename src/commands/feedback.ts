@@ -238,8 +238,10 @@ async function buildItem(ctx: Ctx, args: string[], pasted?: string): Promise<Rec
  * At a terminal, ask for what a report still needs: where it went out, who it
  * went to, and whether it was changed first. At most three questions, each
  * with a default; a value the command line gave is never asked again. The
- * channel is not asked: it comes from the run, the recipient or the provider,
- * and is printed. Flags that are given are checked first, so a typo costs no
+ * channel is never asked: when something else is asked and `--channel` is not
+ * given, it is the recipient's (an email address is email, a LinkedIn profile
+ * LinkedIn), else the run's, else the provider's, and is printed. When only
+ * `--channel` is missing, nothing is asked and the usage error stands. Flags that are given are checked first, so a typo costs no
  * answers. Returns the flags to send with, and the pasted text of an edit.
  */
 async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags']; pasted?: string }> {
@@ -283,7 +285,10 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
 
 /** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
 function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string {
-  const recipient = str(flags.recipient)
+  // The recipient says what was sent: an email address is an email, a LinkedIn profile is a LinkedIn message.
+  // It comes before the run's channel and the provider, which can be wrong (a LinkedIn run sent by lemlist as email).
+  const recipient = str(flags.recipient)?.trim()
+  if (recipient && EMAIL_WHOLE_VALUE.test(recipient)) return 'email'
   if (recipient && LINKEDIN_PROFILE.test(recipient)) return 'linkedin_message'
   const remembered = findRun(ctx, runIdValue, currentProfile(ctx))?.channel
   if (remembered) return CHANNEL_ALIASES[remembered] ?? remembered

@@ -152,7 +152,8 @@ describe('grade', () => {
     const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: READONLY_KEY })
     const r = await cli(io, 'grade', write(io, 'd.txt', 'Hello'))
     expect(r.code).toBe(4)
-    expect(r.stderr).toContain('This credential cannot optimize.')
+    expect(r.stderr).toContain('This credential cannot grade.')
+    expect(r.stderr).not.toContain('cannot optimize')
   })
 })
 
@@ -733,5 +734,82 @@ describe('limits checked before a request', () => {
 
   it('keeps 50 runs, as the README and the PR say', () => {
     expect(MAX_KEPT).toBe(50)
+  })
+})
+
+describe('review fixes from the QA round', () => {
+  const PROMPT = 'Write a first-touch email to a Head of Platform. Name what they shipped, then ask for 15 minutes.'
+
+  it('a better revision the sidecar did not keep (unchanged, reportable positive lift, a note) says so and prints the note, not "no revision wrote better email"', async () => {
+    const says = 'The better revision left an unfilled placeholder ([First Name]) in a held-out email, so it was not kept.'
+    const io = await signedIn({
+      promptResult: () => ({
+        prompt_mode: 'improve', outcome: 'unchanged', lift: 0.4, lift_reportable: true,
+        grade: { original: { mean: 2.6, n: 3, emails_passing_bar: 0, bar: 4.2, lines: {} }, revised: { mean: 3, n: 3, emails_passing_bar: 0, bar: 4.2, lines: {} } },
+        emails: [], notes: [{ code: 'revision_left_placeholders', says }], judges: { final: { model: 'm' } },
+      }),
+    })
+    const r = await cli(io, 'prompt', write(io, 'p.md', PROMPT))
+    expect(r.code).toBe(0)
+    const out = flat(r.stdout)
+    expect(out).toContain('A revision scored higher on the held-out emails, but Amdahl did not keep it, so your prompt stays as it is. Your prompt averages 2.6 of 5, over 3 emails, 0 passing the bar of 4.2.')
+    expect(out).toContain("The revision's lift on the held-out recipients (not kept): +0.4.")
+    expect(out).toContain(says)
+    expect(out).not.toContain('No revision wrote better email')
+    expect(out).not.toContain('averages 3 of 5')
+    expect(r.stderr).not.toContain('Better')
+    fits80(r.stdout)
+  })
+
+  it('a note is printed for any outcome', async () => {
+    const io = await signedIn({
+      promptResult: () => ({ outcome: 'unchanged', lift: null, lift_reportable: false, lift_not_reportable_reason: 'no_revision', grade: { original: { mean: 3, n: 2, emails_passing_bar: 0, bar: 4.2, lines: {} }, revised: null }, emails: [], notes: [{ says: 'Only two recipients were found.' }] }),
+    })
+    expect(flat((await cli(io, 'prompt', write(io, 'p.md', PROMPT))).stdout)).toContain('Only two recipients were found.')
+  })
+
+  it('sent: an email-shaped recipient means email, before the run\'s channel and the provider; a LinkedIn profile means linkedin', async () => {
+    const io = await signedIn({ optimizeResult: { ok: true, message: 'better', run_id: KNOWN_RUN } })
+    await cli(io, 'optimize', write(io, 'a.txt', 'Hi'), '--channel', 'linkedin')
+    // The run was a LinkedIn message; the person answers lemlist and gives an email address: it went out as email.
+    io.answers = ['', 'dana@acme.com', '']
+    const r = await cli(io, 'sent', KNOWN_RUN)
+    expect(r.code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'lemlist', channel: 'email', recipient: 'dana@acme.com' })
+    expect(r.stderr).toContain('Reporting: lemlist, email, sent as returned.')
+    // The reverse: an email run, a LinkedIn profile as the recipient: linkedin_message.
+    const io2 = await signedIn({ optimizeResult: { ok: true, message: 'better', run_id: KNOWN_RUN } })
+    await cli(io2, 'optimize', write(io2, 'a.txt', 'Hi'), '--channel', 'email')
+    io2.answers = ['', '']
+    const r2 = await cli(io2, 'sent', KNOWN_RUN, '--recipient', 'https://www.linkedin.com/in/dana-x')
+    expect(r2.code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ channel: 'linkedin_message' })
+    // No recipient shape to go by: the run's channel, then the provider's.
+    io2.answers = ['8', '']
+    expect((await cli(io2, 'sent', KNOWN_RUN, '--provider-send-id', 'x9')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'heyreach', channel: 'email' })
+  })
+
+  it('sent with only --channel missing asks nothing and is the usage error, and the help says so', async () => {
+    const io = await signedIn()
+    const r = await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--sent-as', 'returned', '--provider-send-id', 'x1')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Say what was sent with --channel:')
+    expect(io.prompts).toEqual([])
+    const help = await cli(io, 'sent', '--help')
+    expect(flat(help.stdout)).toContain('If --channel is the only thing missing, give it: that is a usage error.')
+    expect(flat(help.stdout)).not.toContain('The channel comes from the run')
+  })
+
+  it('prompt --run --no-wait reads at once, without wait_ms; waiting reads send it', async () => {
+    const io = await signedIn({ promptPolls: 0 })
+    await cli(io, 'prompt', write(io, 'p.md', PROMPT), '--no-wait')
+    const reads = () => server!.log.filter((l) => l.method === 'GET' && l.path.includes('/optimize_prompt/'))
+    expect(reads()).toHaveLength(0)
+    expect((await cli(io, 'prompt', '--run', PROMPT_RUN, '--no-wait')).code).toBe(0)
+    expect(reads()).toHaveLength(1)
+    expect(reads()[0]?.query).toBe('')
+    expect((await cli(io, 'prompt', '--run', PROMPT_RUN)).code).toBe(0)
+    expect(reads().at(-1)?.query).toBe('?wait_ms=30000')
   })
 })
