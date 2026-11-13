@@ -16,13 +16,20 @@
 //
 // A workspace with nothing connected answers with `setup_needed`: its
 // message and link print, then the command that opens the add page.
+//
+// `--recipe <id> [--<fill-in> <value>]` asks one of the console's recipe
+// questions (recipes.ts, recipes-data.ts) instead of the person's own. When a
+// research job starts its id is printed with the command that reads it later,
+// and `--research-id <id>` reads a job started earlier (the same wait).
 
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { blockLines } from '../blocks'
 import { clip, count, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
+import { FILL_MAX } from '../recipes-data'
 import { connectLine } from './connections'
+import { FILL_FLAGS, recipeById, recipeQuestion } from './recipes'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -173,11 +180,63 @@ async function waitForResearch(ctx: Ctx, credential: Credential, id: string): Pr
   }
 }
 
-/** `amdahl search "<question>" [--research] [--limit <n>]`. */
+/** The line that says how to read a research job later, by its id. */
+export function researchLaterLine(id: string): string {
+  return `Read it later:\n  ${amdahlCommand(`search --research-id ${id}`)}`
+}
+
+/** A research id is a run id: a UUID. */
+const RESEARCH_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * `amdahl search --research-id <id>`: read a research job started earlier,
+ * waiting for it as `search --research` does, and print it the same way. It
+ * needs a credential that can read research (a Customer agent key).
+ */
+async function readResearch(ctx: Ctx, args: string[]): Promise<number> {
+  const id = str(ctx.flags['research-id'])
+  const usage = `Usage: ${amdahlCommand('search --research-id <id>')}`
+  if (!id) throw usageError('--research-id needs the id of a research job.', usage)
+  if (args.length > 0 || ctx.flags.recipe !== undefined || ctx.flags.research === true || ctx.flags.limit !== undefined) {
+    throw usageError('--research-id reads a job that already started: give it alone.', usage)
+  }
+  if (!RESEARCH_ID.test(id)) throw usageError(`"${field(id).slice(0, 40)}" is not a research id.`, `A research id looks like 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16; search prints it when a job starts. ${usage}`)
+  const credential = await resolveCredential(ctx)
+  let job: Record<string, unknown>
+  try {
+    job = await waitForResearch(ctx, credential, id)
+  } catch (err) {
+    if (err instanceof CliError && err.exit === EXIT.forbidden) {
+      throw new CliError('missing_scope', `This credential can't read research ${id}.`, EXIT.forbidden, researchKeyLine())
+    }
+    throw err
+  }
+  return printResearch(ctx, {}, job)
+}
+
+/** The recipe flags a command line gave, by fill-in key. */
+function fillValues(ctx: Ctx): Record<string, string | undefined> {
+  return Object.fromEntries(FILL_FLAGS.map((key) => [key, typeof ctx.flags[key] === 'string' ? (ctx.flags[key] as string) : undefined]))
+}
+
+/** `amdahl search "<question>" [--research] [--limit <n>]`, `--recipe <id> [--<fill-in> <value>]`, or `--research-id <id>`. */
 export async function search(ctx: Ctx, args: string[]): Promise<number> {
   const { out } = ctx
-  const question = args.join(' ').trim()
-  if (!question) throw usageError('Ask a question.', `Usage: ${amdahlCommand('search "<question>" [--research]')}`)
+  if (typeof ctx.flags['research-id'] === 'string') return readResearch(ctx, args)
+  let question = args.join(' ').trim()
+  const fills = fillValues(ctx)
+  if (typeof ctx.flags.recipe === 'string') {
+    if (question) throw usageError('Give a question or --recipe, not both.', `${amdahlCommand('recipes')} lists the recipes.`)
+    const recipe = recipeById(ctx.flags.recipe)
+    const built = recipeQuestion(recipe, fills)
+    question = built.question
+    if (built.cut.length > 0 && !out.json) out.info(`Used the first ${FILL_MAX} characters of ${built.cut.map((k) => `--${k}`).join(' and ')}.`)
+    if (!out.json) out.info(wrap(`${recipe.title}: ${question}`).join('\n'))
+  } else {
+    const stray = FILL_FLAGS.find((key) => fills[key] !== undefined)
+    if (stray) throw usageError(`--${stray} goes with --recipe <id>.`, `${amdahlCommand('recipes')} lists the recipes.`)
+  }
+  if (!question) throw usageError('Ask a question.', `Usage: ${amdahlCommand('search "<question>" [--research]')}. Or a recipe: ${amdahlCommand('recipes')}`)
   if (question.length > MAX_QUESTION_CHARS) throw usageError(`A question is at most ${MAX_QUESTION_CHARS} characters.`)
   const body: Record<string, unknown> = { query: question, answer: true }
   if (ctx.flags.research === true) body.route = 'research'
@@ -198,7 +257,9 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
 
   // A fresh handle carries no answer, even one that says `complete` (a cached job): read the job.
   if (handoff && field(handoff.research_id) && !record(handoff.answer)) {
-    if (!out.json && field(handoff.status) !== 'complete') out.info('Amdahl started research on it. This can take a few minutes.')
+    if (!out.json && field(handoff.status) !== 'complete') {
+      out.info(`Amdahl started research on it. This can take a few minutes.\nResearch id: ${field(handoff.research_id)}\n${researchLaterLine(field(handoff.research_id))}`)
+    }
     let job: Record<string, unknown>
     try {
       job = await waitForResearch(ctx, credential, field(handoff.research_id))
@@ -246,7 +307,7 @@ function printResearch(ctx: Ctx, search: Record<string, unknown>, job: Record<st
     return EXIT.ok
   }
   if (status === 'running') {
-    out.info(`The research is still running (id ${id}). Open it in the console: ${amdahlCommand('open')}`)
+    out.info(`The research is still running.\nResearch id: ${id}\n${researchLaterLine(id)}\nOr open it in the console: ${amdahlCommand('open')}`)
     return EXIT.general
   }
   if (status === 'needs_input') {

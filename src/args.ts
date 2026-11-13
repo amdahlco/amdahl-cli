@@ -8,6 +8,7 @@
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { amdahlCommand } from './command-name'
 import { usageError } from './errors'
+import { RECIPES } from './recipes-data'
 
 type OptionSpec = NonNullable<ParseArgsConfig['options']>
 
@@ -51,7 +52,31 @@ export const COMMAND_OPTIONS: Record<string, OptionSpec> = {
     force: { type: 'boolean' },
     for: { type: 'string' },
   },
-  search: { research: { type: 'boolean' }, limit: { type: 'string' } },
+  grade: {
+    channel: { type: 'string' },
+    evidence: { type: 'string' },
+    context: { type: 'string' },
+  },
+  prompt: {
+    mode: { type: 'string' },
+    recipients: { type: 'string' },
+    channel: { type: 'string' },
+    context: { type: 'string' },
+    'no-wait': { type: 'boolean' },
+    run: { type: 'string' },
+  },
+  runs: { limit: { type: 'string' } },
+  run: {},
+  data: { surface: { type: 'string' } },
+  recipes: {},
+  search: {
+    research: { type: 'boolean' },
+    limit: { type: 'string' },
+    recipe: { type: 'string' },
+    'research-id': { type: 'string' },
+    // A recipe's fill-ins are flags (--account, --products, ...): the recipe library names them.
+    ...Object.fromEntries([...new Set(RECIPES.flatMap((r) => r.fills.map((f) => f.key)))].map((key) => [key, { type: 'string' as const }])),
+  },
   connections: { all: { type: 'boolean' } },
   connect: { 'no-browser': { type: 'boolean' } },
   open: { 'no-browser': { type: 'boolean' } },
@@ -228,7 +253,14 @@ What you can do:
                                  Also write drafts-lemlist.csv, a file your
                                  sequencer imports, and say how (Instantly,
                                  Smartlead, lemlist, HeyReach, Apollo and more)
+  amdahl grade draft.md          Grade a message: score and the lines behind
+  amdahl prompt prompt.md        Grade or improve a reusable prompt by the
+                                 emails it writes
   amdahl search "<question>"     Ask about your customers, calls and deals
+  amdahl recipes                 The console's questions (amdahl search
+                                 --recipe <id> runs one)
+  amdahl data                    What the workspace holds, what to filter on
+  amdahl runs                    Your latest runs (amdahl run <id> opens one)
   amdahl connect hubspot         Add a CRM or call recorder in the console
                                  (amdahl connections lists what is connected)
   amdahl status                  Check that this workspace can optimize
@@ -268,16 +300,40 @@ Commands:
                        hubspot, lgm, woodpecker, other (any tool that imports
                        a CSV). lemlist, reply_io and other take both channels,
                        so add --channel email|linkedin.
+  grade <file|-> [--channel email|linkedin] [--evidence off|workspace]
+           [--context <file.json>]
+           Grade a draft and write nothing. The score always comes with its
+           five lines. No line evaluated reads "Not graded", never 0. A grade
+           does not predict replies. --json prints {ok, file, result}: the
+           grade is .result.grade.
+  prompt <file|-> [--mode improve|grade] [--recipients <file.json>]
+           [--channel email|linkedin] [--context <file.json>] [--no-wait]
+  prompt --run <id> [--no-wait]
+           Grade or improve a reusable prompt by the emails it writes. A run
+           takes minutes: its id is printed, --run <id> reads it later.
+  runs [--limit <n>]                         Your latest runs, on this computer
+  run <run-id>                               One run: your draft, then Amdahl's
+  data [--surface interactions|deals|deal_qualification]
+                                             What the workspace holds and what
+                                             a search can filter on
+  recipes                                    The console's recipe questions
   search "<question>" [--research] [--limit <n>]
+  search --recipe <id> [--account|--products|--messages|--objection <text>]
+  search --research-id <id>
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset
                        agent; a sign-in gets the search answer)
+           --recipe    one of the console's questions (amdahl recipes); its
+                       fill-in is a flag, like --account Acme
+           --research-id  read a research job that started earlier; search
+                       prints the id when a job starts
   connections [--all]                        Connected sources and health
   connect [<connector>] [--no-browser]       Open the console's add page
   open    [--no-browser]                     This workspace in the console
   feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
            [--outcome used|used_with_edits|not_used|unsure]
            [--sent-text <file> | -] [--comment <text>]
+           At a terminal, what is left out is asked (at most two questions).
                                              What happened to a message
   sent <run-id> --provider <provider> --channel <channel>
            --sent-as returned|edited [--sent-at <time>]
@@ -289,11 +345,14 @@ Commands:
            One send per command. Give --provider-send-id, a recipient, or
            both (a recipient is --recipient or --recipient-key-hash, not both).
            --provider: lemlist, instantly, outreach, salesloft, hubspot,
-                       salesforce, gmail, heyreach, apollo, linkedin_manual,
-                       other (any sender not listed)
+                       salesforce, gmail, heyreach, apollo, smartlead,
+                       reply_io, lgm, woodpecker, linkedin_manual, other
+                       (any sender not listed)
            --channel:  email, linkedin (= linkedin_message), linkedin_invite,
                        linkedin_message, linkedin_inmail
-           --sent-as edited needs --sent-text.
+           --sent-as edited needs --sent-text. At a terminal, what is left
+           out is asked (at most three questions); with --json, in an agent
+           or in CI, nothing is asked.
                                              Report that a message went out
   keys create --name <name> [--preset read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]

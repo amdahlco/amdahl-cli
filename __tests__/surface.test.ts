@@ -87,7 +87,7 @@ describe('search', () => {
     expect(reads[0]?.headers.authorization).toBe(`Bearer ${API_KEY}`)
     expect(server!.log.find((l) => l.path.includes('/research/'))?.path).toBe('/api/platform/v1/research/66666666-6666-4666-8666-666666666666')
     expect(r.stdout).toBe('Deals with a pricing objection closed less often.\n\nAsk next:\n- Which competitor came up most?\n')
-    expect(r.stderr).toBe('Amdahl started research on it. This can take a few minutes.\n')
+    expect(r.stderr).toBe('Amdahl started research on it. This can take a few minutes.\nResearch id: 66666666-6666-4666-8666-666666666666\nRead it later:\n  amdahl search --research-id 66666666-6666-4666-8666-666666666666\n')
     const json = await cli(io, 'search', 'why?', '--research', '--json')
     expect(json.json).toMatchObject({ ok: true, mode_ran: 'research', research: { status: 'complete', answer: { partial: false } } })
   })
@@ -183,6 +183,8 @@ describe('search', () => {
     expect(human).toMatchObject({ code: 4, stdout: '' })
     expect(human.stderr).toBe(
       'Amdahl started research on it. This can take a few minutes.\n' +
+        'Research id: 66666666-6666-4666-8666-666666666666\n' +
+        'Read it later:\n  amdahl search --research-id 66666666-6666-4666-8666-666666666666\n' +
         "Error: Research 66666666-6666-4666-8666-666666666666 started, but this credential can't read it.\n" +
         'Research needs a Customer agent key: amdahl keys create --name research --preset agent\n'
     )
@@ -632,6 +634,7 @@ describe('optimize --list', () => {
 describe('feedback and sent', () => {
   it('feedback sends what the schema takes, and needs --evidence and one of the rest', async () => {
     const io = await signedIn()
+    io.env.AMDAHL_NO_PROMPT = '1' // a script: nothing is asked, a missing flag is a usage error
     const text = join(io.cwd, 'sent.txt')
     writeFileSync(text, 'Hi Dana, as sent')
     const r = await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'did_it_myself', '--outcome', 'used_with_edits', '--sent-text', text, '--comment', 'Too formal')
@@ -688,6 +691,7 @@ describe('feedback and sent', () => {
 
   it('sent needs a send id or a recipient, and says so before any request (the real server refuses a report without one)', async () => {
     const io = await signedIn()
+    io.env.AMDAHL_NO_PROMPT = '1' // a script: nothing is asked, a missing flag is a usage error
     const before = server!.log.length
     const none = await cli(io, 'sent', KNOWN_RUN, '--provider', 'lemlist', '--channel', 'email', '--sent-as', 'returned')
     expect(none.code).toBe(2)

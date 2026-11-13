@@ -8,10 +8,15 @@ import { USAGE, helpWords, parseCommandLine } from './args'
 import { setCommandName } from './command-name'
 import { authToken, login, logout, whoami } from './commands/auth'
 import { connect, connections, open } from './commands/connections'
+import { data } from './commands/data'
 import { feedback, sent } from './commands/feedback'
+import { grade } from './commands/grade'
 import { install } from './commands/install'
 import { keysCreate, keysList, keysRevoke } from './commands/keys'
 import { optimize } from './commands/optimize'
+import { prompt } from './commands/prompt'
+import { recipes } from './commands/recipes'
+import { run, runs } from './commands/runs'
 import { search } from './commands/search'
 import { noSetupLine, setup, setupMode } from './commands/setup'
 import { skillsAdd } from './commands/skills'
@@ -32,6 +37,12 @@ const COMMANDS: Record<string, Handler> = {
   'auth token': (ctx) => authToken(ctx),
   status: (ctx) => status(ctx),
   optimize,
+  grade,
+  prompt,
+  runs: (ctx) => runs(ctx),
+  run,
+  data: (ctx) => data(ctx),
+  recipes: (ctx) => recipes(ctx),
   search,
   connections: (ctx) => connections(ctx),
   connect,
@@ -53,7 +64,7 @@ function helpFor(words: string[]): string {
 }
 
 /** Commands that take no positional arguments. */
-const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'connections', 'open', 'keys create', 'keys list', 'workspace list'])
+const NO_ARGS = new Set(['setup', 'login', 'logout', 'whoami', 'auth token', 'status', 'connections', 'open', 'runs', 'data', 'recipes', 'keys create', 'keys list', 'workspace list'])
 
 /**
  * Run the CLI.

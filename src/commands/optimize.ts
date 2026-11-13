@@ -28,6 +28,7 @@ import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
+import { rememberRun } from '../history'
 import { sentLines } from '../next-steps'
 import { truthfulSummary } from '../text'
 import { atTerminal } from '../terminal'
@@ -40,8 +41,8 @@ export const NEW_USER = 'New to Amdahl? The sign-in sets up your free workspace.
 /** Per-file request timeout. */
 export const OPTIMIZE_TIMEOUT_MS = 180_000
 
-const CHANNELS = ['email', 'linkedin']
-const EVIDENCE = ['off', 'workspace']
+export const CHANNELS = ['email', 'linkedin']
+export const EVIDENCE = ['off', 'workspace']
 const ON_UNSUPPORTED = ['flag', 'remove']
 
 /** One file's outcome in `--json` output. */
@@ -51,14 +52,14 @@ interface FileResult {
   result: Record<string, unknown>
 }
 
-function oneOf(flag: string, value: string | undefined, allowed: string[]): string | undefined {
+export function oneOf(flag: string, value: string | undefined, allowed: string[]): string | undefined {
   if (value === undefined) return undefined
   if (!allowed.includes(value)) throw usageError(`--${flag} must be one of: ${allowed.join(', ')}.`)
   return value
 }
 
 /** Read and check the `--context` file: a JSON object. */
-function readContext(path: string): Record<string, unknown> {
+export function readContext(path: string): Record<string, unknown> {
   const text = readTextFile(path)
   let parsed: unknown
   try {
@@ -307,8 +308,13 @@ function saysNoData(result: Record<string, unknown>): boolean {
   return Boolean(record(result.setup_needed)) || text(record(result.evidence)?.reason) === 'corpus_empty'
 }
 
+/** The channel the request named, when it named one. */
+export function channelOf(base: Record<string, unknown>): string | undefined {
+  return typeof base.channel === 'string' ? base.channel : undefined
+}
+
 /** The request body's options from the flags: channel, evidence, context and the rest. */
-function requestOptions(ctx: Ctx): Record<string, unknown> {
+export function requestOptions(ctx: Ctx): Record<string, unknown> {
   const { flags } = ctx
   const base: Record<string, unknown> = {}
   const channel = oneOf('channel', str(flags.channel), CHANNELS)
@@ -324,7 +330,7 @@ function requestOptions(ctx: Ctx): Record<string, unknown> {
 }
 
 /** One optimize request, with the timeout, any failure as a CliError. */
-async function optimizeOne(ctx: Ctx, credential: Credential, message: string, base: Record<string, unknown>, file: string): Promise<Record<string, unknown>> {
+export async function optimizeOne(ctx: Ctx, credential: Credential, message: string, base: Record<string, unknown>, file: string): Promise<Record<string, unknown>> {
   try {
     return await withTimeout(
       apiClient(ctx, credential).request<Record<string, unknown>>('/api/platform/v1/messages/optimize', {
@@ -344,7 +350,7 @@ async function optimizeOne(ctx: Ctx, credential: Credential, message: string, ba
  * in through the browser first, so nobody pastes a draft only to hear they
  * are not signed in.
  */
-async function credentialOrSignIn(ctx: Ctx): Promise<Credential> {
+export async function credentialOrSignIn(ctx: Ctx): Promise<Credential> {
   try {
     return await resolveCredential(ctx)
   } catch (err) {
@@ -374,6 +380,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.info('Amdahl is rewriting it. This can take a minute.')
   const noData = noDataConnected(ctx, credential)
   const result = await optimizeOne(ctx, credential, message, base, 'your message')
+  if (result.ok !== false) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential.profile)
   if (result.ok === false) {
     if (out.json) out.result({ ok: false, file: '-', result })
     out.info(`Not optimized (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)
@@ -437,6 +444,7 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
     const result = await optimizeOne(ctx, credential, message, base, file)
     const ok = result.ok !== false
     results.push({ ok, file, result })
+    if (ok) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential.profile)
     if (!ok) {
       exit = EXIT.general
       out.info(`${file}: not optimized (${String(result.reason ?? 'unknown')}): ${String(result.detail ?? '')}`)

@@ -121,6 +121,8 @@ Exit 1 when a message could not be rewritten.
 ${GLOBAL}`,
 
   search: `Usage: amdahl search "<question>" [--research] [--limit <n>]
+       amdahl search --recipe <id> [--<fill-in> <value>]
+       amdahl search --research-id <id>
 
 Ask a question about your customers, calls and deals. It prints a short answer
 with the rows it came from.
@@ -129,8 +131,109 @@ with the rows it came from.
                 Customer agent key (amdahl keys create --preset agent). With a
                 sign-in you get the search answer and a line that says so.
   --limit <n>   Ask for at most n rows.
+  --recipe <id> Ask one of the console's recipe questions instead of your own
+                (amdahl recipes lists them). A recipe with a fill-in takes it
+                as a flag: --account, --products, --messages or --objection.
+  --account, --products, --messages, --objection
+                The fill-in a recipe asks for, in quotes. At most 300
+                characters; a longer one is cut there, as the console does.
+  --research-id <id>
+                Read a research job that started earlier, and wait for it.
+                Search prints the id when a job starts. It needs a key that
+                can read research, the one that started the job.
 
 With --json it prints the server's whole answer, every row included.
+${GLOBAL}`,
+
+  grade: `Usage: amdahl grade <file|-> [--channel email|linkedin]
+                    [--evidence off|workspace] [--context <file.json>]
+
+Grade a draft without rewriting it. The file is the message; "-" reads standard
+input; with no file, at a terminal, paste it. Nothing is written back to you:
+the grade is a 1 to 5 score with the five lines it rests on, each with its
+verdict and reason.
+
+  --channel email|linkedin   What the message is. Left out, it is inferred.
+  --evidence off|workspace   "workspace" grades four of the lines against your
+                             customers' calls, so it needs data connected.
+                             Without it only the ask is graded; the others
+                             say they were not evaluated.
+  --context <file.json>      Your facts, rules and voice_examples, as JSON.
+
+A line that could not be evaluated is not a fail, and a grade with no line
+evaluated reads "Not graded", never 0. A grade is one reading and does not
+predict replies. With --json it prints {"ok", "file", "result"}: the grade is
+.result.grade and the run id is .result.run_id.
+${GLOBAL}`,
+
+  prompt: `Usage: amdahl prompt <file|-> [--mode improve|grade]
+                     [--recipients <file.json>] [--channel email|linkedin]
+                     [--context <file.json>] [--no-wait]
+       amdahl prompt --run <id> [--no-wait]
+
+Grade or improve a reusable prompt (the instructions a writer follows to write
+an outbound email to any recipient) by the emails it writes. It starts a run
+that takes a few minutes, prints the run id and waits. One message, not a
+prompt, is for amdahl optimize.
+
+  --mode improve|grade  improve (the default) revises the prompt and returns it
+                        only when the revision wrote better email on recipients
+                        held out of the revising. grade writes one email per
+                        recipient and grades each.
+  --recipients <file>   1 to 6 sample recipients as JSON: [{"recipient":
+                        {"company": "Helix"}, "recipient_notes": "..."}]. Each
+                        may have name, company, email, domain, linkedin_url and
+                        attributes. Improve needs 2 or more. Left out, Amdahl
+                        picks up to 6 of your workspace's accounts.
+  --channel email|linkedin  What the emails are.
+  --context <file.json>     Your rules, facts and voice_examples, as JSON.
+  --no-wait             Start the run, print its id and stop.
+  --run <id>            Read a run started earlier, and wait for it.
+
+The revised prompt goes to stdout; the grades and emails go to stderr. A lift
+is shown only when it is reportable. Neither mode predicts replies. With --json
+it prints {"ok", "file", "started", "result"}.
+${GLOBAL}`,
+
+  runs: `Usage: amdahl runs [--limit <n>]
+
+List the latest runs made from this computer: the id, when, what kind (optimize,
+grade or prompt) and the channel. Amdahl has no list of your runs on its side:
+this is a list the CLI keeps of the ids it started, never their text. A run made
+in the console or an AI client is not in it.
+
+  --limit <n>   Show n runs (default 10).
+
+Open one by its id with amdahl run <run-id>. With --json it prints {"ok",
+"source", "note", "total", "runs"}.
+${GLOBAL}`,
+
+  run: `Usage: amdahl run <run-id>
+
+Show one optimize run you made: your draft, then the message Amdahl returned,
+what it left out and what context you sent. The id is the one amdahl optimize
+printed (amdahl runs lists the latest). Only you can open your own runs. A
+prompt run is read with amdahl prompt --run <id>.
+${GLOBAL}`,
+
+  data: `Usage: amdahl data [--surface interactions|deals|deal_qualification]
+
+Show what this workspace holds: each surface's row count and the span of its
+dates, then what a search can filter on. A count that could not be read says
+unknown, never 0.
+
+  --surface <name>   One surface's fields, each with its type, meaning and the
+                     values it is known to hold.
+
+With --json it prints {"ok", "overview", "fields"}.
+${GLOBAL}`,
+
+  recipes: `Usage: amdahl recipes
+
+List the console's recipe library: the questions it asks as a search, by
+category, with what each reads and the fill-in it needs. Run one with
+amdahl search --recipe <id>. With --json it prints every recipe with its
+question and fill-ins.
 ${GLOBAL}`,
 
   connections: `Usage: amdahl connections [--all]
@@ -173,7 +276,9 @@ unless the evidence is "inferred". Each call stores one event.
   --sent-text <file> The text as sent (a file, or - for standard input).
   --comment <text>   Your own words about it.
 
-Give at least one of --outcome, --sent-text and --comment.
+Give at least one of --outcome, --sent-text and --comment. At a terminal, what
+you leave out is asked (two questions at most). With --json, in an agent or in
+CI, nothing is asked: a missing flag is a usage error.
 ${GLOBAL}`,
 
   sent: `Usage: amdahl sent <run-id> --provider <provider> --channel <channel>
@@ -189,7 +294,8 @@ API takes up to 100 (POST /messages/report_send).
 
   --provider <name>   ${SEND_PROVIDERS.slice(0, 4).join(', ')},
                       ${SEND_PROVIDERS.slice(4, 8).join(', ')},
-                      ${SEND_PROVIDERS.slice(8).join(', ')}.
+                      ${SEND_PROVIDERS.slice(8, 12).join(', ')},
+                      ${SEND_PROVIDERS.slice(12).join(', ')}.
                       A sender not on the list: use "other".
   --channel <kind>    email, linkedin (the same as linkedin_message),
                       linkedin_invite, linkedin_message or linkedin_inmail.
@@ -210,6 +316,11 @@ API takes up to 100 (POST /messages/report_send).
 Give at least one of --provider-send-id and a recipient (--recipient or
 --recipient-key-hash, not both). A send id with a recipient is fine: Amdahl
 matches a report to a send by the id, the recipient, or both.
+
+At a terminal, what you leave out is asked (three questions at most): where it
+went out, who it went to, and whether you changed it first. The channel comes
+from the run, the recipient or the provider. With --json, in an agent or in CI,
+nothing is asked: a missing flag is a usage error.
 ${GLOBAL}`,
 
   'keys create': `Usage: amdahl keys create --name <name>

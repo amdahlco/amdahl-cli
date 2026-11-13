@@ -90,7 +90,8 @@ export function feedbackProblem(input: unknown): string | null {
 
 // ── messages.report_send: messages/_reportSendSchema.ts, messageOptimizer/sendReports ────────
 
-export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'linkedin_manual', 'other']
+// `SEND_PROVIDERS` in amdahl-app src/shared/providers/registry.generated.ts (main, 2026-11-13).
+export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'smartlead', 'reply_io', 'lgm', 'woodpecker', 'linkedin_manual', 'other']
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
 const REPORT_KEYS = ['run_id', 'provider', 'channel', 'sent_as', 'sent_at', 'provider_send_id', 'provider_campaign_id', 'sequence_step', 'provider_variant_id', 'provider_lead_id', 'thread_id', 'recipient', 'recipient_key_hash', 'sent_text']
 const TEXT_LIMITS: Record<string, number> = { provider_send_id: 256, provider_campaign_id: 256, provider_variant_id: 256, provider_lead_id: 256, thread_id: 512, recipient: 512, sent_text: 10_000 }
@@ -181,4 +182,57 @@ export function searchProblem(input: unknown): string | null {
   if (input.answer !== undefined && typeof input.answer !== 'boolean') return 'Invalid search request: answer: Expected boolean'
   if (!(typeof input.query === 'string' && input.query.trim())) return 'Provide a `query`, `filters`, or a `group_by`+`metrics` aggregation: an empty request has nothing to run.'
   return null
+}
+
+// ── messages.optimize, mode grade: messages/_optimizeInput.ts (readMode) ─────────────────────────
+
+const OPTIMIZE_KEYS = ['context', 'message', 'channel', 'evidence', 'on_unsupported', 'on_missing_input', 'include_tries', 'recipient', 'recipient_notes', 'message_type', 'sender', 'mode', 'grade_nonce']
+
+/** The refusals of an optimize body that the mock must also refuse (a 400 `invalid_input`), as paths. */
+export function optimizeProblems(input: unknown): string[] {
+  if (!isObject(input)) return ['$: Expected object']
+  const errors = unknownKeys('$', input, OPTIMIZE_KEYS)
+  if (input.message !== undefined && (typeof input.message !== 'string' || input.message.length > 10_000)) errors.push('$.message: String must contain at most 10000 character(s)')
+  const enums: [string, string[]][] = [['channel', ['email', 'linkedin']], ['evidence', ['workspace', 'off']], ['on_unsupported', ['flag', 'remove']], ['on_missing_input', ['best_effort', 'ask']]]
+  for (const [key, allowed] of enums) {
+    if (input[key] !== undefined && !allowed.includes(String(input[key]))) errors.push(`$.${key}: Invalid enum value. Expected ${allowed.map((a) => `'${a}'`).join(' | ')}, received '${String(input[key])}'`)
+  }
+  if (input.mode !== undefined && input.mode !== 'improve' && input.mode !== 'grade') return [...errors, '$.mode: must be one of improve, grade']
+  if (input.mode === 'grade') {
+    if (typeof input.message !== 'string' || !input.message.trim()) errors.push('$.message: mode grade grades a draft, so message is required')
+    if (input.include_tries === true) errors.push('$.include_tries: mode grade writes no versions to return')
+    if (input.on_missing_input === 'ask') errors.push('$.on_missing_input: mode grade asks no questions')
+  } else if (input.grade_nonce !== undefined) errors.push('$.grade_nonce: only with mode grade')
+  return errors
+}
+
+// ── messages.optimize_prompt: messages/_optimizePromptSchema.ts, _promptRecipients.ts ────────────
+
+const PROMPT_KEYS = ['prompt', 'mode', 'recipients', 'channel', 'context', 'idempotency_key', 'sender']
+const RECIPIENT_ITEM_KEYS = ['recipient', 'recipient_notes', 'label']
+export const MAX_PROMPT_CHARS = 20_000
+
+/** The refusals of an optimize_prompt body (a 400 `invalid_input`), as paths. */
+export function promptProblems(input: unknown): string[] {
+  if (!isObject(input)) return ['$: Expected object']
+  const errors = unknownKeys('$', input, PROMPT_KEYS)
+  if (typeof input.prompt !== 'string' || !input.prompt.trim()) errors.push('$.prompt: Required')
+  else if (input.prompt.length > MAX_PROMPT_CHARS) errors.push(`$.prompt: String must contain at most ${MAX_PROMPT_CHARS} character(s)`)
+  if (input.mode !== undefined && input.mode !== 'improve' && input.mode !== 'grade') errors.push('$.mode: Invalid enum value. Expected \'improve\' | \'grade\'')
+  if (input.channel !== undefined && !['email', 'linkedin'].includes(String(input.channel))) errors.push('$.channel: Invalid enum value')
+  if (input.recipients !== undefined) {
+    if (!Array.isArray(input.recipients)) errors.push('$.recipients: must be an array')
+    else {
+      const n = input.recipients.length
+      if (n < 1 || n > 6) errors.push('$.recipients: Array must contain 1 to 6 element(s)')
+      else if (n < 2 && input.mode !== 'grade') errors.push('$.recipients: improve needs at least 2 recipients')
+      input.recipients.forEach((item, i) => {
+        const at = `$.recipients[${i}]`
+        if (!isObject(item)) return void errors.push(`${at}: Expected object`)
+        errors.push(...unknownKeys(at, item, RECIPIENT_ITEM_KEYS))
+        if (!isObject(item.recipient) || Object.keys(item.recipient).length === 0) errors.push(`${at}.recipient: name a person or a company`)
+      })
+    }
+  }
+  return errors
 }
