@@ -137,10 +137,20 @@ export function ranOutOfTime(result: Record<string, unknown>): boolean {
   return record(result.corpus)?.empty_reason === 'read_failed'
 }
 
-/** What the server said about an empty or unsupported result, in its own words: the explanation, else the note. Trimmed. */
+/**
+ * What the server said about an empty or unsupported result, in its own words, trimmed. A search that
+ * ran and found nothing (`empty`, `no_match`) says it in `detail.message`: its `explanation` is the
+ * query plan ("Looks up deals whose name exactly matches..."), which says nothing of the result. Any
+ * other status (`unsupported`, `failed`) is explained by the `explanation`. The `note` is the server's
+ * own hint to a program and is never printed.
+ */
 function serverReason(result: Record<string, unknown>): string {
   const internal = internalOf(result)
-  const said = field(internal?.explanation) || field(internal?.note) || field(record(result.detail)?.message)
+  const status = field(internal?.status)
+  const code = field(record(result.corpus)?.empty_reason)
+  const noMatch = status === 'empty' || (status !== 'unsupported' && status !== 'failed' && (code === 'no_match' || code === ''))
+  const message = field(record(result.detail)?.message)
+  const said = noMatch ? message : field(internal?.explanation) || message
   return said ? cutAtWord(said, 300) : ''
 }
 
@@ -162,7 +172,15 @@ function nextStepLine(): string {
 }
 
 /** The line for a search cut short, with the one way on: research can run longer. */
-export function outOfTimeLines(rows: number): string[] {
+export function outOfTimeLines(rows: number, researchAsked = false, researchId = ''): string[] {
+  // Research was already asked for: it cannot be suggested again. Say it ran out of time even so, and
+  // where the job can be read later when it started one.
+  if (researchAsked) {
+    return wrap(
+      `The search ran out of time${rows === 0 ? ' before it found anything' : ', so these rows may be incomplete'}, even with --research.` +
+        (researchId ? ` The research job may still finish: read it later with ${amdahlCommand(`search --research-id ${researchId}`)}.` : ' Try again, or narrow the question.')
+    )
+  }
   return wrap(
     rows === 0
       ? `The search ran out of time before it found anything. Run the same command with --research: it can run longer. ${researchKeyLine()}`
@@ -349,11 +367,13 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
     out.result({ ...result, ok: !failed })
     return failed ? EXIT.general : EXIT.ok
   }
+  const researchAsked = ctx.flags.research === true
+  const researchId = field(handoff?.research_id)
   if (cut && rows.length === 0 && !answered) {
-    out.info(outOfTimeLines(0).join('\n'))
+    out.info(outOfTimeLines(0, researchAsked, researchId).join('\n'))
     return EXIT.general
   }
-  if (cut && ctx.flags.research !== true) out.info(outOfTimeLines(rows.length).join('\n'))
+  if (cut) out.info(outOfTimeLines(rows.length, researchAsked, researchId).join('\n'))
   if (setup) {
     out.result({}, [...wrap(field(setup.message) || 'This workspace has no data connected yet.'), connectLine()].join('\n'))
     return EXIT.ok

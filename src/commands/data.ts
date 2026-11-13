@@ -63,7 +63,7 @@ function fieldNames(surfaces: Record<string, unknown>[], width: number): string[
   for (const surface of surfaces) {
     const name = field(surface.surface)
     const fields = records(surface.fields)
-    lines.push('', `${SURFACES[name] ?? name}: ${count(fields.length, 'field')} to filter on (${name})`)
+    lines.push('', ...wrap(`${SURFACES[name] ?? name}: ${count(fields.length, 'field')} to filter on (${name})`, width))
     lines.push(...wrap(fields.map((f) => field(f.name)).filter(Boolean).join(', '), width, '  '))
   }
   lines.push('', ...wrap(`One surface's fields, with type and meaning: ${amdahlCommand('data --surface deals')}`, width))
@@ -76,7 +76,7 @@ function fieldDetails(surfaces: Record<string, unknown>[], width: number): strin
   for (const surface of surfaces) {
     const name = field(surface.surface)
     const fields = records(surface.fields)
-    lines.push('', `${SURFACES[name] ?? name}: ${count(fields.length, 'field')} to filter on (${name})`)
+    lines.push('', ...wrap(`${SURFACES[name] ?? name}: ${count(fields.length, 'field')} to filter on (${name})`, width))
     for (const f of fields) {
       lines.push(`  ${field(f.name)} (${field(f.type)})`)
       const about = field(f.description)

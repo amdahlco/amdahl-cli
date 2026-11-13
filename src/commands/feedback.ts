@@ -63,14 +63,12 @@ const PROVIDER_NAMES: Record<string, string> = {
   other: 'Other (any sender not listed)',
 }
 /**
- * Email only: Instantly, Smartlead, Woodpecker, Gmail. LinkedIn only: HeyReach, LinkedIn by hand. The
- * rest (lemlist, Reply.io, La Growth Machine, Apollo, Outreach, Salesloft, HubSpot, Salesforce, other)
+ * Email only: Instantly, Gmail. LinkedIn only: HeyReach, LinkedIn by hand. The rest (lemlist, Reply.io,
+ * La Growth Machine, Smartlead, Woodpecker, Apollo, Outreach, Salesloft, HubSpot, Salesforce, other)
  * run LinkedIn steps or tasks as well as email, so they take both.
  */
 const PROVIDER_KINDS: Record<string, readonly Kind[]> = {
   instantly: ['email'],
-  smartlead: ['email'],
-  woodpecker: ['email'],
   gmail: ['email'],
   heyreach: ['linkedin'],
   linkedin_manual: ['linkedin'],
@@ -334,7 +332,13 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
       } else answered['sent-as'] = 'returned'
     }
   }
-  if (str(flags.channel) === undefined) answered.channel = inferChannel(ctx, rawId, answered)
+  if (str(flags.channel) === undefined) {
+    const channel = inferChannel(ctx, rawId, answered)
+    if (channel === undefined) {
+      throw usageError(`Say what was sent with --channel: ${[...SEND_CHANNELS, ...Object.keys(CHANNEL_ALIASES)].join(', ')}.`, `${PROVIDER_NAMES[String(answered.provider)] ?? String(answered.provider)} sends email and LinkedIn, and nothing here says which this was. ${usage}`)
+    }
+    answered.channel = channel
+  }
   // A tool and a channel that can't go together are refused before anything is sent.
   checkPair(String(answered.provider), String(answered.channel))
   io.stderr(`Reporting: ${String(answered.provider)}, ${String(answered.channel)}, sent as ${String(answered['sent-as'])}.\n`)
@@ -347,7 +351,7 @@ function isRecipient(text: string): boolean {
 }
 
 /** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
-function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string {
+function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string | undefined {
   // The recipient says what was sent: an email address is an email, a LinkedIn profile is a LinkedIn message.
   // It comes before the run's channel and the provider, which can be wrong (a LinkedIn run sent by lemlist as email).
   const recipient = str(flags.recipient)?.trim()
@@ -358,7 +362,9 @@ function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string
   const runChannel = remembered ? (CHANNEL_ALIASES[remembered] ?? remembered) : undefined
   // The run's channel, unless the provider cannot send it (a LinkedIn run reported from an email-only tool).
   if (runChannel && (!takes || takes.includes(kindOf(runChannel)))) return runChannel
-  return takes?.[0] === 'linkedin' && takes.length === 1 ? 'linkedin_message' : 'email'
+  // A tool that sends one kind says which. A tool that sends both is not guessed at: nothing says what this was.
+  if (takes?.length === 1) return takes[0] === 'linkedin' ? 'linkedin_message' : 'email'
+  return undefined
 }
 
 /**

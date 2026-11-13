@@ -94,8 +94,10 @@ export function runLines(run: Record<string, unknown>, madeAsGrade = false): str
   lines.push(...(draft ? wrap(draft, 80, '  ') : ['  You sent none: Amdahl wrote it from your facts and rules.']))
   lines.push('', "Amdahl's message:")
   // A grade writes nothing, and the stored run can carry the draft back as its message: the same text is no rewrite.
-  if (message && draft && message === draft) lines.push('  The same as your draft: Amdahl changed nothing (a grade writes no message).')
-  else lines.push(...(message ? wrap(message, 80, '  ') : ['  Amdahl wrote no message for this run (a grade writes none).']))
+  // Only a run this computer made as a grade is known to be one; an unchanged rewrite also returns the draft.
+  const gradeNote = madeAsGrade ? ' (a grade writes no message)' : ''
+  if (message && draft && message === draft) lines.push(`  The same as your draft: Amdahl changed nothing${gradeNote}.`)
+  else lines.push(...(message ? wrap(message, 80, '  ') : [`  Amdahl wrote no message for this run${gradeNote}.`]))
   const omitted = records(run.omitted)
   if (omitted.length > 0) {
     lines.push('', 'Left out:')
@@ -104,9 +106,9 @@ export function runLines(run: Record<string, unknown>, madeAsGrade = false): str
   const sent = contextLine(run.context)
   if (sent) lines.push('', sent)
   // A grade, when the API returned one with the run; otherwise, for a run known to be a grade (made here as
-  // one, or whose message is the draft), that it is not stored. A rewrite has no grade to show.
+  // one), that it is not stored. A rewrite, even an unchanged one, has no grade to show and says nothing of one.
   if (record(run.grade)) lines.push('', ...gradeLines(run))
-  else if (madeAsGrade || (message && draft && message === draft)) lines.push('', ...wrap(gradeNotStored()))
+  else if (madeAsGrade) lines.push('', ...wrap(gradeNotStored()))
   return lines
 }
 

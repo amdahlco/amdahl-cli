@@ -7,6 +7,8 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
+import { outOfTimeLines } from '../src/commands/search'
+import { outputColumns } from '../src/io'
 import { runLines } from '../src/commands/runs'
 import { MAX_KEPT } from '../src/history'
 import { RECIPES } from '../src/recipes-data'
@@ -400,7 +402,7 @@ describe('runs and run', () => {
     // Staging stores a grade's draft back as its message: the same text is no rewrite, and is said so.
     expect(grade.stdout).toContain("Amdahl's message:\n  The same as your draft: Amdahl changed nothing (a grade writes no message).")
     // A run with no message at all says so too.
-    expect(runLines({ run_id: GRADE_RUN, draft: 'My draft', message: null, created_at: '2026-11-12T08:00:00Z' }).join('\n')).toContain('Amdahl wrote no message for this run (a grade writes none).')
+    expect(runLines({ run_id: GRADE_RUN, draft: 'My draft', message: null, created_at: '2026-11-12T08:00:00Z' }, true).join('\n')).toContain('Amdahl wrote no message for this run (a grade writes no message).')
     const missing = await cli(io, 'run', UNKNOWN_RUN)
     expect(missing.code).toBe(1)
     expect(missing.stderr).toBe(`Error: No run ${UNKNOWN_RUN} from you in this workspace.\nOnly the person who made a run can open it. amdahl runs lists the ones this computer made.\n`)
@@ -1017,6 +1019,9 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     // A sentence longer than the room is cut at a word with an ellipsis, never in the middle of one.
     expect(firstSentence('Alpha beta gamma delta epsilon zeta eta theta', 22)).toBe('Alpha beta gamma...')
     expect(firstSentence('One sentence. Two sentence.', 100)).toBe('One sentence.')
+    // A narrower terminal still gets every line inside it, headers included.
+    io.columns = () => 50
+    expect((await cli(io, 'data')).stdout.split('\n').filter((l) => [...l].length > 50)).toEqual([])
     // A wide terminal still wraps at 80, never wider.
     io.columns = () => 200
     expect((await cli(io, 'data')).stdout.split('\n').filter((l) => [...l].length > 80)).toEqual([])
@@ -1120,11 +1125,13 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect((await cli(flags, ...args('lemlist', 'linkedin'))).code).toBe(0)
     expect((await cli(flags, ...args('other', 'linkedin'))).code).toBe(0)
     // Tools that run LinkedIn steps or tasks as well as email take both; only the clear mismatches are refused.
-    for (const both of ['apollo', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'reply_io', 'lgm']) {
+    for (const both of ['apollo', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'reply_io', 'lgm', 'smartlead', 'woodpecker']) {
       expect((await cli(flags, ...args(both, 'linkedin_message'))).code).toBe(0)
       expect((await cli(flags, ...args(both, 'email'))).code).toBe(0)
     }
-    for (const emailOnly of ['smartlead', 'woodpecker', 'gmail']) expect((await cli(flags, ...args(emailOnly, 'linkedin_inmail'))).code).toBe(2)
+    for (const emailOnly of ['instantly', 'gmail']) expect((await cli(flags, ...args(emailOnly, 'linkedin_inmail'))).code).toBe(2)
+    // Smartlead and Woodpecker run LinkedIn steps too.
+    for (const both of ['smartlead', 'woodpecker']) expect((await cli(flags, ...args(both, 'linkedin_message'))).code).toBe(0)
     expect((await cli(flags, ...args('linkedin_manual', 'email'))).code).toBe(2)
     expect((await cli(flags, ...args('heyreach', 'linkedin'))).code).toBe(0)
   })
@@ -1145,6 +1152,110 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     const block = help.slice(help.indexOf('  feedback <run-id>'), help.indexOf('  sent <run-id>'))
     expect(block.indexOf('What happened to a message')).toBeLessThan(block.indexOf('At a terminal'))
     expect(flat(block)).toContain('with --json, in an agent or in CI, nothing is asked')
+  })
+
+  // Dom's review of #44.
+  const ZYX = {
+    success: true,
+    mode_ran: 'fuzzy',
+    results: [],
+    answer: { status: 'skipped', text: null, reason: 'no_rows' },
+    corpus: { store: 'warehouse', grain: 'row', empty_reason: 'no_match' },
+    data_freshness: { message: 'Last sync 2026-11-12; 214 deals read.' },
+    detail: {
+      message: 'No deals are named Zyxqorbandle Pastry Holdings.',
+      internal: { status: 'empty', rows: [], row_count: 0, explanation: 'Looks up deals whose name exactly matches the given company name.', note: 'internal hint: widen the filter' },
+    },
+  }
+
+  it('a search with no matches says so (detail.message and the freshness line), not the query plan, and never the internal note', async () => {
+    const io = await signedIn({ searchResult: ZYX })
+    const r = await q(io, 'Which CRM deals are named Zyxqorbandle Pastry Holdings?')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toBe('No deals are named Zyxqorbandle Pastry Holdings.\nLast sync 2026-11-12; 214 deals read.\n')
+    expect(r.stdout).not.toContain('Looks up deals')
+    expect(r.stdout).not.toContain('internal hint')
+    // No detail.message: the freshness line alone; neither: "No matches."
+    server!.options.searchResult = { ...ZYX, detail: { internal: ZYX.detail.internal } }
+    expect((await q(io, 'x')).stdout).toBe('Last sync 2026-11-12; 214 deals read.\n')
+    server!.options.searchResult = { ...ZYX, data_freshness: undefined, detail: { internal: ZYX.detail.internal } }
+    expect((await q(io, 'x')).stdout).toBe('No matches.\n')
+    // An unsupported or failed search is explained by its explanation, still never by the note.
+    server!.options.searchResult = { ...AUTOMAT, detail: { internal: { status: 'failed', explanation: 'The search could not read the deals table.', note: 'internal hint' } } }
+    const failed = (await q(io, 'x')).stdout
+    expect(failed).toContain('The search could not read the deals table.')
+    expect(failed).not.toContain('internal hint')
+  })
+
+  it('sent: Smartlead and Woodpecker take LinkedIn reports; a tool that sends both is not guessed at when nothing says which', async () => {
+    const io = await signedIn()
+    for (const provider of ['smartlead', 'woodpecker']) {
+      const r = await cli(io, 'sent', KNOWN_RUN, '--provider', provider, '--channel', 'linkedin_message', '--sent-as', 'returned', '--provider-send-id', 'x1')
+      expect(r.code).toBe(0)
+      expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider, channel: 'linkedin_message' })
+    }
+    // At a terminal, with a send id only (no recipient, no remembered run): Woodpecker sends both, so the channel is asked for, not recorded as email.
+    const before = requests('/messages/report_send').length
+    io.answers = ['13', '']
+    const unsure = await cli(io, 'sent', KNOWN_RUN, '--provider-send-id', 'x2')
+    expect(unsure.code).toBe(2)
+    expect(unsure.stderr).toContain('Say what was sent with --channel')
+    expect(unsure.stderr).toContain('Woodpecker sends email and LinkedIn')
+    expect(requests('/messages/report_send')).toHaveLength(before)
+    // A tool that sends one kind needs no word on it.
+    io.answers = ['2', '']
+    expect((await cli(io, 'sent', KNOWN_RUN, '--provider-send-id', 'x3')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'instantly', channel: 'email' })
+  })
+
+  it('a sentence is never ended at e.g., i.e., vs. or etc., nor inside an open bracket', () => {
+    expect(firstSentence('Human-readable deal name from the CRM (e.g. "Acme - Expansion"). Used in the UI.', 200)).toBe('Human-readable deal name from the CRM (e.g. "Acme - Expansion").')
+    expect(firstSentence('The stage, i.e. where the deal is. Second.', 200)).toBe('The stage, i.e. where the deal is.')
+    expect(firstSentence('Open vs. closed deals. Second.', 200)).toBe('Open vs. closed deals.')
+    expect(firstSentence('Owners, teams, etc. who hold it. Second.', 200)).toBe('Owners, teams, etc. who hold it.')
+    expect(firstSentence('A value (see the list. It has more) and more. Second.', 200)).toBe('A value (see the list. It has more) and more.')
+    // Too long to fit: cut back to before the open bracket, at a word.
+    expect(firstSentence('Human-readable deal name from the CRM (e.g. "Acme - Expansion" or "Globex - Renewal 2026").', 50)).toBe('Human-readable deal name from the CRM...')
+    // A long sentence is cut at its last clause when there is one past halfway, not mid-thought.
+    expect(firstSentence('Raw CRM pipeline stage id for the deal (e.g. "closedwon"); many tenants carry opaque numeric ids that the console maps to labels for display.', 100)).toBe('Raw CRM pipeline stage id for the deal (e.g. "closedwon")...')
+    // No abbreviation, no bracket: as before.
+    expect(firstSentence('One sentence. Two sentence.', 100)).toBe('One sentence.')
+  })
+
+  it('an unchanged optimize run says nothing of a grade; a run this computer made as a grade does', async () => {
+    const same = { run_id: KNOWN_RUN, draft: 'Hi Dana.', message: 'Hi Dana.', created_at: '2026-11-12T08:00:00Z' }
+    const rewrite = runLines(same).join('\n')
+    expect(rewrite).toContain('The same as your draft: Amdahl changed nothing.')
+    expect(rewrite).not.toContain('grade')
+    const grade = runLines(same, true).join('\n')
+    expect(grade).toContain('The same as your draft: Amdahl changed nothing (a grade writes no message).')
+    expect(grade).toContain('A run does not keep its grade')
+    // End to end: an optimize run opened with `run` says nothing of a grade.
+    const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi Dana, quick note about pricing.', run_id: KNOWN_RUN } })
+    await cli(io, 'optimize', write(io, 'a.txt', 'Hi Dana, quick note about pricing.'))
+    server!.options.optimizeResult = undefined
+    const r = await cli(io, 'run', KNOWN_RUN)
+    expect(r.stdout).not.toContain('does not keep its grade')
+  })
+
+  it('a search that is cut even with --research says so, and points at --research-id when a job started', () => {
+    const id = '66666666-6666-4666-8666-666666666666'
+    const none = outOfTimeLines(0, true).join(' ')
+    expect(none).toContain('The search ran out of time before it found anything, even with --research. Try again, or narrow the question.')
+    expect(none).not.toContain('Run the same command with --research')
+    expect(outOfTimeLines(0, true, id).join(' ')).toContain(`read it later with amdahl search --research-id ${id}`)
+    expect(outOfTimeLines(2, true).join(' ')).toContain('so these rows may be incomplete, even with --research')
+    // Without research asked, it still suggests --research.
+    expect(outOfTimeLines(0).join(' ')).toContain('Run the same command with --research')
+  })
+
+  it('width is read from COLUMNS first, then stdout, then stderr', () => {
+    expect(outputColumns({ COLUMNS: '60' }, 120, 100)).toBe(60)
+    expect(outputColumns({}, 100, 80)).toBe(100)
+    expect(outputColumns({}, undefined, 72)).toBe(72)
+    expect(outputColumns({ COLUMNS: 'wide' }, 90)).toBe(90)
+    expect(outputColumns({ COLUMNS: '0' }, undefined)).toBeUndefined()
+    expect(outputColumns({}, undefined, undefined)).toBeUndefined()
   })
 
   // 11. Keys keep their own runs.
