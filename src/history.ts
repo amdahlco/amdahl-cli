@@ -10,6 +10,7 @@
 //
 // Writing it is best effort. A full disk or a read-only home never fails the
 // command that made the run. The newest runs are kept, up to {@link MAX_KEPT}.
+// The file is owner-only (0600, in a 0700 folder), like config.json.
 
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -32,10 +33,12 @@ export interface RunRecord {
   api_url: string
   /** The profile that made it, for a run made with a sign-in. */
   profile?: string
+  /** The workspace's slug, for a run made with a sign-in. */
+  workspace?: string
 }
 
 /** How many runs the file keeps. */
-export const MAX_KEPT = 100
+export const MAX_KEPT = 50
 
 const KINDS: RunKind[] = ['optimize', 'grade', 'prompt']
 
@@ -57,7 +60,8 @@ function readAll(ctx: Ctx): RunRecord[] {
       if (!run_id || !kind || !api_url || !Number.isFinite(Date.parse(created_at))) return []
       const channel = field(r.channel)
       const profile = field(r.profile)
-      return [{ run_id, created_at, kind, api_url, ...(channel ? { channel } : {}), ...(profile ? { profile } : {}) }]
+      const workspace = field(r.workspace)
+      return [{ run_id, created_at, kind, api_url, ...(channel ? { channel } : {}), ...(profile ? { profile } : {}), ...(workspace ? { workspace } : {}) }]
     })
   } catch {
     return []
@@ -81,6 +85,7 @@ export function rememberRun(ctx: Ctx, run: { run_id: unknown; kind: RunKind; cha
       api_url: ctx.apiUrl,
       ...(run.channel ? { channel: run.channel } : {}),
       ...(credentialProfile ? { profile: credentialProfile } : {}),
+      ...(credentialProfile && ctx.profile?.workspace.slug ? { workspace: ctx.profile.workspace.slug } : {}),
     }
     const kept = readAll(ctx).filter((r) => r.run_id !== run_id)
     writePrivateJson(historyPath(ctx), { version: 1, runs: [...kept, record].slice(-MAX_KEPT) })
@@ -90,6 +95,11 @@ export function rememberRun(ctx: Ctx, run: { run_id: unknown; kind: RunKind; cha
 }
 
 /**
+ * THE one place `amdahl runs` reads its list from. It is the local list, a
+ * fallback: when the server has a read that lists a person's runs (a
+ * `messages.list_runs` op is planned), swap this function for it and nothing
+ * else changes.
+ *
  * The runs made from this computer on this API host (and, for a sign-in, this
  * profile), newest first.
  *

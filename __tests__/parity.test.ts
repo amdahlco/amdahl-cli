@@ -3,7 +3,7 @@
 // search --recipe, search --research-id, and the questions sent and feedback
 // ask at a terminal. All against the strict mock server.
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runLines } from '../src/commands/runs'
@@ -327,7 +327,22 @@ describe('runs and run', () => {
     expect(existsSync(path)).toBe(true)
     const text = readFileSync(path, 'utf8')
     expect(text).not.toContain('SECRET')
-    expect(Object.keys(JSON.parse(text).runs[0]).sort()).toEqual(['api_url', 'created_at', 'kind', 'profile', 'run_id'])
+    expect(Object.keys(JSON.parse(text).runs[0]).sort()).toEqual(['api_url', 'created_at', 'kind', 'profile', 'run_id', 'workspace'])
+    expect(statSync(path).mode & 0o777).toBe(0o600)
+  })
+
+  it('keeps the last 50 runs only', async () => {
+    const io = await signedIn()
+    const path = join(io.homedir, 'config', 'amdahl', 'runs.json')
+    const seeded = Array.from({ length: 60 }, (_, i) => ({ run_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, created_at: '2026-11-01T00:00:00.000Z', kind: 'optimize', api_url: server!.url, profile: 'default' }))
+    await cli(io, 'grade', write(io, 'b.txt', 'Hi'))
+    const profile = JSON.parse(readFileSync(path, 'utf8')).runs[0].profile
+    writeFileSync(path, JSON.stringify({ version: 1, runs: seeded.map((r) => ({ ...r, profile })) }))
+    expect((await cli(io, 'grade', write(io, 'c.txt', 'Hi'))).code).toBe(0)
+    const kept = JSON.parse(readFileSync(path, 'utf8')).runs
+    expect(kept).toHaveLength(50)
+    expect(kept.at(-1).run_id).toBe(GRADE_RUN)
+    expect(kept[0].run_id).toBe('00000000-0000-4000-8000-000000000011')
   })
 
   it('a key and a sign-in keep separate lists, and another host has none', async () => {

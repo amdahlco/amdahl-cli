@@ -575,7 +575,8 @@ with `opt_`: read it with `amdahl prompt --run <id>`.
 `runs` lists the latest runs made **from this computer**: the API has no read
 that lists a person's runs (the console keeps its own list in the browser), so
 the CLI keeps the ids it started in `runs.json` beside `config.json`: the run
-id, when, the kind (`optimize`, `grade` or `prompt`) and the channel. Never a
+id, when, the kind (`optimize`, `grade` or `prompt`), the channel and the
+workspace, for the last 50 runs, in an owner-only file. Never a
 message, a draft or a prompt. Runs made in the console or an AI client are not
 in it, but their ids open with `amdahl run`. `--limit <n>` shows more than the
 latest ten; `--json` prints `{ok, source, note, total, runs}`.
