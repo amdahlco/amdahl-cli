@@ -35,6 +35,7 @@ import { apiClient, call, resolveCredential, str, type Credential, type Ctx } fr
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { sentLines } from '../next-steps'
+import { canAsk } from '../terminal'
 import { buildSendToFile, guideLines, leftOutLine, overLimitLine, planSendTo, readyLine, sendToFileName, toolFor, writtenOf, SEND_TO_IDS, type SendToFile, type SendToPlan } from '../send-to'
 import { COLUMNS, clip, count, field, record, records, truthfulSummary, wrap } from '../text'
 
@@ -541,6 +542,6 @@ export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>)
   if (plan && sent) printSendTo(ctx, plan, sent)
   // What to do once the messages are sent, with a real run id from this batch.
   const runId = items.map((i) => field(record(i.result)?.run_id)).find(Boolean)
-  for (const line of sentLines(runId, 'Sent one?')) out.info(line)
+  for (const line of sentLines(runId, 'Sent one?', canAsk(ctx))) out.info(line)
   return failed === 0 && (!sent || sent.built.ready > 0) ? EXIT.ok : EXIT.general
 }

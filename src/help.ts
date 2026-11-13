@@ -142,7 +142,9 @@ with the rows it came from.
                 Search prints the id when a job starts. It needs a key that
                 can read research, the one that started the job.
 
-With --json it prints the server's whole answer, every row included.
+With no rows it says why, in the server's words. A search the server cut at its
+deadline says it ran out of time and exits 1; add --research, which can run
+longer. With --json it prints the server's whole answer, every row included.
 ${GLOBAL}`,
 
   grade: `Usage: amdahl grade <file|-> [--channel email|linkedin]
@@ -318,12 +320,12 @@ Give at least one of --provider-send-id and a recipient (--recipient or
 matches a report to a send by the id, the recipient, or both.
 
 At a terminal, what you leave out is asked (three questions at most): where it
-went out, who it went to, and whether you changed it first. It never asks for
-the channel. When it asks for something else, it picks the channel without
---channel: email for an email address, linkedin for a LinkedIn profile, else
-the run's, else the provider's, and prints it. If --channel is the only thing
-missing, give it: that is a usage error. With --json, in an agent or in CI,
-nothing is asked: a missing flag is a usage error.
+went out, who it went to, and whether you changed it first. Without --channel
+it picks the channel and prints it: email for an email address, linkedin for a
+LinkedIn profile, else the run's, else a tool that sends one kind. Only when
+none of these says (a tool that sends both, a send id and no recipient) it asks
+what was sent. With --json, in an agent or in CI, nothing is asked: a missing
+flag, --channel too, is a usage error.
 ${GLOBAL}`,
 
   'keys create': `Usage: amdahl keys create --name <name>

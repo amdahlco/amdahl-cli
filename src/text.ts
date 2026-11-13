@@ -86,6 +86,64 @@ export function clip(text: string, max: number): string {
   return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 3).join('')}...`
 }
 
+/**
+ * The first sentence of `text`, whole words only: up to the first `. `, `? ` or
+ * `! ` (or the end), and when that is longer than `max`, cut at a word with an
+ * ellipsis, never in the middle of one.
+ */
+export function firstSentence(text: string, max = 160): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  for (const m of flat.matchAll(/[.!?](?=\s|$)/g)) {
+    const head = flat.slice(0, m.index + 1)
+    // A full stop after e.g. / i.e. / vs. / etc. does not end a sentence, nor does one inside an open bracket.
+    if (ABBREVIATION.test(head) || openBrackets(head) > 0) continue
+    return fit(head, max)
+  }
+  return fit(flat, max)
+}
+
+/** `sentence` within `max`: whole when it fits, else cut at its last `;` or ` - ` clause past halfway, else at a word. */
+function fit(sentence: string, max: number): string {
+  if ([...sentence].length <= max) return sentence
+  const room = sentence.slice(0, max - 3)
+  const clause = Math.max(room.lastIndexOf('; '), room.lastIndexOf(' - '))
+  if (clause > max / 2 && openBrackets(room.slice(0, clause)) === 0) return `${room.slice(0, clause)}...`
+  return cutAtWord(sentence, max)
+}
+
+/** A word that ends in a full stop without ending a sentence. */
+const ABBREVIATION = /(?:^|[\s(\[])(?:e\.g|i\.e|vs|etc|approx|incl|inc|ltd|co|corp|cf|esp|ca|no|nos|fig|st|mr|mrs|ms|dr)\.$/i
+
+/** Where the first bracket `text` opens and does not close is, or -1: `(a (b) c` is open at 0, though `(b)` closed. */
+function firstOpenBracket(text: string): number {
+  const open: number[] = []
+  let i = 0
+  for (const ch of text) {
+    if (ch === '(' || ch === '[') open.push(i)
+    else if ((ch === ')' || ch === ']') && open.length > 0) open.pop()
+    i += ch.length
+  }
+  return open.length > 0 ? open[0]! : -1
+}
+
+/** How many brackets `text` opens and does not close. */
+function openBrackets(text: string): number {
+  return firstOpenBracket(text) === -1 ? 0 : 1
+}
+
+/** `text` on one line, cut to `max` characters at a word (never inside one), with an ellipsis when cut. */
+export function cutAtWord(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  if ([...flat].length <= max) return flat
+  let cut = [...flat].slice(0, max - 3).join('')
+  const space = cut.lastIndexOf(' ')
+  cut = space > 0 ? cut.slice(0, space) : cut
+  // Not inside an open bracket: cut back to before the first one still open (a closed `(Signed)` inside it does not count).
+  const open = firstOpenBracket(cut)
+  if (open > 0) cut = cut.slice(0, open)
+  return `${cut.replace(/[\s,;:]+$/, '')}...`
+}
+
 /** An ISO timestamp as its day (`2026-11-12`), or '' when it does not parse. */
 export function day(iso: unknown): string {
   if (typeof iso !== 'string') return ''

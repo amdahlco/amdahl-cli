@@ -486,8 +486,14 @@ Research needs a Customer agent key: amdahl keys create --name research --preset
 
 A workspace with nothing connected answers with `setup_needed`: the CLI
 prints its message, which carries the console link, then
-`Connect your CRM or call recorder: amdahl connect`. With no rows, it prints
-the server's one line on how fresh the data is, or `Nothing matched.`
+`Connect your CRM or call recorder: amdahl connect`. With no rows, it says why
+in the server's own words (its explanation or note, then its line on how fresh
+the data is), and `No matches.` only when the server said nothing. For an
+empty or unsupported why or compare question it adds one next step: `--research`
+(which needs a Customer agent key), or name the company exactly. A search the
+server cut at its deadline, or could not read, is not "no matches": the CLI says
+it ran out of time, suggests `--research`, and exits 1 (`--json` prints the
+server's answer with `ok: false`).
 
 ## Grade a message
 
@@ -521,8 +527,9 @@ rubric and your evidence. It does not predict replies. ...
 The score is printed as the API returns it, and it always comes with the five
 lines it rests on, each with its verdict and reason. Without
 `--evidence workspace` only the ask is evaluated: the four lines that read your
-customers' calls say "Not evaluated", and the score says it rests on 1 of the 5
-lines. A line that could not be evaluated is not a fail. When no line could be,
+customers' calls say "Not evaluated: evidence was off", and the headline says
+how many lines the score rests on: `Grade 5 of 5, on 1 of the 5 lines (1 of 1
+line passed).` A line that could not be evaluated is not a fail. When no line could be,
 the grade is `Not graded.`, never 0. Every grade says it is one reading and does
 not predict replies. The run id comes last; `amdahl run <id>` opens it. With
 `--json` it prints `{ok, file, result}`: the grade is `.result.grade`.
@@ -556,7 +563,9 @@ prompt's grade, the emails it wrote that the grade rests on, and a lift only
 when it is reportable (otherwise why not: for example fewer than 3 held-out
 emails on a side). Without a reportable lift it prints the original's mean
 alone and says a revision was kept: the revised and the original means are set
-against each other only when the lift is reportable. The emails that trained the revision are not lift and are
+against each other only when the lift is reportable. A revision that scored
+but was not kept says so with its mean and the gap, rounded: `The revision
+averaged 3.7 of 5, 1.3 points lower, not kept.` The emails that trained the revision are not lift and are
 in `--json`. A grade is one reading and does not predict replies; a mean of
 null is "not graded". Exit 1 when the run failed or is still going. With `--json`
 it prints `{ok, file, started, result}`.
@@ -571,14 +580,18 @@ amdahl run 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16
 `run <run-id>` shows one optimize run you made (`GET
 /messages/optimize/runs/:id`): your draft, then the message Amdahl returned,
 what it left out and how much context you sent. Only the person who made a run
-can open it. A grade writes no message, and says so. A prompt run's id starts
-with `opt_`: read it with `amdahl prompt --run <id>`.
+can open it. A grade writes no message, and says so; the API does not return a
+run's grade, so `run` says it is not stored (grade the draft again with
+`amdahl grade`). A prompt run's id starts with `opt_`: read it with
+`amdahl prompt --run <id>` (`runs` says so under its list).
 
 `runs` lists the latest runs made **from this computer**: the API has no read
 that lists a person's runs (the console keeps its own list in the browser), so
 the CLI keeps the ids it started in `runs.json` beside `config.json`: the run
-id, when, the kind (`optimize`, `grade` or `prompt`), the channel and the
-workspace, for the last 50 runs, in an owner-only file. Never a
+id, when, the kind (`optimize`, `grade` or `prompt`), the channel and who made
+it (the workspace for a sign-in, or the key's display prefix, the same first 14
+characters `keys list` shows, for an API key), for the last 50 runs, in an
+owner-only file. A key lists only its own runs, and a sign-in its own. Never a
 message, a draft or a prompt. Runs made in the console or an AI client are not
 in it, but their ids open with `amdahl run`. `--limit <n>` shows more than the
 latest ten; `--json` prints `{ok, source, note, total, runs}`.
@@ -595,7 +608,8 @@ span of its dates (`GET /search/overview`), then the fields a search can
 filter on (`GET /search/fields`). A count that could not be read says
 `unknown`, never 0. `--surface interactions|deals|deal_qualification` lists
 one surface's fields with their type, meaning and the values they are known to
-hold. Every line fits 80 columns. With `--json` it prints `{ok, overview,
+hold, the first sentence of each field's meaning. Every line fits 80 columns, or
+the terminal's width when it is narrower. With `--json` it prints `{ok, overview,
 fields}`.
 
 ## Connections
@@ -813,19 +827,28 @@ At a terminal, `feedback` and `sent` ask for what you leave out instead of
 exiting 2, with a default for each, and never more than three questions.
 `feedback <run-id>` asks how you know (`--evidence`), then what happened
 (`--outcome`) when you gave no outcome, text or comment. `sent <run-id>` asks
-where it went out (the providers, a menu), who it went to (a recipient, when
-you gave no send id or recipient) and whether you changed it first (paste the
+where it went out (a menu of tool names: Instantly, Reply.io, La Growth Machine, ...), who it went to (a recipient, when
+you gave no send id or recipient; it must be an email address or a LinkedIn
+profile URL, and a name such as `priya` is asked for once more, then refused)
+and whether you changed it first (paste the
 message as sent, or press Enter for as returned; with `--sent-text` given, a
-yes or no). It never asks for the channel. When it asks for something else
-and `--channel` is not given, it picks one and prints it before it sends: email
-for an email address as the recipient, LinkedIn for a LinkedIn profile, else the
-run's channel (when this computer made the run), else the provider's. If
-`--channel` is the only thing missing, it is a usage error: give it. What you gave is checked first,
+yes or no). Without `--channel` it picks one and prints it before it sends:
+email for an email address as the recipient, LinkedIn for a LinkedIn profile,
+else the run's channel (when this computer made the run), else the channel of a
+tool that sends one kind. Only when none of these says (a tool that sends both,
+a send id and no recipient) it asks what was sent: Email, LinkedIn message,
+LinkedIn invite or LinkedIn InMail. Where it cannot ask, a missing `--channel`
+is the usage error. A tool and a
+channel that cannot go together (Instantly with a LinkedIn profile, HeyReach with an
+email) are refused before anything is sent; `other` sends both. A prompt run's id
+(`opt_...`) can't be reported as sent or given feedback. What you gave is checked first,
 so a typo costs no answers, and Ctrl+C sends nothing. With `--json`, in an
 agent (`CLAUDECODE`, `CURSOR_AGENT`), in CI, with `AMDAHL_NO_PROMPT=1` or with
 stdin or stdout not a terminal (`amdahl sent <id> | tee`), nothing is asked and a
 missing flag is the usage error it always was. `grade` and `prompt` with no
-file paste only under the same rule.
+file paste only under the same rule. After an `optimize`, the two
+next-step lines are `amdahl sent <id>` and `amdahl feedback <id>` where they ask
+for what is missing, and the full commands with every flag anywhere else.
 
 ## Next steps
 

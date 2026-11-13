@@ -99,8 +99,9 @@ Commands:
   feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
            [--outcome used|used_with_edits|not_used|unsure]
            [--sent-text <file> | -] [--comment <text>]
-           At a terminal, what is left out is asked (at most two questions).
                                              What happened to a message
+           At a terminal, what is left out is asked (at most two questions);
+           with --json, in an agent or in CI, nothing is asked.
   sent <run-id> --provider <provider> --channel <channel>
            --sent-as returned|edited [--sent-at <time>]
            [--provider-send-id <id>]
@@ -116,10 +117,10 @@ Commands:
                        (any sender not listed)
            --channel:  email, linkedin (= linkedin_message), linkedin_invite,
                        linkedin_message, linkedin_inmail
-           --sent-as edited needs --sent-text. At a terminal, what is left
-           out is asked (at most three questions); with --json, in an agent
-           or in CI, nothing is asked.
+           --sent-as edited needs --sent-text.
                                              Report that a message went out
+           At a terminal, what is left out is asked (at most three questions);
+           with --json, in an agent or in CI, nothing is asked.
   keys create --name <name> [--preset read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]
   keys list

@@ -92,7 +92,7 @@ export interface Io {
   homedir: string
   /** The path the CLI was started from (process.argv[1]): under npx it is in npx's `_npx` cache folder. */
   scriptPath?: string
-  /** The terminal's width in columns, when stderr is a terminal. */
+  /** The width output is written for: `COLUMNS` when set, else stdout's width when it is a terminal, else stderr's. */
   columns: () => number | undefined
   /** True when `path` is a file this user may run. */
   isExecutable: (path: string) => boolean
@@ -213,6 +213,18 @@ export function openerFor(platform: NodeJS.Platform, url: string): [string, stri
   return ['xdg-open', [url]]
 }
 
+/**
+ * The width to write output for: `COLUMNS` when it is a whole number above 0 (a person or a script
+ * says how wide), else stdout's own width when stdout is a terminal, else stderr's, else unknown.
+ */
+export function outputColumns(env: Record<string, string | undefined>, stdoutColumns: number | undefined, stderrColumns?: number): number | undefined {
+  const fromEnv = Number(env.COLUMNS)
+  if (Number.isInteger(fromEnv) && fromEnv > 0) return fromEnv
+  // stdout first (that is where results go); stderr's terminal when stdout is piped (what the sign-in screen draws on).
+  const found = stdoutColumns && stdoutColumns > 0 ? stdoutColumns : stderrColumns
+  return found && found > 0 ? found : undefined
+}
+
 /** Build the real {@link Io} for the running process. */
 export function realIo(): Io {
   return {
@@ -247,7 +259,7 @@ export function realIo(): Io {
     },
     homedir: homedir(),
     scriptPath: process.argv[1],
-    columns: () => process.stderr.columns,
+    columns: () => outputColumns(process.env, process.stdout.columns, process.stderr.columns),
     isExecutable,
     cwd: process.cwd(),
     platform: process.platform,

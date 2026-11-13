@@ -345,8 +345,9 @@ const PASTE_SETTLE_MS = 150
  * after the empty line means it was pasted too.
  *
  * `emptyEnds`: for a question that can be skipped ("press Enter if not"), an
- * empty line typed before anything else ends it with an empty answer, instead
- * of waiting for text.
+ * empty line typed before anything else ends it with an empty answer (after the
+ * same short wait, so a paste that begins with a blank line is still read),
+ * instead of waiting for text.
  */
 export function readPaste(input: MenuInput, output: NodeJS.WritableStream, question: string, options: { emptyEnds?: boolean } = {}): Promise<string> {
   output.write(`${question}\n`)
@@ -385,7 +386,12 @@ export function readPaste(input: MenuInput, output: NodeJS.WritableStream, quest
         return
       }
       if (lines.length === 0) {
-        if (options.emptyEnds) done()
+        // A skippable question: Enter ends it, after a short wait for more. A paste that starts with a
+        // blank line (no bracketed paste) keeps coming in that wait: its next key cancels the end.
+        if (options.emptyEnds) {
+          clearTimeout(settle)
+          settle = setTimeout(done, PASTE_SETTLE_MS)
+        }
         return
       }
       lines.push(line)

@@ -224,11 +224,11 @@ describe('search', () => {
     expect((await cli(io, 'search', 'deals')).stdout).toBe('1. Pinecrest - Lab pilot, Presentation Scheduled, 12000, 2026-12-29\n2. Hubspot, 2026-10-13\n')
   })
 
-  it('no rows: the freshness line, or "Nothing matched."; no question is a usage error', async () => {
+  it('no rows: the freshness line, or "No matches."; no question is a usage error', async () => {
     const io = await signedIn({ searchResult: { success: true, results: [], data_freshness: { message: 'No matches. Latest conversation 2026-11-01; last sync 2026-11-02.' } } })
     expect((await cli(io, 'search', 'x')).stdout).toBe('No matches. Latest conversation 2026-11-01; last sync 2026-11-02.\n')
     server!.options.searchResult = { success: true, results: [] }
-    expect((await cli(io, 'search', 'x')).stdout).toBe('Nothing matched.\n')
+    expect((await cli(io, 'search', 'x')).stdout).toBe('No matches.\n')
     const r = await cli(io, 'search')
     expect(r.code).toBe(2)
     expect((await cli(io, 'search', 'x', '--limit', 'ten')).code).toBe(2)
@@ -368,8 +368,8 @@ describe('optimize --list', () => {
         'Queued behind 3 items, about 5 min left',
         '2 of 2 done',
         '2 of 2 messages optimized.',
-        `Sent one? amdahl sent ${batchRun(0)} --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>`,
-        `Or say how it went: amdahl feedback ${batchRun(0)} --evidence did_it_myself --outcome used`,
+        `Sent one? amdahl sent ${batchRun(0)}`,
+        `Or say how it went: amdahl feedback ${batchRun(0)}`,
         '',
       ].join('\n')
     )
@@ -887,13 +887,13 @@ describe('next steps', () => {
     writeFileSync(file, 'draft')
     const r = await cli(io, 'optimize', file)
     expect(r.code).toBe(0)
-    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
+    expect(r.stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1\nOr say how it went: amdahl feedback r1\nConnect calls or a CRM so Amdahl checks claims against them: amdahl connect\n')
     const before = requests('/setup/status').length
     const json = await cli(io, 'optimize', file, '--json')
     expect(json.stderr).toBe('')
     expect(requests('/setup/status').length).toBe(before)
     server!.options.noConnections = false
-    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1 --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>\nOr say how it went: amdahl feedback r1 --evidence did_it_myself --outcome used\n')
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter opener.\nRun: r1\nSent it? amdahl sent r1\nOr say how it went: amdahl feedback r1\n')
   })
 })
 

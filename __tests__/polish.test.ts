@@ -383,6 +383,8 @@ describe('batch progress', () => {
 describe('after an optimize: what to do once it is sent', () => {
   it('a single run ends with one line that names amdahl sent and amdahl feedback with the real run id; --json prints none', async () => {
     const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi', summary: 'Tighter.', run_id: '9fd4f2e3-bc8e-436b-86d7-a677a89e8d16' } })
+    // No terminal to ask on (stdout is piped), so the commands are written out in full.
+    io.stdoutIsTTY = false
     const file = join(io.homedir, 'a.md')
     writeFileSync(file, 'draft')
     const r = await cli(io, 'optimize', file)
@@ -396,8 +398,22 @@ describe('after an optimize: what to do once it is sent', () => {
     expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter.\n')
   })
 
+  it('at a terminal the two lines are the short commands, which ask for what is missing; piped, they are written out in full', async () => {
+    const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi', summary: 'Tighter.', run_id: '9fd4f2e3-bc8e-436b-86d7-a677a89e8d16' } })
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    expect((await cli(io, 'optimize', file)).stderr).toBe('Tighter.\nRun: 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\nSent it? amdahl sent 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\nOr say how it went: amdahl feedback 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16\n')
+    io.stdoutIsTTY = false
+    expect((await cli(io, 'optimize', file)).stderr).toContain('--provider <provider> --channel <channel>')
+    io.stdoutIsTTY = true
+    io.env.AMDAHL_NO_PROMPT = '1'
+    expect((await cli(io, 'optimize', file)).stderr).toContain('--provider <provider> --channel <channel>')
+  })
+
   it('several files each name their own run, and a batch names the first run id of its results', async () => {
     const io = await signedIn()
+    // No terminal to ask on (stdout is piped), so the commands are written out in full.
+    io.stdoutIsTTY = false
     const [a, b] = [join(io.homedir, 'a.md'), join(io.homedir, 'b.md')]
     writeFileSync(a, 'one')
     writeFileSync(b, 'two')
@@ -443,6 +459,8 @@ describe('the mock matches the server it stands for', () => {
 describe('the two lines after an optimize are commands to paste', () => {
   it('each holds a command with the real run id and placeholders for the flags it needs, and runs once they are filled in', async () => {
     const io = await signedIn({ optimizeResult: { ok: true, message: 'Hi', summary: 'Tighter.', run_id: KNOWN_RUN } })
+    // No terminal to ask on (stdout is piped), so the commands are written out in full.
+    io.stdoutIsTTY = false
     const file = join(io.homedir, 'a.md')
     writeFileSync(file, 'draft')
     const lines = (await cli(io, 'optimize', file)).stderr.split('\n').filter(Boolean)

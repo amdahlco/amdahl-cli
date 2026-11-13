@@ -25,8 +25,9 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
-import { currentProfile, findRun } from '../history'
-import { atTerminal } from '../terminal'
+import { findRun } from '../history'
+import { SEND_TO_PRESETS } from '../send-to'
+import { atTerminal, canAsk } from '../terminal'
 import { clip, field, records } from '../text'
 
 const PLATFORM = '/api/platform/v1'
@@ -44,6 +45,45 @@ export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'l
  * message. `sent --channel linkedin` is the message, `linkedin_message`, so one word works in both.
  */
 export const CHANNEL_ALIASES: Record<string, string> = { linkedin: 'linkedin_message' }
+
+/** What a sent message was: an email, or a LinkedIn message of any kind. */
+type Kind = 'email' | 'linkedin'
+const kindOf = (channel: string): Kind => (channel === 'email' ? 'email' : 'linkedin')
+
+/**
+ * Each provider's name for a person (the menu shows these, not the ids the server takes) and the kinds
+ * of message it sends. Only the clear mismatches are refused: refusing a true report is worse than
+ * accepting an odd one. A provider with no entry here takes anything.
+ */
+const PROVIDER_NAMES: Record<string, string> = {
+  ...Object.fromEntries(SEND_TO_PRESETS.map((p) => [p.id, p.label])),
+  salesforce: 'Salesforce',
+  gmail: 'Gmail',
+  linkedin_manual: 'LinkedIn (sent by hand)',
+  other: 'Other (any sender not listed)',
+}
+/**
+ * Email only: Instantly, Gmail. LinkedIn only: HeyReach, LinkedIn by hand. The rest (lemlist, Reply.io,
+ * La Growth Machine, Smartlead, Woodpecker, Apollo, Outreach, Salesloft, HubSpot, Salesforce, other)
+ * run LinkedIn steps or tasks as well as email, so they take both.
+ */
+const PROVIDER_KINDS: Record<string, readonly Kind[]> = {
+  instantly: ['email'],
+  gmail: ['email'],
+  heyreach: ['linkedin'],
+  linkedin_manual: ['linkedin'],
+}
+
+/** Refuse a tool and a channel that can't go together: `instantly` sends email only. */
+function checkPair(provider: string, channel: string): void {
+  const takes = PROVIDER_KINDS[provider]
+  if (!takes || takes.includes(kindOf(channel))) return
+  const only = takes.length === 1 ? (takes[0] === 'email' ? 'email' : 'LinkedIn') : ''
+  throw usageError(
+    `${PROVIDER_NAMES[provider] ?? provider} sends ${only} only, and this is ${kindOf(channel) === 'email' ? 'an email' : 'a LinkedIn message'}.`,
+    `Check --provider and --channel (or the recipient). A sender that sends both: --provider other.`
+  )
+}
 export const SENT_AS = ['returned', 'edited']
 
 /** The longest message (`--sent-text`) and comment the server takes, in characters. */
@@ -73,6 +113,10 @@ function oneOf(flag: string, value: string | undefined, allowed: string[]): stri
 
 /** The run id the command was given, which must be one `amdahl optimize` printed. */
 export function runId(value: string, usage: string): string {
+  // A prompt run (`opt_...`) has no message that was sent: say so, rather than "not a run id".
+  if (/^opt_[0-9a-f]+$/i.test(value)) {
+    throw usageError(`${value.length > 40 ? `${value.slice(0, 37)}...` : value} is a prompt run: a prompt run can't be reported as sent or given feedback.`, `Use the id of a message run, the one \`amdahl optimize\` prints. ${usage}`)
+  }
   if (!UUID.test(value)) throw usageError(`"${value.length > 40 ? `${value.slice(0, 37)}...` : value}" is not a run id.`, `A run id looks like 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16; \`amdahl optimize\` prints it after each run. ${usage}`)
   return value
 }
@@ -100,7 +144,7 @@ async function readText(ctx: Ctx, path: string): Promise<string> {
  * tee`) and AMDAHL_NO_PROMPT=1 get the usage error as before.
  */
 export function askingAllowed(ctx: Ctx): boolean {
-  return atTerminal(ctx) && ctx.io.stdoutIsTTY && !ctx.out.json
+  return canAsk(ctx)
 }
 
 /** `amdahl feedback <run-id> --evidence <how> [--sent-text <file>] [--comment <text>] [--outcome <what>]`. */
@@ -181,6 +225,7 @@ async function buildItem(ctx: Ctx, args: string[], pasted?: string): Promise<Rec
   if (!provider) throw usageError(`Say where it went out with --provider: ${SEND_PROVIDERS.join(', ')}.`, usage)
   if (!channel) throw usageError(`Say what was sent with --channel: ${[...SEND_CHANNELS, ...Object.keys(CHANNEL_ALIASES)].join(', ')}.`, usage)
   if (!sentAs) throw usageError('Say whether it was sent as Amdahl returned it with --sent-as: returned, edited.', usage)
+  checkPair(provider, channel)
   const sentAt = str(flags['sent-at']) ?? new Date(ctx.io.now()).toISOString()
   if (!TIME_WITH_ZONE.test(sentAt) || !Number.isFinite(Date.parse(sentAt))) {
     throw usageError('--sent-at must be a time with a time zone, for example 2026-11-12T09:30:00Z.')
@@ -237,11 +282,13 @@ async function buildItem(ctx: Ctx, args: string[], pasted?: string): Promise<Rec
 /**
  * At a terminal, ask for what a report still needs: where it went out, who it
  * went to, and whether it was changed first. At most three questions, each
- * with a default; a value the command line gave is never asked again. The
- * channel is never asked: when something else is asked and `--channel` is not
- * given, it is the recipient's (an email address is email, a LinkedIn profile
- * LinkedIn), else the run's, else the provider's, and is printed. When only
- * `--channel` is missing, nothing is asked and the usage error stands. Flags that are given are checked first, so a typo costs no
+ * with a default; a value the command line gave is never asked again. When
+ * `--channel` is not given it is worked out: the recipient's (an email address is
+ * email, a LinkedIn profile LinkedIn), else the run's, else the one kind a tool
+ * sends, and is printed. Only when none of these says (a tool that sends both, a
+ * send id and no recipient) the channel is asked, the last of the three. Where
+ * nothing can be asked, the usage error stands. Flags that are given are checked
+ * first, so a typo costs no
  * answers. Returns the flags to send with, and the pasted text of an edit.
  */
 async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags']; pasted?: string }> {
@@ -251,20 +298,30 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
   const needProvider = str(flags.provider) === undefined
   const needKey = ![flags['provider-send-id'], flags.recipient, flags['recipient-key-hash']].some((v) => typeof v === 'string' && v.trim())
   const needHow = str(flags['sent-as']) === undefined
-  if (!rawId || !(needProvider || needKey || needHow)) return { flags }
+  const needChannel = str(flags.channel) === undefined
+  if (!rawId || !(needProvider || needKey || needHow || needChannel)) return { flags }
   runId(rawId, usage)
   // What is given is checked now, with stand-ins for what is asked.
-  await buildItem({ ...ctx, flags: { ...flags, provider: str(flags.provider) ?? 'other', channel: str(flags.channel) ?? 'email', 'sent-as': str(flags['sent-as']) ?? 'returned', ...(needKey ? { recipient: 'check@example.com' } : {}) } }, args)
+  // The stand-in channel is one the given provider can send, so it is not refused for a pair it was never asked.
+  const standIn = PROVIDER_KINDS[str(flags.provider) ?? 'other']?.[0] === 'linkedin' ? 'linkedin_message' : 'email'
+  await buildItem({ ...ctx, flags: { ...flags, provider: str(flags.provider) ?? 'other', channel: str(flags.channel) ?? standIn, 'sent-as': str(flags['sent-as']) ?? 'returned', ...(needKey ? { recipient: 'check@example.com' } : {}) } }, args)
 
   const answered: Ctx['flags'] = { ...flags }
   let pasted: string | undefined
   if (needProvider) {
-    const choices = SEND_PROVIDERS.map((p) => (p === 'other' ? 'other (any sender not listed)' : p))
+    const choices = SEND_PROVIDERS.map((p) => PROVIDER_NAMES[p] ?? p)
     answered.provider = SEND_PROVIDERS[await io.select('Where did it go out?', choices)]
   }
   if (needKey) {
-    const who = (await io.prompt('Who was it sent to? An email address, or a LinkedIn profile URL: ')).trim()
+    const ask = 'Who was it sent to? An email address, or a LinkedIn profile URL: '
+    let who = (await io.prompt(ask)).trim()
     if (!who) throw usageError('Say which send this is: give a recipient, or --provider-send-id.', usage)
+    // A name ("priya") is not a recipient the server can match to a send: ask once more, then stop.
+    if (!isRecipient(who)) {
+      io.stderr(`"${who.slice(0, 60)}" is not an email address or a LinkedIn profile URL.\n`)
+      who = (await io.prompt(ask)).trim()
+      if (!isRecipient(who)) throw usageError('A recipient is an email address or a LinkedIn profile URL.', usage)
+    }
     answered.recipient = who
   }
   if (needHow) {
@@ -278,21 +335,45 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
       } else answered['sent-as'] = 'returned'
     }
   }
-  if (str(flags.channel) === undefined) answered.channel = inferChannel(ctx, rawId, answered)
+  if (str(flags.channel) === undefined) {
+    // The recipient, the run or a one-kind tool says what it was. When none does (a tool that sends both,
+    // a send id and no recipient), a person at a terminal is asked: it is the last of at most three questions.
+    answered.channel = inferChannel(ctx, rawId, answered) ?? ASKED_CHANNELS[await io.select('What was sent?', ASKED_CHANNELS.map(([, label]) => label))]![0]
+  }
+  // A tool and a channel that can't go together are refused before anything is sent.
+  checkPair(String(answered.provider), String(answered.channel))
   io.stderr(`Reporting: ${String(answered.provider)}, ${String(answered.channel)}, sent as ${String(answered['sent-as'])}.\n`)
   return { flags: answered, ...(pasted !== undefined ? { pasted } : {}) }
 }
 
+/** Whether `text` is a recipient the server can match: an email address, or a LinkedIn profile URL. */
+function isRecipient(text: string): boolean {
+  return EMAIL_WHOLE_VALUE.test(text) || LINKEDIN_PROFILE.test(text)
+}
+
+/** What is asked when nothing says what was sent: the channel the report takes, and how it reads in the menu. */
+const ASKED_CHANNELS: readonly (readonly [string, string])[] = [
+  ['email', 'Email'],
+  ['linkedin_message', 'LinkedIn message'],
+  ['linkedin_invite', 'LinkedIn invite'],
+  ['linkedin_inmail', 'LinkedIn InMail'],
+]
+
 /** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
-function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string {
+function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string | undefined {
   // The recipient says what was sent: an email address is an email, a LinkedIn profile is a LinkedIn message.
   // It comes before the run's channel and the provider, which can be wrong (a LinkedIn run sent by lemlist as email).
   const recipient = str(flags.recipient)?.trim()
   if (recipient && EMAIL_WHOLE_VALUE.test(recipient)) return 'email'
   if (recipient && LINKEDIN_PROFILE.test(recipient)) return 'linkedin_message'
-  const remembered = findRun(ctx, runIdValue, currentProfile(ctx))?.channel
-  if (remembered) return CHANNEL_ALIASES[remembered] ?? remembered
-  return flags.provider === 'heyreach' || flags.provider === 'linkedin_manual' ? 'linkedin_message' : 'email'
+  const takes = PROVIDER_KINDS[String(flags.provider)]
+  const remembered = findRun(ctx, runIdValue)?.channel
+  const runChannel = remembered ? (CHANNEL_ALIASES[remembered] ?? remembered) : undefined
+  // The run's channel, unless the provider cannot send it (a LinkedIn run reported from an email-only tool).
+  if (runChannel && (!takes || takes.includes(kindOf(runChannel)))) return runChannel
+  // A tool that sends one kind says which. A tool that sends both is not guessed at: nothing says what this was.
+  if (takes?.length === 1) return takes[0] === 'linkedin' ? 'linkedin_message' : 'email'
+  return undefined
 }
 
 /**

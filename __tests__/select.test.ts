@@ -497,6 +497,22 @@ describe('readPaste', () => {
     expect(await typed).toBe('my words')
   })
 
+  it('with emptyEnds, a paste that begins with a blank line (no bracketed paste) is read whole, not ended by the blank', async () => {
+    const t = terminal()
+    const result = readPaste(t.input, t.output, 'Changed it?', { emptyEnds: true })
+    t.input.write('\rHi Dana,\rmy own words\r')
+    await new Promise((r) => setTimeout(r, 20))
+    t.input.write('\r')
+    expect(await result).toBe('Hi Dana,\nmy own words')
+    // A bare Enter still ends it, after the short wait.
+    const bare = terminal()
+    const started = Date.now()
+    const ended = readPaste(bare.input, bare.output, 'Changed it?', { emptyEnds: true })
+    bare.input.write('\r')
+    expect(await ended).toBe('')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100)
+  })
+
   it('without emptyEnds, a message prompt still waits through a stray Enter (Ctrl+D or Ctrl+C leaves)', async () => {
     const r = await paste(['\r', 'draft\r', '\r'], 200)
     expect(r).toMatchObject({ text: 'draft' })
