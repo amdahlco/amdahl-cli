@@ -265,7 +265,7 @@ describe('sent: providers and channels', () => {
     // `other` works, and so does each provider the server added.
     expect((await cli(io, ...base('other', 'email'))).code).toBe(0)
     for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker']) {
-      expect((await cli(io, ...base(added, added === 'lgm' ? 'linkedin' : 'email'))).code).toBe(0)
+      expect((await cli(io, ...base(added, 'email'))).code).toBe(0)
       expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: added })
     }
   })

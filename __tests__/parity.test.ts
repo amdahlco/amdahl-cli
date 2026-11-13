@@ -1119,6 +1119,13 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect((await cli(flags, ...args('instantly', 'linkedin_message'))).code).toBe(2)
     expect((await cli(flags, ...args('lemlist', 'linkedin'))).code).toBe(0)
     expect((await cli(flags, ...args('other', 'linkedin'))).code).toBe(0)
+    // Tools that run LinkedIn steps or tasks as well as email take both; only the clear mismatches are refused.
+    for (const both of ['apollo', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'reply_io', 'lgm']) {
+      expect((await cli(flags, ...args(both, 'linkedin_message'))).code).toBe(0)
+      expect((await cli(flags, ...args(both, 'email'))).code).toBe(0)
+    }
+    for (const emailOnly of ['smartlead', 'woodpecker', 'gmail']) expect((await cli(flags, ...args(emailOnly, 'linkedin_inmail'))).code).toBe(2)
+    expect((await cli(flags, ...args('linkedin_manual', 'email'))).code).toBe(2)
     expect((await cli(flags, ...args('heyreach', 'linkedin'))).code).toBe(0)
   })
 

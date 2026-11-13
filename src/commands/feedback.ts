@@ -52,8 +52,8 @@ const kindOf = (channel: string): Kind => (channel === 'email' ? 'email' : 'link
 
 /**
  * Each provider's name for a person (the menu shows these, not the ids the server takes) and the kinds
- * of message it sends, from the same table the console's import files use. A provider with no entry
- * here (`salesforce`) takes anything; `other` takes both.
+ * of message it sends. Only the clear mismatches are refused: refusing a true report is worse than
+ * accepting an odd one. A provider with no entry here takes anything.
  */
 const PROVIDER_NAMES: Record<string, string> = {
   ...Object.fromEntries(SEND_TO_PRESETS.map((p) => [p.id, p.label])),
@@ -62,9 +62,17 @@ const PROVIDER_NAMES: Record<string, string> = {
   linkedin_manual: 'LinkedIn (sent by hand)',
   other: 'Other (any sender not listed)',
 }
+/**
+ * Email only: Instantly, Smartlead, Woodpecker, Gmail. LinkedIn only: HeyReach, LinkedIn by hand. The
+ * rest (lemlist, Reply.io, La Growth Machine, Apollo, Outreach, Salesloft, HubSpot, Salesforce, other)
+ * run LinkedIn steps or tasks as well as email, so they take both.
+ */
 const PROVIDER_KINDS: Record<string, readonly Kind[]> = {
-  ...Object.fromEntries(SEND_TO_PRESETS.map((p) => [p.id, p.channels])),
+  instantly: ['email'],
+  smartlead: ['email'],
+  woodpecker: ['email'],
   gmail: ['email'],
+  heyreach: ['linkedin'],
   linkedin_manual: ['linkedin'],
 }
 
