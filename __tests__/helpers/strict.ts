@@ -178,8 +178,13 @@ export function reportSendRejection(item: Record<string, unknown>, now: number, 
 // ── search.query: search/query.ts ─────────────────────────────────────────────────────────────
 
 /** The refusal of a search body, or null. */
-export function searchProblem(input: unknown): string | null {
+export function searchProblem(input: unknown, recipeIds: string[] | null = null): string | null {
   if (!isObject(input)) return 'Invalid search request: Expected object'
+  // `recipe_id` is a library id, and a server whose library route is absent does not take it (recipeIds null).
+  if (input.recipe_id !== undefined) {
+    if (recipeIds === null) return 'Invalid search request: Unrecognized key: recipe_id'
+    if (typeof input.recipe_id !== 'string' || !recipeIds.includes(input.recipe_id)) return '`recipe_id` must be the id of a recipe in the library: read search.suggestions for the list.'
+  }
   if (input.query !== undefined && (typeof input.query !== 'string' || input.query.length > 10_000)) return 'Invalid search request: query: String must contain at most 10000 character(s)'
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1)) return 'Invalid search request: limit: Number must be greater than 0'
   if (input.route !== undefined && !['auto', 'search', 'research'].includes(String(input.route))) return 'Invalid search request: route: Invalid enum value'

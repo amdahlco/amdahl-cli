@@ -233,9 +233,11 @@ ${GLOBAL}`,
   recipes: `Usage: amdahl recipes
 
 List the console's recipe library: the questions it asks as a search, by
-category, with what each reads and the fill-in it needs. Run one with
+category, with what each reads and the fill-in it needs. "For you" above it
+shows up to four that suit this workspace now, each with why. Run one with
 amdahl search --recipe <id>. With --json it prints every recipe with its
-question and fill-ins.
+question and fill-ins, and for_you. Where the server's list cannot be read, it
+lists the copy bundled in this version.
 ${GLOBAL}`,
 
   connections: `Usage: amdahl connections [--all]

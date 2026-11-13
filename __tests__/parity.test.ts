@@ -16,7 +16,7 @@ import { cutAtWord, firstSentence } from '../src/text'
 import { readPaste } from '../src/select'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { promptProblems } from './helpers/strict'
-import { API_KEY, GRADE_RUN, KNOWN_RUN, PROMPT_RUN, READONLY_KEY, UNKNOWN_RUN, startMockServer, type MockServer } from './helpers/mock-server'
+import { API_KEY, GRADE_RUN, KNOWN_RUN, PROMPT_RUN, READONLY_KEY, SUGGESTED_LIBRARY, UNKNOWN_RUN, startMockServer, type MockServer } from './helpers/mock-server'
 
 let server: MockServer | null = null
 afterEach(async () => {
@@ -532,7 +532,8 @@ describe('recipes and search --recipe', () => {
     expect((await cli(io, 'search', '--account', 'A', 'a question')).stderr).toContain('--account goes with --recipe <id>.')
     expect((await cli(io, 'search', '--recipe', 'nope')).stderr).toContain('No recipe called "nope".\namdahl recipes lists them: account-brief,')
     expect((await cli(io, 'search', '--recipe', 'churn-risk', 'my own question')).stderr).toContain('Give a question or --recipe, not both.')
-    expect(server!.log.length).toBe(before)
+    // Nothing was searched (the library read is the only request a usage error may make).
+    expect(server!.log.slice(before).filter((l) => l.path.endsWith('/search/query'))).toEqual([])
     const long = await cli(io, 'search', '--recipe', 'account-brief', '--account', 'x'.repeat(400))
     expect(long.stderr).toContain('Used the first 300 characters of --account.')
     expect(sentBody('/api/platform/v1/search/query').query).toContain(`Brief me on ${'x'.repeat(300)}:`)
@@ -1286,5 +1287,103 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     // A sign-in on the same computer sees neither.
     const signed = fakeIo({ AMDAHL_API_URL: server!.url }, io.homedir)
     expect((await cli(signed, 'runs', '--json')).json.total).toBe(0)
+  })
+})
+
+describe('0.5.1: "For you" and the library from the server', () => {
+  const FOR_YOU = [
+    { recipe_id: 'why-deals-die', kind: 'try', reason: '1 deal lost in the last 90 days', fills: {} },
+    { recipe_id: 'account-brief', kind: 'try', reason: 'Acme has a call tomorrow', fills: { account: 'Acme "Corp"' } },
+  ]
+  const suggestionRequests = () => requests('/search/suggestions')
+  const titleOf = (id: string) => String(SUGGESTED_LIBRARY.find((r) => r.id === id)!.title)
+
+  it('shows "For you" above the library, each row with its reason and the command that runs it, and offers no hide', async () => {
+    const io = await signedIn({ suggestions: { for_you: FOR_YOU } })
+    const r = await cli(io, 'recipes')
+    expect(r.code).toBe(0)
+    const head = r.stdout.slice(0, r.stdout.indexOf('\nAccounts\n'))
+    expect(head).toContain(`For you\n  why-deals-die          ${titleOf('why-deals-die')}\n    1 deal lost in the last 90 days.\n    Run: amdahl search --recipe why-deals-die\n`)
+    expect(head).toContain(`  account-brief          ${titleOf('account-brief')}\n    Acme has a call tomorrow.\n    Run: amdahl search --recipe account-brief --account "Acme \\"Corp\\""\n`)
+    expect(r.stdout.indexOf('For you')).toBeLessThan(r.stdout.indexOf('\nAccounts\n'))
+    expect(r.stdout).not.toMatch(/hide|dismiss/i)
+    fits80(r.stdout)
+    // The library is the server's: at-risk-deals and champions-quiet are in it, and were not in the bundled copy.
+    expect(r.stdout).toContain('at-risk-deals')
+    expect(r.stdout).toContain('champions-quiet')
+  })
+
+  it('shows at most 4 rows, skips a suggestion whose recipe is not in the library, and says nothing when there are none', async () => {
+    const many = Array.from({ length: 6 }, (_, i) => ({ recipe_id: SUGGESTED_LIBRARY[i]!.id, kind: 'try', reason: `reason ${i}`, fills: {} }))
+    const io = await signedIn({ suggestions: { for_you: [{ recipe_id: 'not-in-library', kind: 'try', reason: 'x', fills: {} }, ...many] } })
+    const r = await cli(io, 'recipes')
+    expect(r.stdout.match(/\n {4}reason \d\./g)).toHaveLength(4)
+    expect(r.stdout).not.toContain('not-in-library')
+    server!.options.suggestions = { for_you: [] }
+    const none = await cli(io, 'recipes')
+    expect(none.stdout).not.toContain('For you')
+    expect(none.stdout).toContain('Accounts')
+  })
+
+  it('--json carries for_you and where the library came from', async () => {
+    const io = await signedIn({ suggestions: { for_you: FOR_YOU } })
+    const json = (await cli(io, 'recipes', '--json')).json
+    expect(json).toMatchObject({ ok: true, source: 'server', generated_at: '2026-11-13T22:40:02.728Z' })
+    expect(json.for_you).toHaveLength(2)
+    expect(json.for_you[0]).toMatchObject({ recipe_id: 'why-deals-die', title: titleOf('why-deals-die'), reason: '1 deal lost in the last 90 days', command: 'amdahl search --recipe why-deals-die' })
+    expect(json.recipes).toHaveLength(14)
+  })
+
+  it('a workspace with nothing to suggest from says so with the server\'s message, and still lists the library', async () => {
+    const io = await signedIn({ suggestions: { for_you: [], setup_needed: { reason: 'no_sources_connected', message: 'Connect your CRM to get recipes made for you.' } } })
+    const r = await cli(io, 'recipes')
+    expect(r.stdout).toContain('Connect your CRM to get recipes made for you.')
+    expect(r.stdout).not.toContain('For you')
+    expect(r.stdout).toContain('Accounts')
+  })
+
+  it('a server without the route (404), or no sign-in, falls back to the bundled list: no For you, no error', async () => {
+    const io = await signedIn()
+    const r = await cli(io, 'recipes')
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe('')
+    expect(r.stdout).not.toContain('For you')
+    expect(r.stdout).not.toContain('at-risk-deals')
+    expect(suggestionRequests()).toHaveLength(1)
+    expect((await cli(io, 'recipes', '--json')).json).toMatchObject({ ok: true, source: 'bundled', for_you: [] })
+    // Not signed in: no request at all, the same list.
+    const out = fakeIo({ AMDAHL_API_URL: server!.url })
+    const before = server!.log.length
+    const anon = await cli(out, 'recipes')
+    expect(anon.code).toBe(0)
+    expect(anon.stdout).toContain('account-brief')
+    expect(server!.log.length).toBe(before)
+  })
+
+  it('search --recipe sends recipe_id when the library came from the server, and not when it did not', async () => {
+    const io = await signedIn({ suggestions: { for_you: [] } })
+    expect((await cli(io, 'search', '--recipe', 'why-deals-die')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/search/query')).toMatchObject({ recipe_id: 'why-deals-die', answer: true })
+    expect(sentBody('/api/platform/v1/search/query').query).toBe(SUGGESTED_LIBRARY.find((r) => r.id === 'why-deals-die')!.search && (SUGGESTED_LIBRARY.find((r) => r.id === 'why-deals-die')!.search as { question: string }).question)
+    // A recipe only the server has runs too.
+    expect((await cli(io, 'search', '--recipe', 'at-risk-deals')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/search/query')).toMatchObject({ recipe_id: 'at-risk-deals' })
+    // A question of one's own carries no recipe_id.
+    await cli(io, 'search', 'what is new')
+    expect(sentBody('/api/platform/v1/search/query').recipe_id).toBeUndefined()
+    // The server has no route: the bundled recipe runs without recipe_id (the server would refuse it), and at-risk-deals is unknown.
+    const old = await signedIn()
+    expect((await cli(old, 'search', '--recipe', 'why-deals-die')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/search/query').recipe_id).toBeUndefined()
+    expect((await cli(old, 'search', '--recipe', 'at-risk-deals')).stderr).toContain('No recipe called "at-risk-deals".')
+  })
+
+  it('a recipe with a fill-in this version does not know says to update, and searches nothing', async () => {
+    const library = [...SUGGESTED_LIBRARY, { id: 'competitor-brief', title: 'Competitor brief', blurb: 'b', category: 'pipeline', needs: 'crm', search: { question: 'Brief me on {competitor}.', fills: [{ key: 'competitor', label: 'Competitor', example: 'Rival' }] } }]
+    const io = await signedIn({ suggestions: { for_you: [], library } })
+    const r = await cli(io, 'search', '--recipe', 'competitor-brief')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('takes a fill-in this version of amdahl does not know')
+    expect(requests('/search/query')).toHaveLength(0)
   })
 })

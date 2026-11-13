@@ -5,10 +5,13 @@
 // key-request routes take only an `amdahl-cli` OAuth token.
 
 import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { batchProblems, feedbackProblem, optimizeProblems, promptProblems, reportSendProblem, reportSendRejection, searchProblem } from './strict'
 
+/** The recipe library `GET /search/suggestions` answers with on staging (2026-11-13): 14 recipes, each with its search question and fill-ins. */
+export const SUGGESTED_LIBRARY: Record<string, unknown>[] = JSON.parse(readFileSync(new URL('../fixtures/suggestions-library.json', import.meta.url), 'utf8'))
 export const BIZ = '11111111-1111-4111-8111-111111111111'
 export const USER = '22222222-2222-4222-8222-222222222222'
 export const API_KEY = `amdhl_${'a'.repeat(48)}`
@@ -97,6 +100,11 @@ export interface MockOptions {
   promptPolls?: number
   /** What a finished prompt run reads as (inside `data`), by the mode it ran in; the default is the docs' examples. */
   promptResult?: (mode: string) => Record<string, unknown>
+  /**
+   * What `GET /search/suggestions` answers (inside `data`). Unset: the route is not on this server (a 404), and
+   * `search.query` takes no `recipe_id`. Set: the route answers, and `recipe_id` must be a library id.
+   */
+  suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown> }
   /** What `GET /search/overview` answers (inside `data`). */
   overview?: Record<string, unknown>
   /** What `GET /search/fields` answers (inside `data`), before the surface filter. */
@@ -339,7 +347,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       // falls back to the search with the server's note, as amdahl-app does.
       if (path === '/api/platform/v1/search/query' && req.method === 'POST') {
         const input = JSON.parse(body) as { query?: string; route?: string }
-        const problem = searchProblem(input)
+        const problem = searchProblem(input, options.suggestions ? (options.suggestions.library ?? SUGGESTED_LIBRARY).map((r) => String(r.id)) : null)
         if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
         if (input.route === 'research') {
           if (kind === 'api_key') {
@@ -582,6 +590,10 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       // search.overview and search.fields (data:read).
+      if (path === '/api/platform/v1/search/suggestions' && req.method === 'GET') {
+        if (!options.suggestions) return err(res, 404, 'not_found', 'No such route.')
+        return json(res, 200, { data: { for_you: [], library: SUGGESTED_LIBRARY, generated_at: '2026-11-13T22:40:02.728Z', ...options.suggestions } })
+      }
       if (path === '/api/platform/v1/search/overview' && req.method === 'GET') {
         return json(res, 200, { data: options.overview ?? overviewBody() })
       }
