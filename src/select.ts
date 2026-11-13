@@ -343,8 +343,12 @@ const PASTE_SETTLE_MS = 150
  * Leading empty lines are skipped. An empty line inside a paste is kept: the
  * terminal marks the paste, and where it does not, more input arriving right
  * after the empty line means it was pasted too.
+ *
+ * `emptyEnds`: for a question that can be skipped ("press Enter if not"), an
+ * empty line typed before anything else ends it with an empty answer, instead
+ * of waiting for text.
  */
-export function readPaste(input: MenuInput, output: NodeJS.WritableStream, question: string): Promise<string> {
+export function readPaste(input: MenuInput, output: NodeJS.WritableStream, question: string, options: { emptyEnds?: boolean } = {}): Promise<string> {
   output.write(`${question}\n`)
   // No prompt: readline's default "> " would show up again on lines it redraws.
   const rl = createInterface({ input, output, terminal: true, prompt: '' })
@@ -380,7 +384,10 @@ export function readPaste(input: MenuInput, output: NodeJS.WritableStream, quest
         lines.push(line)
         return
       }
-      if (lines.length === 0) return
+      if (lines.length === 0) {
+        if (options.emptyEnds) done()
+        return
+      }
       lines.push(line)
       clearTimeout(settle)
       settle = setTimeout(done, PASTE_SETTLE_MS)

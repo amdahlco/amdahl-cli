@@ -5,10 +5,12 @@
 
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { PassThrough, Writable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runLines } from '../src/commands/runs'
 import { MAX_KEPT } from '../src/history'
 import { RECIPES } from '../src/recipes-data'
+import { readPaste } from '../src/select'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { promptProblems } from './helpers/strict'
 import { API_KEY, GRADE_RUN, KNOWN_RUN, PROMPT_RUN, READONLY_KEY, UNKNOWN_RUN, startMockServer, type MockServer } from './helpers/mock-server'
@@ -598,6 +600,22 @@ describe('sent and feedback ask at a terminal', () => {
     expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'lemlist', sent_as: 'edited', sent_text: 'Hi Dana, my own words' })
   })
 
+  it('sent: Enter at the "changed it?" question (the real paste reader on a fake terminal) takes the default and moves on; it does not hang', async () => {
+    const io = await signedIn()
+    const input = Object.assign(new PassThrough(), { isTTY: true, isRaw: false, setRawMode(mode: boolean) { this.isRaw = mode; return this } })
+    const output = new Writable({ write: (_c, _e, done) => done() })
+    io.readPaste = (question, options) => {
+      io.prompts.push(question)
+      setTimeout(() => input.write('\r'), 20)
+      return readPaste(input, output, question, options)
+    }
+    io.answers = ['', 'dana@example.com']
+    const r = await Promise.race([cli(io, 'sent', KNOWN_RUN), new Promise<never>((_, reject) => setTimeout(() => reject(new Error('sent hung at the changed-it question')), 2000))])
+    expect(r.code).toBe(0)
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ sent_as: 'returned' })
+    expect(r.stderr).toContain('sent as returned.')
+  })
+
   it('asks only for what the command line left out, and takes the channel from the run, the recipient or the provider', async () => {
     const io = await signedIn({ optimizeResult: { ok: true, message: 'better', run_id: KNOWN_RUN } })
     await cli(io, 'optimize', write(io, 'a.txt', 'Hi'), '--channel', 'linkedin')
@@ -741,7 +759,8 @@ describe('review fixes from the QA round', () => {
   const PROMPT = 'Write a first-touch email to a Head of Platform. Name what they shipped, then ask for 15 minutes.'
 
   it('a better revision the sidecar did not keep (unchanged, reportable positive lift, a note) says so and prints the note, not "no revision wrote better email"', async () => {
-    const says = 'The better revision left an unfilled placeholder ([First Name]) in a held-out email, so it was not kept.'
+    // The sidecar's own text (amdahl-pipelines v3/prompt_opt/service/prompt_job.py): 1 reads "1 unfilled placeholder", 2 or more "N unfilled placeholders".
+    const says = 'The revised prompt wrote 1 unfilled placeholder into its held-out emails, so it is not returned, whatever its grade. Each email\'s placeholders list them.'
     const io = await signedIn({
       promptResult: () => ({
         prompt_mode: 'improve', outcome: 'unchanged', lift: 0.4, lift_reportable: true,
@@ -758,6 +777,16 @@ describe('review fixes from the QA round', () => {
     expect(out).not.toContain('No revision wrote better email')
     expect(out).not.toContain('averages 3 of 5')
     expect(r.stderr).not.toContain('Better')
+    fits80(r.stdout)
+  })
+
+  it('the sidecar note for 2 or more placeholders reads "N unfilled placeholders" and prints as it came', async () => {
+    const says = "The revised prompt wrote 3 unfilled placeholders into its held-out emails, so it is not returned, whatever its grade. Each email's placeholders list them."
+    const io = await signedIn({
+      promptResult: () => ({ outcome: 'unchanged', lift: 0.4, lift_reportable: true, grade: { original: { mean: 2.6, n: 3, emails_passing_bar: 0, bar: 4.2, lines: {} }, revised: { mean: 3, n: 3, emails_passing_bar: 0, bar: 4.2, lines: {} } }, emails: [], notes: [{ code: 'revision_left_placeholders', says }] }),
+    })
+    const r = await cli(io, 'prompt', write(io, 'p.md', PROMPT))
+    expect(flat(r.stdout)).toContain(says)
     fits80(r.stdout)
   })
 

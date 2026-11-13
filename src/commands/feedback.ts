@@ -271,7 +271,7 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
     if (str(flags['sent-text']) !== undefined) {
       answered['sent-as'] = (await io.select('Was it sent as Amdahl returned it?', ['Yes, as returned', 'No, I changed it'])) === 0 ? 'returned' : 'edited'
     } else {
-      const text = await io.readPaste('If you changed it before sending, paste it as sent, then press Enter on an empty line. If not, press Enter:')
+      const text = await io.readPaste('If you changed it before sending, paste it as sent, then press Enter on an empty line. If not, press Enter:', { emptyEnds: true })
       if (text.trim()) {
         pasted = text
         answered['sent-as'] = 'edited'
