@@ -27,6 +27,27 @@ const CONTEXT_LIMITS: Record<string, { maxItems: number; maxChars: number }> = {
   banned_phrases: { maxItems: 30, maxChars: 60 },
 }
 
+/** The refusals of a `context` block (messageOptimizer/context.ts): unknown keys, counts and lengths. `triggers` is not a key here. */
+export function contextProblems(at: string, context: unknown): string[] {
+  if (!isObject(context)) return [`${at}: Expected object`]
+  const errors = unknownKeys(at, context, CONTEXT_KEYS)
+  for (const [key, limit] of Object.entries(CONTEXT_LIMITS)) {
+    const list = context[key]
+    if (list === undefined) continue
+    if (!Array.isArray(list)) {
+      errors.push(`${at}.${key}: Expected array`)
+      continue
+    }
+    if (list.length > limit.maxItems) errors.push(`${at}.${key}: Array must contain at most ${limit.maxItems} element(s)`)
+    list.forEach((entry, j) => {
+      const text = key === 'rules' && isObject(entry) ? entry.text : entry
+      if (typeof text !== 'string') errors.push(`${at}.${key}[${j}]: Expected string`)
+      else if (text.trim().length > limit.maxChars) errors.push(`${at}.${key}[${j}]: String must contain at most ${limit.maxChars} character(s)`)
+    })
+  }
+  return errors
+}
+
 /** The refusals of a batch body, as paths (`$.items[3].channel: ...`), at most 20. */
 export function batchProblems(input: unknown): string[] {
   if (!isObject(input)) return ['$: Expected object']
@@ -52,24 +73,7 @@ export function batchProblems(input: unknown): string[] {
       if (item[key] !== undefined && !allowed.includes(String(item[key]))) errors.push(`${at}.${key}: Invalid enum value. Expected ${allowed.map((a) => `'${a}'`).join(' | ')}, received '${String(item[key])}'`)
     }
     if (item.include_tries !== undefined && typeof item.include_tries !== 'boolean') errors.push(`${at}.include_tries: Expected boolean`)
-    if (item.context !== undefined) {
-      if (!isObject(item.context)) return void errors.push(`${at}.context: Expected object`)
-      errors.push(...unknownKeys(`${at}.context`, item.context, CONTEXT_KEYS))
-      for (const [key, limit] of Object.entries(CONTEXT_LIMITS)) {
-        const list = item.context[key]
-        if (list === undefined) continue
-        if (!Array.isArray(list)) {
-          errors.push(`${at}.context.${key}: Expected array`)
-          continue
-        }
-        if (list.length > limit.maxItems) errors.push(`${at}.context.${key}: Array must contain at most ${limit.maxItems} element(s)`)
-        list.forEach((entry, j) => {
-          const text = key === 'rules' && isObject(entry) ? entry.text : entry
-          if (typeof text !== 'string') errors.push(`${at}.context.${key}[${j}]: Expected string`)
-          else if (text.trim().length > limit.maxChars) errors.push(`${at}.context.${key}[${j}]: String must contain at most ${limit.maxChars} character(s)`)
-        })
-      }
-    }
+    if (item.context !== undefined) errors.push(...contextProblems(`${at}.context`, item.context))
   })
   return errors.slice(0, 20)
 }
@@ -220,6 +224,19 @@ export function promptProblems(input: unknown): string[] {
   else if (input.prompt.length > MAX_PROMPT_CHARS) errors.push(`$.prompt: String must contain at most ${MAX_PROMPT_CHARS} character(s)`)
   if (input.mode !== undefined && input.mode !== 'improve' && input.mode !== 'grade') errors.push('$.mode: Invalid enum value. Expected \'improve\' | \'grade\'')
   if (input.channel !== undefined && !['email', 'linkedin'].includes(String(input.channel))) errors.push('$.channel: Invalid enum value')
+  if (input.context !== undefined) errors.push(...contextProblems('$.context', input.context))
+  if (input.idempotency_key !== undefined && (typeof input.idempotency_key !== 'string' || input.idempotency_key.length > 200)) errors.push('$.idempotency_key: String must contain at most 200 character(s)')
+  if (input.sender !== undefined) {
+    // messages/_sender.ts: a strict object with an email (at most 320) or a name (1 to 200), at least one.
+    const sender = input.sender
+    if (!isObject(sender)) errors.push('$.sender: Expected object')
+    else {
+      errors.push(...unknownKeys('$.sender', sender, ['email', 'name']))
+      if (sender.email === undefined && sender.name === undefined) errors.push('$.sender: name an email or a name')
+      if (sender.email !== undefined && (typeof sender.email !== 'string' || sender.email.length > 320 || !EMAIL.test(sender.email.trim()))) errors.push('$.sender.email: Invalid email')
+      if (sender.name !== undefined && (typeof sender.name !== 'string' || !sender.name.trim() || sender.name.trim().length > 200)) errors.push('$.sender.name: String must contain 1 to 200 character(s)')
+    }
+  }
   if (input.recipients !== undefined) {
     if (!Array.isArray(input.recipients)) errors.push('$.recipients: must be an array')
     else {

@@ -7,8 +7,10 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runLines } from '../src/commands/runs'
+import { MAX_KEPT } from '../src/history'
 import { RECIPES } from '../src/recipes-data'
 import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
+import { promptProblems } from './helpers/strict'
 import { API_KEY, GRADE_RUN, KNOWN_RUN, PROMPT_RUN, READONLY_KEY, UNKNOWN_RUN, startMockServer, type MockServer } from './helpers/mock-server'
 
 let server: MockServer | null = null
@@ -168,8 +170,12 @@ describe('prompt', () => {
     const err = flat(r.stderr)
     expect(err).toContain(`run ${PROMPT_RUN}`)
     expect(r.stderr).toContain(`If you stop before it ends, read it later:\n  amdahl prompt --run ${PROMPT_RUN}`)
-    expect(err).toContain('Amdahl revised your prompt.')
-    expect(err).toContain('it averages 3.4 of 5, over 2 emails, 1 passing the bar of 4.2; yours averaged 2.6 of 5, over 2 emails')
+    // Not a reportable lift: the original's mean alone, and that a revision was kept. No before and after.
+    expect(err).toContain('Amdahl kept a revised prompt. Your original averages 2.6 of 5, over 2 emails, 0 passing the bar of 4.2 on the emails held out of the revising.')
+    expect(err).not.toContain('Amdahl revised your prompt.')
+    expect(err).not.toContain('3.4')
+    expect(r.stderr).toContain('Helix, original, held out: 2.6 of 5 (2 of 5 lines)')
+    expect(r.stderr).toContain('Helix, revised, held out\n')
     // No lift unless it is reportable, and the reason is said.
     expect(err).toContain('No lift is reported: fewer than 3 held-out emails on a side')
     expect(err).not.toMatch(/Lift on the held-out/)
@@ -195,11 +201,13 @@ describe('prompt', () => {
       promptResult: () => ({
         outcome: 'improved', prompt: 'Better prompt', lift: 0.8, lift_reportable: true,
         grade: { original: { mean: 2.6, n: 3, emails_passing_bar: 0, bar: 4.2, lines: {} }, revised: { mean: 3.4, n: 3, emails_passing_bar: 1, bar: 4.2, lines: {} } },
-        emails: [], judges: { final: { model: 'm' } },
+        emails: [{ label: 'A', variant: 'original', split: 'held_out', email: 'Old.', grade: { score: 2.6, passed: 2, total: 5 } }, { label: 'A', variant: 'revised', split: 'held_out', email: 'New.', grade: { score: 3.4, passed: 3, total: 5 } }], judges: { final: { model: 'm' } },
       }),
     })
     const lift = await cli(io2, 'prompt', write(io2, 'p.md', PROMPT))
     expect(lift.stderr).toContain('Lift on the held-out recipients: +0.8.')
+    expect(flat(lift.stderr)).toContain('Amdahl revised your prompt. On the emails held out of the revising it averages 3.4 of 5, over 3 emails, 1 passing the bar of 4.2; yours averaged 2.6 of 5, over 3 emails, 0 passing the bar of 4.2.')
+    expect(lift.stderr).toContain('A, revised, held out: 3.4 of 5 (3 of 5 lines)')
     expect(lift.stdout).toBe('Better prompt\n')
   })
 
@@ -662,5 +670,68 @@ describe('sent and feedback ask at a terminal', () => {
     io.answers = []
     expect((await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--comment', 'ok')).code).toBe(0)
     expect(io.prompts).toEqual([])
+  })
+})
+
+describe('asking needs a terminal on both sides, and never --json', () => {
+  it('sent and feedback with stdout piped (amdahl sent <id> | tee) ask nothing and give the usage error', async () => {
+    const io = await signedIn()
+    io.stdoutIsTTY = false
+    io.answers = ['1', 'a@b.co', '']
+    const sent = await cli(io, 'sent', KNOWN_RUN)
+    expect(sent.code).toBe(2)
+    expect(sent.stderr).toContain('Say where it went out with --provider:')
+    const feedback = await cli(io, 'feedback', KNOWN_RUN)
+    expect(feedback.code).toBe(2)
+    expect(feedback.stderr).toContain('Say how you know with --evidence')
+    expect(io.prompts).toEqual([])
+    expect(requests('/report_send')).toHaveLength(0)
+  })
+
+  it('grade and prompt with no file never ask under --json or with stdout piped: the usage error, and no request', async () => {
+    const io = await signedIn()
+    io.answers = ['A pasted message']
+    const before = server!.log.length
+    for (const argv of [['grade', '--json'], ['prompt', '--json']]) {
+      const r = await cli(io, ...argv)
+      expect(r.code).toBe(2)
+      expect(r.json).toMatchObject({ ok: false, error: { code: 'usage' } })
+    }
+    io.stdoutIsTTY = false
+    for (const command of ['grade', 'prompt']) {
+      const r = await cli(io, command)
+      expect(r.code).toBe(2)
+      expect(r.stderr).toContain(command === 'grade' ? 'Give a file to grade, or pipe the message on stdin.' : 'Give a file with the prompt, or pipe the prompt on stdin.')
+    }
+    expect(io.prompts).toEqual([])
+    expect(server!.log.length).toBe(before)
+  })
+})
+
+describe('limits checked before a request', () => {
+  it('grade refuses a message over the 10,000 characters the server takes, and takes exactly 10,000', async () => {
+    const io = await signedIn()
+    const before = server!.log.length
+    const over = await cli(io, 'grade', write(io, 'big.txt', 'x'.repeat(10_001)))
+    expect(over.code).toBe(2)
+    expect(over.stderr).toMatch(/^Error: A message is at most 10000 characters; .*big\.txt has 10001\.\n$/)
+    expect(server!.log.length).toBe(before)
+    expect((await cli(io, 'grade', write(io, 'ok.txt', 'x'.repeat(10_000)))).code).toBe(0)
+  })
+
+  it('the strict mock refuses an optimize_prompt body the server refuses: triggers, an over-long key, a bad sender', () => {
+    expect(promptProblems({ prompt: 'p', context: { facts: ['f'] } })).toEqual([])
+    expect(promptProblems({ prompt: 'p', context: { triggers: [] } })[0]).toContain("Unrecognized key(s) in object: 'triggers'")
+    expect(promptProblems({ prompt: 'p', context: { facts: Array.from({ length: 11 }, () => 'f') } })[0]).toContain('at most 10 element(s)')
+    expect(promptProblems({ prompt: 'p', idempotency_key: 'k'.repeat(201) })[0]).toContain('idempotency_key')
+    expect(promptProblems({ prompt: 'p', idempotency_key: 'k'.repeat(200) })).toEqual([])
+    expect(promptProblems({ prompt: 'p', sender: {} })[0]).toContain('name an email or a name')
+    expect(promptProblems({ prompt: 'p', sender: { email: 'not-an-email' } })[0]).toContain('$.sender.email')
+    expect(promptProblems({ prompt: 'p', sender: { name: 'Dana', extra: 1 } })[0]).toContain("'extra'")
+    expect(promptProblems({ prompt: 'p', sender: { email: 'dana@example.com' } })).toEqual([])
+  })
+
+  it('keeps 50 runs, as the README and the PR say', () => {
+    expect(MAX_KEPT).toBe(50)
   })
 })

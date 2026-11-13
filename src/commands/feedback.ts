@@ -95,11 +95,12 @@ async function readText(ctx: Ctx, path: string): Promise<string> {
 }
 
 /**
- * Whether a missing value is asked at the terminal instead of refused: a person is at a terminal and
- * is not reading `--json`. An agent, CI, a pipe and AMDAHL_NO_PROMPT=1 get the usage error as before.
+ * Whether a missing value is asked at the terminal instead of refused: a person is at a terminal (stdin
+ * and stdout both) and is not reading `--json`. An agent, CI, a pipe on either side (`amdahl sent <id> |
+ * tee`) and AMDAHL_NO_PROMPT=1 get the usage error as before.
  */
-function askingAllowed(ctx: Ctx): boolean {
-  return atTerminal(ctx) && !ctx.out.json
+export function askingAllowed(ctx: Ctx): boolean {
+  return atTerminal(ctx) && ctx.io.stdoutIsTTY && !ctx.out.json
 }
 
 /** `amdahl feedback <run-id> --evidence <how> [--sent-text <file>] [--comment <text>] [--outcome <what>]`. */

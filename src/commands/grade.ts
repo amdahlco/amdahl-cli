@@ -20,8 +20,8 @@ import { resolveCredential, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { rememberRun } from '../history'
-import { atTerminal } from '../terminal'
 import { field, record, records, wrap } from '../text'
+import { askingAllowed } from './feedback'
 import { channelOf, credentialOrSignIn, optimizeOne, requestOptions } from './optimize'
 
 /** The rubric's lines, said as the docs name them. An unknown id prints as the server sent it. */
@@ -123,6 +123,9 @@ export function gradeLines(result: Record<string, unknown>): string[] {
   return lines
 }
 
+/** The longest message the server takes, counted with `.length` as the server counts it. */
+const MAX_MESSAGE_CHARS = 10_000
+
 /** What `amdahl grade` says to a person who gave it nothing to grade. */
 const PASTE_PROMPT = 'Paste the email or LinkedIn message to grade, then press Enter on an empty line:'
 
@@ -135,7 +138,7 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
   let message: string
   let credential
   if (file === undefined) {
-    if (atTerminal(ctx)) {
+    if (askingAllowed(ctx)) {
       credential = await credentialOrSignIn(ctx)
       message = await io.readPaste(PASTE_PROMPT)
       file = '-'
@@ -153,6 +156,7 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
     message = file === '-' ? await io.readStdin() : readTextFile(file)
   }
   if (!message.trim()) throw usageError(`${file === '-' ? 'Stdin' : file} is empty.`)
+  if (message.length > MAX_MESSAGE_CHARS) throw usageError(`A message is at most ${MAX_MESSAGE_CHARS} characters; ${file === '-' ? 'this one' : file} has ${message.length}.`)
 
   credential ??= await resolveCredential(ctx)
   if (!out.json && io.stderrIsTTY) out.info('Grading it...')

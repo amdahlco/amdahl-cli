@@ -554,7 +554,9 @@ there is one, goes to stdout and the report to stderr, so
 `amdahl prompt p.md > better.md` saves the prompt. The report gives the
 prompt's grade, the emails it wrote that the grade rests on, and a lift only
 when it is reportable (otherwise why not: for example fewer than 3 held-out
-emails on a side). The emails that trained the revision are not lift and are
+emails on a side). Without a reportable lift it prints the original's mean
+alone and says a revision was kept: the revised and the original means are set
+against each other only when the lift is reportable. The emails that trained the revision are not lift and are
 in `--json`. A grade is one reading and does not predict replies; a mean of
 null is "not graded". Exit 1 when the run failed or is still going. With `--json`
 it prints `{ok, file, started, result}`.
@@ -819,8 +821,9 @@ recipient, the run (when this computer made it) or the provider, and the
 command prints what it chose before it sends. What you gave is checked first,
 so a typo costs no answers, and Ctrl+C sends nothing. With `--json`, in an
 agent (`CLAUDECODE`, `CURSOR_AGENT`), in CI, with `AMDAHL_NO_PROMPT=1` or with
-stdin not a terminal, nothing is asked and a missing flag is the usage error
-it always was.
+stdin or stdout not a terminal (`amdahl sent <id> | tee`), nothing is asked and a
+missing flag is the usage error it always was. `grade` and `prompt` with no
+file paste only under the same rule.
 
 ## Next steps
 

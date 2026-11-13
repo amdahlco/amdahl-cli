@@ -25,8 +25,8 @@ import { apiClient, call, resolveCredential, str, type Credential, type Ctx } fr
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
 import { rememberRun } from '../history'
-import { atTerminal } from '../terminal'
 import { clip, field, paragraphs, record, records, wrap } from '../text'
+import { askingAllowed } from './feedback'
 import { CHANNELS, credentialOrSignIn, oneOf, readContext } from './optimize'
 
 const PLATFORM = '/api/platform/v1'
@@ -97,13 +97,15 @@ function lineRates(grade: Record<string, unknown> | null): string[] {
 const SPLIT: Record<string, string> = { held_out: 'held out', graded: 'graded', train: 'train' }
 
 /** One email the run wrote: who it is for, which version, its grade, and the email. */
-function emailLines(email: Record<string, unknown>): string[] {
+function emailLines(email: Record<string, unknown>, showRevisedScore: boolean): string[] {
   const grade = record(email.grade)
   const score = typeof grade?.score === 'number' ? `${grade.score} of 5` : 'not graded'
   const passed = typeof grade?.passed === 'number' && typeof grade?.total === 'number' ? ` (${grade.passed} of ${grade.total} lines)` : ''
   const split = SPLIT[field(email.split)] ?? field(email.split)
   const head = [field(email.label), field(email.variant), split].filter(Boolean).join(', ')
-  const lines = [`${head || 'Email'}: ${score}${passed}`]
+  // A revised email's score beside the original's is a before and after: only a reportable lift may show one.
+  const hidden = field(email.variant) === 'revised' && !showRevisedScore
+  const lines = [hidden ? `${head || 'Email'}` : `${head || 'Email'}: ${score}${passed}`]
   const text = paragraphs(email.email)
   if (text) lines.push(...wrap(text, 80, '    '))
   const holes = records(email.placeholders).map((p) => field(p.placeholder)).filter(Boolean)
@@ -127,8 +129,12 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
 
   const was = side(original)
   const now = side(revised)
-  if (outcome === 'improved') {
+  // Only a reportable lift may set the revision against the original: its means side by side are a before and after.
+  const reportable = run.lift_reportable === true && typeof run.lift === 'number'
+  if (outcome === 'improved' && reportable) {
     lines.push(...wrap(`Amdahl revised your prompt. On the emails held out of the revising it averages ${now ?? 'not graded'}; yours averaged ${was ?? 'not graded'}.`))
+  } else if (outcome === 'improved') {
+    lines.push(...wrap(`Amdahl kept a revised prompt. Your original averages ${was ?? 'not graded'} on the emails held out of the revising.`))
   } else if (outcome === 'unchanged') {
     lines.push(...wrap(`No revision wrote better email on the held-out recipients, so your prompt stays as it is. ${was ? `It averages ${was}.` : 'Its emails could not be graded.'}`))
   } else {
@@ -154,7 +160,7 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
   const shown = emails.filter((e) => field(e.split) !== 'train')
   if (shown.length > 0) {
     lines.push('', 'Emails it wrote:')
-    shown.forEach((email, i) => lines.push(...(i > 0 ? [''] : []), ...emailLines(email)))
+    shown.forEach((email, i) => lines.push(...(i > 0 ? [''] : []), ...emailLines(email, reportable)))
   }
   const trained = emails.length - shown.length
   if (trained > 0) lines.push('', ...wrap(`${count(trained, 'email')} trained the revision. Their scores are not lift; they are in --json.`))
@@ -273,7 +279,7 @@ export async function prompt(ctx: Ctx, args: string[]): Promise<number> {
   let text: string
   let credential: Credential | undefined
   if (file === undefined) {
-    if (atTerminal(ctx)) {
+    if (askingAllowed(ctx)) {
       credential = await credentialOrSignIn(ctx)
       text = await io.readPaste('Paste the prompt, then press Enter on an empty line:')
       file = '-'
