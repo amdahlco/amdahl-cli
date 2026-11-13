@@ -822,15 +822,22 @@ describe('review fixes from the QA round', () => {
     expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'heyreach', channel: 'linkedin_message' })
   })
 
-  it('sent with only --channel missing asks nothing and is the usage error, and the help says so', async () => {
+  it('sent with only --channel missing asks what was sent at a terminal, and is the usage error where nothing can be asked', async () => {
     const io = await signedIn()
+    io.answers = ['2']
     const r = await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--sent-as', 'returned', '--provider-send-id', 'x1')
-    expect(r.code).toBe(2)
-    expect(r.stderr).toContain('Say what was sent with --channel:')
+    expect(r.code).toBe(0)
+    expect(io.prompts).toEqual(['What was sent? [Email | LinkedIn message | LinkedIn invite | LinkedIn InMail]'])
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'other', channel: 'linkedin_message' })
+    // Where it cannot ask (a script, --json, CI): the usage error, and nothing asked.
+    io.prompts.length = 0
+    io.env.AMDAHL_NO_PROMPT = '1'
+    const script = await cli(io, 'sent', KNOWN_RUN, '--provider', 'other', '--sent-as', 'returned', '--provider-send-id', 'x1')
+    expect(script.code).toBe(2)
+    expect(script.stderr).toContain('Say what was sent with --channel:')
     expect(io.prompts).toEqual([])
     const help = await cli(io, 'sent', '--help')
-    expect(flat(help.stdout)).toContain('If --channel is the only thing missing, give it: that is a usage error.')
-    expect(flat(help.stdout)).not.toContain('The channel comes from the run')
+    expect(flat(help.stdout)).toContain('Only when none of these says (a tool that sends both, a send id and no recipient) it asks what was sent.')
   })
 
   it('prompt --run --no-wait reads at once, without wait_ms; waiting reads send it', async () => {
@@ -1187,25 +1194,28 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect(failed).not.toContain('internal hint')
   })
 
-  it('sent: Smartlead and Woodpecker take LinkedIn reports; a tool that sends both is not guessed at when nothing says which', async () => {
+  it('sent: Smartlead and Woodpecker take LinkedIn reports; a tool that sends both is asked which when nothing says', async () => {
     const io = await signedIn()
     for (const provider of ['smartlead', 'woodpecker']) {
       const r = await cli(io, 'sent', KNOWN_RUN, '--provider', provider, '--channel', 'linkedin_message', '--sent-as', 'returned', '--provider-send-id', 'x1')
       expect(r.code).toBe(0)
       expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider, channel: 'linkedin_message' })
     }
-    // At a terminal, with a send id only (no recipient, no remembered run): Woodpecker sends both, so the channel is asked for, not recorded as email.
-    const before = requests('/messages/report_send').length
-    io.answers = ['13', '']
+    // At a terminal, with a send id only (no recipient, no remembered run): Woodpecker sends both, so the channel is asked for (the
+    // third and last question), not recorded as email and not an error after the other answers.
+    io.answers = ['13', '', '3']
     const unsure = await cli(io, 'sent', KNOWN_RUN, '--provider-send-id', 'x2')
-    expect(unsure.code).toBe(2)
-    expect(unsure.stderr).toContain('Say what was sent with --channel')
-    expect(unsure.stderr).toContain('Woodpecker sends email and LinkedIn')
-    expect(requests('/messages/report_send')).toHaveLength(before)
+    expect(unsure.code).toBe(0)
+    expect(io.prompts.at(-1)).toBe('What was sent? [Email | LinkedIn message | LinkedIn invite | LinkedIn InMail]')
+    expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'woodpecker', channel: 'linkedin_invite' })
     // A tool that sends one kind needs no word on it.
     io.answers = ['2', '']
     expect((await cli(io, 'sent', KNOWN_RUN, '--provider-send-id', 'x3')).code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: 'instantly', channel: 'email' })
+    // Where nothing can be asked it is still the usage error.
+    const quiet = await signedIn()
+    quiet.env.AMDAHL_NO_PROMPT = '1'
+    expect((await cli(quiet, 'sent', KNOWN_RUN, '--provider', 'woodpecker', '--sent-as', 'returned', '--provider-send-id', 'x4')).code).toBe(2)
   })
 
   it('a sentence is never ended at e.g., i.e., vs. or etc., nor inside an open bracket', () => {
@@ -1218,6 +1228,8 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     expect(firstSentence('Human-readable deal name from the CRM (e.g. "Acme - Expansion" or "Globex - Renewal 2026").', 50)).toBe('Human-readable deal name from the CRM...')
     // A long sentence is cut at its last clause when there is one past halfway, not mid-thought.
     expect(firstSentence('Raw CRM pipeline stage id for the deal (e.g. "closedwon"); many tenants carry opaque numeric ids that the console maps to labels for display.', 100)).toBe('Raw CRM pipeline stage id for the deal (e.g. "closedwon")...')
+    // A closed bracket inside an open one does not hide it: cut back to the first bracket still open.
+    expect(firstSentence('Resolved stage label for the deal (e.g. "Discovery", "Research", "Closed Won (Signed)", "Closed Lost") from the CRM.', 70)).toBe('Resolved stage label for the deal...')
     // No abbreviation, no bracket: as before.
     expect(firstSentence('One sentence. Two sentence.', 100)).toBe('One sentence.')
   })

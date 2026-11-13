@@ -832,11 +832,13 @@ you gave no send id or recipient; it must be an email address or a LinkedIn
 profile URL, and a name such as `priya` is asked for once more, then refused)
 and whether you changed it first (paste the
 message as sent, or press Enter for as returned; with `--sent-text` given, a
-yes or no). It never asks for the channel. When it asks for something else
-and `--channel` is not given, it picks one and prints it before it sends: email
-for an email address as the recipient, LinkedIn for a LinkedIn profile, else the
-run's channel (when this computer made the run), else the provider's. If
-`--channel` is the only thing missing, it is a usage error: give it. A tool and a
+yes or no). Without `--channel` it picks one and prints it before it sends:
+email for an email address as the recipient, LinkedIn for a LinkedIn profile,
+else the run's channel (when this computer made the run), else the channel of a
+tool that sends one kind. Only when none of these says (a tool that sends both,
+a send id and no recipient) it asks what was sent: Email, LinkedIn message,
+LinkedIn invite or LinkedIn InMail. Where it cannot ask, a missing `--channel`
+is the usage error. A tool and a
 channel that cannot go together (Instantly with a LinkedIn profile, HeyReach with an
 email) are refused before anything is sent; `other` sends both. A prompt run's id
 (`opt_...`) can't be reported as sent or given feedback. What you gave is checked first,

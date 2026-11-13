@@ -282,11 +282,13 @@ async function buildItem(ctx: Ctx, args: string[], pasted?: string): Promise<Rec
 /**
  * At a terminal, ask for what a report still needs: where it went out, who it
  * went to, and whether it was changed first. At most three questions, each
- * with a default; a value the command line gave is never asked again. The
- * channel is never asked: when something else is asked and `--channel` is not
- * given, it is the recipient's (an email address is email, a LinkedIn profile
- * LinkedIn), else the run's, else the provider's, and is printed. When only
- * `--channel` is missing, nothing is asked and the usage error stands. Flags that are given are checked first, so a typo costs no
+ * with a default; a value the command line gave is never asked again. When
+ * `--channel` is not given it is worked out: the recipient's (an email address is
+ * email, a LinkedIn profile LinkedIn), else the run's, else the one kind a tool
+ * sends, and is printed. Only when none of these says (a tool that sends both, a
+ * send id and no recipient) the channel is asked, the last of the three. Where
+ * nothing can be asked, the usage error stands. Flags that are given are checked
+ * first, so a typo costs no
  * answers. Returns the flags to send with, and the pasted text of an edit.
  */
 async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags']; pasted?: string }> {
@@ -296,7 +298,8 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
   const needProvider = str(flags.provider) === undefined
   const needKey = ![flags['provider-send-id'], flags.recipient, flags['recipient-key-hash']].some((v) => typeof v === 'string' && v.trim())
   const needHow = str(flags['sent-as']) === undefined
-  if (!rawId || !(needProvider || needKey || needHow)) return { flags }
+  const needChannel = str(flags.channel) === undefined
+  if (!rawId || !(needProvider || needKey || needHow || needChannel)) return { flags }
   runId(rawId, usage)
   // What is given is checked now, with stand-ins for what is asked.
   // The stand-in channel is one the given provider can send, so it is not refused for a pair it was never asked.
@@ -333,11 +336,9 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
     }
   }
   if (str(flags.channel) === undefined) {
-    const channel = inferChannel(ctx, rawId, answered)
-    if (channel === undefined) {
-      throw usageError(`Say what was sent with --channel: ${[...SEND_CHANNELS, ...Object.keys(CHANNEL_ALIASES)].join(', ')}.`, `${PROVIDER_NAMES[String(answered.provider)] ?? String(answered.provider)} sends email and LinkedIn, and nothing here says which this was. ${usage}`)
-    }
-    answered.channel = channel
+    // The recipient, the run or a one-kind tool says what it was. When none does (a tool that sends both,
+    // a send id and no recipient), a person at a terminal is asked: it is the last of at most three questions.
+    answered.channel = inferChannel(ctx, rawId, answered) ?? ASKED_CHANNELS[await io.select('What was sent?', ASKED_CHANNELS.map(([, label]) => label))]![0]
   }
   // A tool and a channel that can't go together are refused before anything is sent.
   checkPair(String(answered.provider), String(answered.channel))
@@ -349,6 +350,14 @@ async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags'];
 function isRecipient(text: string): boolean {
   return EMAIL_WHOLE_VALUE.test(text) || LINKEDIN_PROFILE.test(text)
 }
+
+/** What is asked when nothing says what was sent: the channel the report takes, and how it reads in the menu. */
+const ASKED_CHANNELS: readonly (readonly [string, string])[] = [
+  ['email', 'Email'],
+  ['linkedin_message', 'LinkedIn message'],
+  ['linkedin_invite', 'LinkedIn invite'],
+  ['linkedin_inmail', 'LinkedIn InMail'],
+]
 
 /** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
 function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string | undefined {
