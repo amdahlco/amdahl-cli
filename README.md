@@ -320,7 +320,12 @@ amdahl status                # can this workspace optimize, and what blocks it
 amdahl optimize draft.md     # rewrite one message (or pipe it in with -, or run it bare and paste)
 amdahl optimize --list drafts.csv   # rewrite a whole list in one batch
 amdahl optimize --list drafts.csv --for lemlist --channel email   # and a CSV lemlist imports
+amdahl grade draft.md        # grade a message: a score and the lines behind it
+amdahl prompt prompt.md      # grade or improve a reusable prompt by the emails it writes
 amdahl search "what objections came up in lost deals?"   # ask about your customers
+amdahl recipes               # the console's questions; amdahl search --recipe <id> runs one
+amdahl data                  # what the workspace holds, and what a search can filter on
+amdahl runs                  # your latest runs; amdahl run <run-id> opens one
 amdahl connections           # what is connected, and whether it is healthy
 amdahl connect hubspot       # open the console's add page, to add a CRM or call recorder
 amdahl open                  # open this workspace in the console
@@ -365,7 +370,17 @@ amdahl status
 amdahl optimize [<file>... | -] [--channel email|linkedin] [--evidence off|workspace]
                 [--on-unsupported flag|remove] [--tries] [--context <file.json>]
 amdahl optimize --list <file.csv|file.jsonl> [--no-wait] [--batch <id>] [--force] [--for <tool>] [the optimize flags]
+amdahl grade <file|-> [--channel email|linkedin] [--evidence off|workspace] [--context <file.json>]
+amdahl prompt <file|-> [--mode improve|grade] [--recipients <file.json>] [--channel email|linkedin]
+                [--context <file.json>] [--no-wait]
+amdahl prompt --run <id> [--no-wait]
+amdahl runs [--limit <n>]
+amdahl run <run-id>
+amdahl data [--surface interactions|deals|deal_qualification]
+amdahl recipes
 amdahl search "<question>" [--research] [--limit <n>]
+amdahl search --recipe <id> [--account|--products|--messages|--objection <text>]
+amdahl search --research-id <id>
 amdahl connections [--all]
 amdahl connect [<connector>] [--no-browser]
 amdahl open [--no-browser]
@@ -422,6 +437,35 @@ cited answer, then what the answer rests on under `Details:` (its
 `content_blocks`, in the order the job presented them), then up to three
 questions to ask next.
 
+When a research job starts, the CLI prints its id (`Research id: ...`) and how
+to read it later. `amdahl search --research-id <id>` reads a job started
+earlier and waits for it, then prints it as `--research` does (with
+`--json`, `{ok, research}`). It needs a key that can read research (a
+Customer agent key); a sign-in gets exit 4 and the line on the key. A job
+that is still running at the end of the wait exits 1 and gives the id again.
+
+### Recipes
+
+```sh
+amdahl recipes
+amdahl search --recipe account-brief --account "Acme"
+amdahl search --recipe whitespace --products "Analytics, Forecasting"
+amdahl search --recipe stalled-deals
+```
+
+`recipes` lists the console's recipe library: the same ids, titles,
+fill-ins and search questions (`src/recipes-data.ts` names the file and commit
+they are copied from). Twelve of the library's recipes run as a search; the
+rest are prompts for an AI client and are in the console. `search --recipe
+<id>` asks a recipe's question with its fill-in in place. A fill-in is a flag
+named for it (`--account`, `--products`, `--messages`, `--objection`); one the
+recipe needs and was not given, or one it has no use for, exits 2 before any
+request. A fill-in is cut at 300 characters, as the console cuts it, and the
+CLI says so. `--research` and `--limit` work with a recipe; a question beside
+`--recipe` is refused. With `--json` the result is the same answer a search
+gives, and `amdahl recipes --json` lists every recipe with its question and
+fill-ins.
+
 Each table prints as a plain ASCII table that fits 80 columns: a long cell
 wraps (a column is narrowed to its longest word first, so an id or a timestamp
 stays whole), a cell past four lines is cut with `...`, a word wider than its
@@ -444,6 +488,115 @@ A workspace with nothing connected answers with `setup_needed`: the CLI
 prints its message, which carries the console link, then
 `Connect your CRM or call recorder: amdahl connect`. With no rows, it prints
 the server's one line on how fresh the data is, or `Nothing matched.`
+
+## Grade a message
+
+```sh
+amdahl grade draft.md --evidence workspace
+```
+
+`grade` grades a draft and writes nothing (`POST /messages/optimize` with
+`mode: "grade"`). The file is the message; `-` reads stdin; with no file, at a
+terminal, you paste it. It takes `--channel`, `--evidence` and `--context`;
+`--tries` and `--on-unsupported` belong to a rewrite, which a grade is not,
+so they are unknown options here.
+
+```
+Grade 4.2 of 5: 4 of 5 lines passed.
+It meets the bar of 4.2.
+
+The lines it rests on:
+  pass  Relevant positioning
+        It names what Corvid shipped.
+  ...
+  fail  Differentiation
+        It reads like boilerplate.
+
+Checked against your calls.
+
+This is one reading by claude-sonnet-5-5. It measures the message against the
+rubric and your evidence. It does not predict replies. ...
+```
+
+The score is printed as the API returns it, and it always comes with the five
+lines it rests on, each with its verdict and reason. Without
+`--evidence workspace` only the ask is evaluated: the four lines that read your
+customers' calls say "Not evaluated", and the score says it rests on 1 of the 5
+lines. A line that could not be evaluated is not a fail. When no line could be,
+the grade is `Not graded.`, never 0. Every grade says it is one reading and does
+not predict replies. The run id comes last; `amdahl run <id>` opens it. With
+`--json` it prints `{ok, file, result}`: the grade is `.result.grade`.
+
+## Grade or improve a prompt
+
+```sh
+amdahl prompt prompt.md --recipients recipients.json
+amdahl prompt prompt.md --mode grade
+amdahl prompt --run <id>
+```
+
+`prompt` grades or improves a reusable prompt (the instructions a writer
+follows to write an outbound email to any recipient) by the emails it writes
+(`POST /messages/optimize_prompt`, then `GET /messages/optimize_prompt/:id`).
+One message is for `optimize`: a prompt that names one recipient is refused.
+`--mode improve` (the default) revises the prompt and returns it only when the
+revision wrote better email on recipients held out of the revising; `--mode
+grade` writes one email per recipient and grades each. `--recipients` is a
+JSON file of 1 to 6 `{"recipient": {...}}` objects (`name`, `company`, `email`,
+`domain`, `linkedin_url`, `attributes`; also `recipient_notes` and `label`).
+Improve needs two or more. Left out, Amdahl picks up to six of your workspace's
+accounts. `--channel` and `--context` are as in `optimize`.
+
+A run takes a few minutes. The command prints the run id at once and waits
+(one read of up to 30 seconds after another, up to 20 minutes); `--no-wait`
+starts it and stops, and `--run <id>` reads it later. The revised prompt, when
+there is one, goes to stdout and the report to stderr, so
+`amdahl prompt p.md > better.md` saves the prompt. The report gives the
+prompt's grade, the emails it wrote that the grade rests on, and a lift only
+when it is reportable (otherwise why not: for example fewer than 3 held-out
+emails on a side). Without a reportable lift it prints the original's mean
+alone and says a revision was kept: the revised and the original means are set
+against each other only when the lift is reportable. The emails that trained the revision are not lift and are
+in `--json`. A grade is one reading and does not predict replies; a mean of
+null is "not graded". Exit 1 when the run failed or is still going. With `--json`
+it prints `{ok, file, started, result}`.
+
+## Your runs
+
+```sh
+amdahl runs
+amdahl run 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16
+```
+
+`run <run-id>` shows one optimize run you made (`GET
+/messages/optimize/runs/:id`): your draft, then the message Amdahl returned,
+what it left out and how much context you sent. Only the person who made a run
+can open it. A grade writes no message, and says so. A prompt run's id starts
+with `opt_`: read it with `amdahl prompt --run <id>`.
+
+`runs` lists the latest runs made **from this computer**: the API has no read
+that lists a person's runs (the console keeps its own list in the browser), so
+the CLI keeps the ids it started in `runs.json` beside `config.json`: the run
+id, when, the kind (`optimize`, `grade` or `prompt`), the channel and the
+workspace, for the last 50 runs, in an owner-only file. Never a
+message, a draft or a prompt. Runs made in the console or an AI client are not
+in it, but their ids open with `amdahl run`. `--limit <n>` shows more than the
+latest ten; `--json` prints `{ok, source, note, total, runs}`.
+
+## What the workspace holds
+
+```sh
+amdahl data
+amdahl data --surface deals
+```
+
+`data` shows what a search can read: each surface's live row count and the
+span of its dates (`GET /search/overview`), then the fields a search can
+filter on (`GET /search/fields`). A count that could not be read says
+`unknown`, never 0. `--surface interactions|deals|deal_qualification` lists
+one surface's fields with their type, meaning and the values they are known to
+hold. Every line fits 80 columns. With `--json` it prints `{ok, overview,
+fields}`.
 
 ## Connections
 
@@ -625,8 +778,9 @@ stores two.
 (`POST /messages/report_send`). A report from a CLI sign-in is stored as
 `reported_via: cli`. The flags are the report's fields: `--provider`
 (`lemlist`, `instantly`, `outreach`, `salesloft`, `hubspot`, `salesforce`,
-`gmail`, `heyreach`, `apollo`, `linkedin_manual`, `other`; the server's
-list, so use `other` for a sender that is not on it), `--channel` (`email`,
+`gmail`, `heyreach`, `apollo`, `smartlead`, `reply_io`, `lgm`, `woodpecker`,
+`linkedin_manual`, `other`; the server's list, so use `other` for a sender that
+is not on it), `--channel` (`email`,
 `linkedin_invite`, `linkedin_message`, `linkedin_inmail`; `linkedin` is
 accepted and means `linkedin_message`, as in `amdahl optimize --channel`),
 `--sent-as` (`returned` or `edited`) and `--sent-at` (a time with a time
@@ -652,6 +806,26 @@ or `--recipient-key-hash`, not both: the server refuses the pair as
 server's limits first, and a mistake is a usage error that names the flag. It
 counts a text's length as the server does, in UTF-16 units, so an emoji counts
 as two. A send the server did not store prints why and exits 1.
+
+### Asking what is missing
+
+At a terminal, `feedback` and `sent` ask for what you leave out instead of
+exiting 2, with a default for each, and never more than three questions.
+`feedback <run-id>` asks how you know (`--evidence`), then what happened
+(`--outcome`) when you gave no outcome, text or comment. `sent <run-id>` asks
+where it went out (the providers, a menu), who it went to (a recipient, when
+you gave no send id or recipient) and whether you changed it first (paste the
+message as sent, or press Enter for as returned; with `--sent-text` given, a
+yes or no). It never asks for the channel. When it asks for something else
+and `--channel` is not given, it picks one and prints it before it sends: email
+for an email address as the recipient, LinkedIn for a LinkedIn profile, else the
+run's channel (when this computer made the run), else the provider's. If
+`--channel` is the only thing missing, it is a usage error: give it. What you gave is checked first,
+so a typo costs no answers, and Ctrl+C sends nothing. With `--json`, in an
+agent (`CLAUDECODE`, `CURSOR_AGENT`), in CI, with `AMDAHL_NO_PROMPT=1` or with
+stdin or stdout not a terminal (`amdahl sent <id> | tee`), nothing is asked and a
+missing flag is the usage error it always was. `grade` and `prompt` with no
+file paste only under the same rule.
 
 ## Next steps
 
@@ -919,7 +1093,7 @@ code shown in the terminal; then the key is printed once and stored nowhere.
 | code | meaning |
 |---|---|
 | 0 | ok |
-| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a failed item in `optimize --list`, a send `sent` could not store, research that failed or is still running, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
+| 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a failed item in `optimize --list`, a send `sent` could not store, research that failed or is still running, a prompt run that failed or is still going, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
 | 2 | usage (also bare `amdahl` in CI, with `AMDAHL_NO_PROMPT=1` or with `--json`) |
 | 3 | not signed in (401, `invalid_grant`, no credential) |
 | 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`, `missing_scope`; also research that started but this credential cannot read) |

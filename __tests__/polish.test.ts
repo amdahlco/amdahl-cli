@@ -250,20 +250,24 @@ describe('<command> --help prints that command only', () => {
 describe('sent: providers and channels', () => {
   const base = (provider: string, channel: string) => ['sent', KNOWN_RUN, '--provider', provider, '--channel', channel, '--sent-as', 'returned', '--provider-send-id', 'x1']
 
-  it("lists the server's providers in --help and in the refusal of one that is not there (smartlead is not)", async () => {
-    // The CLI list is the server's list (messages.report_send), in order.
+  it("lists the server's providers in --help and in the refusal of one that is not there (nosuchtool is not)", async () => {
+    // The CLI list is the server's list (messages.report_send), in order, with the four 0.5 added.
     expect(SEND_PROVIDERS).toEqual([...SERVER_PROVIDERS])
-    expect(SEND_PROVIDERS).not.toContain('smartlead')
+    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker']) expect(SEND_PROVIDERS).toContain(added)
     const io = await signedIn()
     const before = server!.log.length
-    const r = await cli(io, ...base('smartlead', 'email'))
+    const r = await cli(io, ...base('nosuchtool', 'email'))
     expect(r.code).toBe(2)
     expect(r.stderr).toBe(
-      `Error: --provider must be one of: ${SEND_PROVIDERS.join(', ')}.\n"smartlead" is not on the list. For a sender that is not, use --provider other.\n`
+      `Error: --provider must be one of: ${SEND_PROVIDERS.join(', ')}.\n"nosuchtool" is not on the list. For a sender that is not, use --provider other.\n`
     )
     expect(server!.log.length).toBe(before)
-    // `other` works.
+    // `other` works, and so does each provider the server added.
     expect((await cli(io, ...base('other', 'email'))).code).toBe(0)
+    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker']) {
+      expect((await cli(io, ...base(added, 'email'))).code).toBe(0)
+      expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: added })
+    }
   })
 
   it('accepts linkedin and sends it as linkedin_message, as optimize --channel linkedin says it; the others stay as they are', async () => {

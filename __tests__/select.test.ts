@@ -481,6 +481,27 @@ describe('readPaste', () => {
     expect(r).toMatchObject({ text: 'draft' })
   })
 
+  it('with emptyEnds, Enter before any text ends it with an empty answer; text typed first still reads to the empty line', async () => {
+    const skip = terminal()
+    const skipped = readPaste(skip.input, skip.output, 'Changed it?', { emptyEnds: true })
+    skip.input.write('\r')
+    expect(await Promise.race([skipped, new Promise((r) => setTimeout(() => r('hung'), 1000))])).toBe('')
+    expect(skip.input.isRaw).toBe(false)
+    expect(skip.drawn().endsWith('\u001b[?2004l')).toBe(true)
+
+    const t = terminal()
+    const typed = readPaste(t.input, t.output, 'Changed it?', { emptyEnds: true })
+    t.input.write('my words\r')
+    await new Promise((r) => setTimeout(r, 20))
+    t.input.write('\r')
+    expect(await typed).toBe('my words')
+  })
+
+  it('without emptyEnds, a message prompt still waits through a stray Enter (Ctrl+D or Ctrl+C leaves)', async () => {
+    const r = await paste(['\r', 'draft\r', '\r'], 200)
+    expect(r).toMatchObject({ text: 'draft' })
+  })
+
   it('Ctrl+D ends it with what was typed', async () => {
     const r = await paste(['draft\r', '\u0004'], 20)
     expect(r).toMatchObject({ text: 'draft' })

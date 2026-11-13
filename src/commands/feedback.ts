@@ -25,13 +25,19 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
+import { currentProfile, findRun } from '../history'
+import { atTerminal } from '../terminal'
 import { clip, field, records } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
 export const FEEDBACK_OUTCOMES = ['used', 'used_with_edits', 'not_used', 'unsure']
 export const FEEDBACK_EVIDENCE = ['did_it_myself', 'reported_to_me', 'inferred']
-export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'linkedin_manual', 'other']
+/**
+ * The `provider` values `messages.report_send` accepts, in the server's order: `SEND_PROVIDERS` in
+ * amdahl-app `src/shared/providers/registry.generated.ts`. A provider added there belongs here too.
+ */
+export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'smartlead', 'reply_io', 'lgm', 'woodpecker', 'linkedin_manual', 'other']
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
 /**
  * `amdahl optimize --channel` says `linkedin`; the server's report names the kind of LinkedIn
@@ -66,7 +72,7 @@ function oneOf(flag: string, value: string | undefined, allowed: string[]): stri
 }
 
 /** The run id the command was given, which must be one `amdahl optimize` printed. */
-function runId(value: string, usage: string): string {
+export function runId(value: string, usage: string): string {
   if (!UUID.test(value)) throw usageError(`"${value.length > 40 ? `${value.slice(0, 37)}...` : value}" is not a run id.`, `A run id looks like 9fd4f2e3-bc8e-436b-86d7-a677a89e8d16; \`amdahl optimize\` prints it after each run. ${usage}`)
   return value
 }
@@ -88,18 +94,36 @@ async function readText(ctx: Ctx, path: string): Promise<string> {
   return path === '-' ? await ctx.io.readStdin() : readTextFile(path)
 }
 
+/**
+ * Whether a missing value is asked at the terminal instead of refused: a person is at a terminal (stdin
+ * and stdout both) and is not reading `--json`. An agent, CI, a pipe on either side (`amdahl sent <id> |
+ * tee`) and AMDAHL_NO_PROMPT=1 get the usage error as before.
+ */
+export function askingAllowed(ctx: Ctx): boolean {
+  return atTerminal(ctx) && ctx.io.stdoutIsTTY && !ctx.out.json
+}
+
 /** `amdahl feedback <run-id> --evidence <how> [--sent-text <file>] [--comment <text>] [--outcome <what>]`. */
 export async function feedback(ctx: Ctx, args: string[]): Promise<number> {
   const usage = `Usage: ${amdahlCommand('feedback <run-id> --evidence did_it_myself [--outcome used] [--sent-text <file>] [--comment <text>]')}`
   const [rawId, ...rest] = args
   if (!rawId || rest.length > 0) throw usageError('Give one run id: the one `amdahl optimize` printed.', usage)
   const id = runId(rawId, usage)
-  const evidence = oneOf('evidence', str(ctx.flags.evidence), FEEDBACK_EVIDENCE)
-  if (!evidence) throw usageError(`Say how you know with --evidence: ${FEEDBACK_EVIDENCE.join(', ')}.`, usage)
-  const outcome = oneOf('outcome', str(ctx.flags.outcome), FEEDBACK_OUTCOMES)
+  const asking = askingAllowed(ctx)
+  let evidence = oneOf('evidence', str(ctx.flags.evidence), FEEDBACK_EVIDENCE)
+  if (!evidence && !asking) throw usageError(`Say how you know with --evidence: ${FEEDBACK_EVIDENCE.join(', ')}.`, usage)
+  let outcome = oneOf('outcome', str(ctx.flags.outcome), FEEDBACK_OUTCOMES)
   const comment = text('comment', str(ctx.flags.comment), MAX_COMMENT_CHARS)
   const sentPath = str(ctx.flags['sent-text'])
   const sentText = sentPath ? text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS) : undefined
+  // At a terminal, what is missing is asked: how the person knows, then what happened. Two questions at most.
+  if (!evidence) {
+    evidence = FEEDBACK_EVIDENCE[await ctx.io.select('How do you know what happened to it?', ['I did it myself', 'Someone told me', 'I am guessing from what I can see'])]
+  }
+  if (asking && !sentText?.trim() && !comment?.trim() && !outcome) {
+    outcome = FEEDBACK_OUTCOMES[await ctx.io.select('What happened to it?', ['Used as Amdahl returned it', 'Used, with my edits', 'Not used', 'Not sure yet'])]
+  }
+  if (!evidence) throw usageError(`Say how you know with --evidence: ${FEEDBACK_EVIDENCE.join(', ')}.`, usage)
   if (!sentText?.trim() && !comment?.trim() && !outcome) {
     throw usageError('Send at least one of --sent-text, --comment or --outcome.', usage)
   }
@@ -134,7 +158,7 @@ const PROVIDER_IDS: Record<string, [string, number]> = {
  * (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
  * [--sent-at <time>] ...`.
  */
-export async function sent(ctx: Ctx, args: string[]): Promise<number> {
+async function buildItem(ctx: Ctx, args: string[], pasted?: string): Promise<Record<string, unknown>> {
   const { flags } = ctx
   const usage = `Usage: ${amdahlCommand('sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited --provider-send-id <id>')}`
   const [rawId, ...rest] = args
@@ -191,8 +215,9 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
     if (!/^[0-9a-f]{64}$/i.test(hash)) throw usageError('--recipient-key-hash is 64 hexadecimal characters: a SHA-256.')
     item.recipient_key_hash = hash
   }
-  const sentPath = str(flags['sent-text'])
-  if (sentPath !== undefined) item.sent_text = text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS)
+  const sentPath = pasted !== undefined ? '-' : str(flags['sent-text'])
+  if (pasted !== undefined) item.sent_text = text('sent-text', pasted, MAX_MESSAGE_CHARS)
+  else if (sentPath !== undefined) item.sent_text = text('sent-text', await readText(ctx, sentPath), MAX_MESSAGE_CHARS)
   // The server takes an edited send with no text, but a report of an edit that does not say what it
   // became is of little use: the text is the point of `edited`, and only its hash is kept.
   if (sentAs === 'edited' && sentPath === undefined) {
@@ -206,6 +231,79 @@ export async function sent(ctx: Ctx, args: string[]): Promise<number> {
   if (!sendId?.trim() && !recipient?.trim() && !hash?.trim()) {
     throw usageError('Say which send this is: give --provider-send-id, a recipient (--recipient or --recipient-key-hash), or both.', "Amdahl matches a report to a send by its provider's own id, by the recipient (stored only as a hash), or both.")
   }
+  return item
+}
+
+/**
+ * At a terminal, ask for what a report still needs: where it went out, who it
+ * went to, and whether it was changed first. At most three questions, each
+ * with a default; a value the command line gave is never asked again. The
+ * channel is never asked: when something else is asked and `--channel` is not
+ * given, it is the recipient's (an email address is email, a LinkedIn profile
+ * LinkedIn), else the run's, else the provider's, and is printed. When only
+ * `--channel` is missing, nothing is asked and the usage error stands. Flags that are given are checked first, so a typo costs no
+ * answers. Returns the flags to send with, and the pasted text of an edit.
+ */
+async function askSent(ctx: Ctx, args: string[]): Promise<{ flags: Ctx['flags']; pasted?: string }> {
+  const { io, flags } = ctx
+  const usage = `Usage: ${amdahlCommand('sent <run-id> --provider <provider> --channel <channel> --sent-as returned|edited --provider-send-id <id>')}`
+  const [rawId] = args
+  const needProvider = str(flags.provider) === undefined
+  const needKey = ![flags['provider-send-id'], flags.recipient, flags['recipient-key-hash']].some((v) => typeof v === 'string' && v.trim())
+  const needHow = str(flags['sent-as']) === undefined
+  if (!rawId || !(needProvider || needKey || needHow)) return { flags }
+  runId(rawId, usage)
+  // What is given is checked now, with stand-ins for what is asked.
+  await buildItem({ ...ctx, flags: { ...flags, provider: str(flags.provider) ?? 'other', channel: str(flags.channel) ?? 'email', 'sent-as': str(flags['sent-as']) ?? 'returned', ...(needKey ? { recipient: 'check@example.com' } : {}) } }, args)
+
+  const answered: Ctx['flags'] = { ...flags }
+  let pasted: string | undefined
+  if (needProvider) {
+    const choices = SEND_PROVIDERS.map((p) => (p === 'other' ? 'other (any sender not listed)' : p))
+    answered.provider = SEND_PROVIDERS[await io.select('Where did it go out?', choices)]
+  }
+  if (needKey) {
+    const who = (await io.prompt('Who was it sent to? An email address, or a LinkedIn profile URL: ')).trim()
+    if (!who) throw usageError('Say which send this is: give a recipient, or --provider-send-id.', usage)
+    answered.recipient = who
+  }
+  if (needHow) {
+    if (str(flags['sent-text']) !== undefined) {
+      answered['sent-as'] = (await io.select('Was it sent as Amdahl returned it?', ['Yes, as returned', 'No, I changed it'])) === 0 ? 'returned' : 'edited'
+    } else {
+      const text = await io.readPaste('If you changed it before sending, paste it as sent, then press Enter on an empty line. If not, press Enter:', { emptyEnds: true })
+      if (text.trim()) {
+        pasted = text
+        answered['sent-as'] = 'edited'
+      } else answered['sent-as'] = 'returned'
+    }
+  }
+  if (str(flags.channel) === undefined) answered.channel = inferChannel(ctx, rawId, answered)
+  io.stderr(`Reporting: ${String(answered.provider)}, ${String(answered.channel)}, sent as ${String(answered['sent-as'])}.\n`)
+  return { flags: answered, ...(pasted !== undefined ? { pasted } : {}) }
+}
+
+/** The channel a report is for, when `--channel` was not given: the recipient, then the run, then the provider. */
+function inferChannel(ctx: Ctx, runIdValue: string, flags: Ctx['flags']): string {
+  // The recipient says what was sent: an email address is an email, a LinkedIn profile is a LinkedIn message.
+  // It comes before the run's channel and the provider, which can be wrong (a LinkedIn run sent by lemlist as email).
+  const recipient = str(flags.recipient)?.trim()
+  if (recipient && EMAIL_WHOLE_VALUE.test(recipient)) return 'email'
+  if (recipient && LINKEDIN_PROFILE.test(recipient)) return 'linkedin_message'
+  const remembered = findRun(ctx, runIdValue, currentProfile(ctx))?.channel
+  if (remembered) return CHANNEL_ALIASES[remembered] ?? remembered
+  return flags.provider === 'heyreach' || flags.provider === 'linkedin_manual' ? 'linkedin_message' : 'email'
+}
+
+/**
+ * `amdahl sent <run-id> --provider <p> --channel <c> --sent-as returned|edited
+ * (--provider-send-id <id> | --recipient <email|url> | --recipient-key-hash <sha256>)
+ * [--sent-at <time>] ...`. At a terminal, what is missing is asked (see {@link askSent}).
+ */
+export async function sent(ctx: Ctx, args: string[]): Promise<number> {
+  const asked = askingAllowed(ctx) ? await askSent(ctx, args) : { flags: ctx.flags, pasted: undefined }
+  const send = asked.flags === ctx.flags ? ctx : { ...ctx, flags: asked.flags }
+  const item = await buildItem(send, args, asked.pasted)
 
   const credential = await resolveCredential(ctx)
   const result = await call(() =>

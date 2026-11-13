@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { batchProblems, feedbackProblem, reportSendProblem, reportSendRejection, searchProblem } from './strict'
+import { batchProblems, feedbackProblem, optimizeProblems, promptProblems, reportSendProblem, reportSendRejection, searchProblem } from './strict'
 
 export const BIZ = '11111111-1111-4111-8111-111111111111'
 export const USER = '22222222-2222-4222-8222-222222222222'
@@ -18,12 +18,28 @@ export const READONLY_KEY = `amdhl_${'b'.repeat(48)}`
 export const KNOWN_RUN = '88888888-8888-4888-8888-888888888888'
 /** A well-formed run id this workspace does not have. */
 export const UNKNOWN_RUN = '00000000-0000-4000-8000-000000000000'
+/** The run id the mock gives a grade. */
+export const GRADE_RUN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+/** The id the mock gives the prompt run it starts. */
+// A prompt run's id is `opt_` and 32 hex characters (staging, 2026-11-13), not a UUID.
+export const PROMPT_RUN = 'opt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+/** What `GET /messages/optimize/runs/:id` returns for KNOWN_RUN. */
+export const KNOWN_RUN_BODY = {
+  run_id: KNOWN_RUN,
+  draft: 'Hi Dana, quick note about pricing.',
+  context: { facts: ['Helix cut provisioning tickets by 70%.'], rules: ['Ask for 15 minutes.'] },
+  message: 'Hi Dana, Helix cut provisioning tickets by 70%. Worth 15 minutes?',
+  created_at: '2026-11-12T08:00:00Z',
+  omitted: [{ what: 'a second proof point', why: 'The context held one.' }],
+}
 /** The run id of item `index` of any batch the mock ran. */
 export const batchRun = (index: number) => `99999999-9999-4999-8999-${String(index).padStart(12, '0')}`
 
 export interface LoggedRequest {
   method: string
   path: string
+  /** The query string, with its `?`, or ''. */
+  query: string
   headers: Record<string, string | string[] | undefined>
   body: string
 }
@@ -73,6 +89,16 @@ export interface MockOptions {
   researchReadRefused?: boolean
   /** The research answer's `content_blocks` (default: none). */
   researchBlocks?: Record<string, unknown>[]
+  /** The grade a `mode: "grade"` optimize returns (inside `data`); the default is the docs' example, with the evidence lines abstaining unless evidence was asked for. */
+  gradeResult?: Record<string, unknown>
+  /** Prompt run reads that answer `running` before the run completes (default 1). */
+  promptPolls?: number
+  /** What a finished prompt run reads as (inside `data`), by the mode it ran in; the default is the docs' examples. */
+  promptResult?: (mode: string) => Record<string, unknown>
+  /** What `GET /search/overview` answers (inside `data`). */
+  overview?: Record<string, unknown>
+  /** What `GET /search/fields` answers (inside `data`), before the surface filter. */
+  fields?: Record<string, unknown>
   /** The connections list (inside `data`). */
   connections?: Record<string, unknown>[]
   /** The connections list answers a 500. */
@@ -115,6 +141,9 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   const batches = new Map<string, { items: Record<string, unknown>[]; polls: number }>()
   // Run ids this workspace has, and when each was made.
   const runs = new Map<string, number>([[KNOWN_RUN, Date.now() - 3_600_000]])
+  // What a run was sent and what came back, for the runs the mock made.
+  const runBodies = new Map<string, Record<string, unknown>>([[KNOWN_RUN, KNOWN_RUN_BODY]])
+  const promptRuns = new Map<string, { mode: string; polls: number }>()
   // Sends already reported, by run and send key.
   const reports = new Map<string, number>()
   let researchReads = 0
@@ -167,7 +196,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
     req.on('end', () => {
       const url = new URL(req.url ?? '/', base)
       const path = url.pathname
-      log.push({ method: req.method ?? 'GET', path, headers: req.headers, body })
+      log.push({ method: req.method ?? 'GET', path, query: url.search, headers: req.headers, body })
       const form = () => {
         if (!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded')) return null
         return new URLSearchParams(body)
@@ -505,15 +534,186 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       if (path === '/api/platform/v1/messages/optimize' && req.method === 'POST') {
-        const input = JSON.parse(body) as { message?: string }
+        const input = JSON.parse(body) as { message?: string; mode?: string; evidence?: string; context?: unknown }
+        const problems = optimizeProblems(input)
+        if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
+        if (input.mode === 'grade') {
+          runs.set(GRADE_RUN, Date.now())
+          runBodies.set(GRADE_RUN, { run_id: GRADE_RUN, draft: input.message ?? null, context: input.context ?? null, message: input.message ?? null, // staging stores a grade's draft back as its message (2026-11-13)
+             created_at: new Date().toISOString(), omitted: [] })
+          return json(res, 200, { data: options.gradeResult ?? gradeBody(input.evidence === 'workspace') })
+        }
         return json(res, 200, {
           data: options.optimizeResult ?? { ok: true, message: `better: ${input.message}`, summary: 'Tighter opener.', unchanged: false, run_id: 'r1' },
         })
       }
 
+      // messages.optimize_prompt: starts a run at once (202) and is read with `get_prompt_run`.
+      if (path === '/api/platform/v1/messages/optimize_prompt' && req.method === 'POST') {
+        const input = JSON.parse(body) as { mode?: string; recipients?: { recipient: Record<string, unknown>; label?: string }[] }
+        const problems = promptProblems(input)
+        if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
+        const mode = input.mode ?? 'improve'
+        promptRuns.set(PROMPT_RUN, { mode, polls: 0 })
+        const labels = input.recipients?.map((r) => r.label ?? String(r.recipient.company ?? r.recipient.name)) ?? ['Corvid Health', 'Brightpath', 'Helix', 'Northwind']
+        return json(res, 202, {
+          data: { success: true, run_id: PROMPT_RUN, status: 'pending', mode, recipients: { labels, sampled: !input.recipients }, replayed: false, poll: { uri: `optimize_prompt_run://${PROMPT_RUN}`, wait_ms_max: 30000 } },
+        })
+      }
+
+      const promptRead = path.match(/^\/api\/platform\/v1\/messages\/optimize_prompt\/([^/]+)$/)
+      if (promptRead && req.method === 'GET') {
+        const entry = promptRuns.get(promptRead[1] ?? '')
+        if (!entry) return err(res, 404, 'not_found', 'No prompt run with this id from you in this workspace.')
+        entry.polls++
+        if (entry.polls <= (options.promptPolls ?? 1)) return json(res, 200, { data: { run_id: promptRead[1], status: 'running', phase: entry.polls === 1 ? 'writing_emails' : 'grading' } })
+        return json(res, 200, { data: { run_id: promptRead[1], status: 'complete', ...(options.promptResult ? options.promptResult(entry.mode) : promptBody(entry.mode)) } })
+      }
+
+      // messages.get_run: one past run, read by its id by the person who made it.
+      const runRead = path.match(/^\/api\/platform\/v1\/messages\/optimize\/runs\/([^/]+)$/)
+      if (runRead && req.method === 'GET') {
+        const found = runBodies.get((runRead[1] ?? '').toLowerCase())
+        if (!found) return err(res, 404, 'not_found', 'No optimize run with this id from you in this workspace.')
+        return json(res, 200, { data: found })
+      }
+
+      // search.overview and search.fields (data:read).
+      if (path === '/api/platform/v1/search/overview' && req.method === 'GET') {
+        return json(res, 200, { data: options.overview ?? overviewBody() })
+      }
+      if (path === '/api/platform/v1/search/fields' && req.method === 'GET') {
+        const surface = url.searchParams.get('surface')
+        const all = (options.fields ?? fieldsBody()) as { surfaces: { surface: string }[] }
+        if (surface !== null && !all.surfaces.some((x) => x.surface === surface)) return err(res, 400, 'invalid_input', `surface: must be one of ${all.surfaces.map((x) => x.surface).join(', ')}`)
+        return json(res, 200, { data: { surfaces: all.surfaces.filter((x) => surface === null || x.surface === surface) } })
+      }
+
       return err(res, 404, 'not_found')
     })
   })
+  // The docs' example grade (message-optimizer/grade-a-message). With evidence off, the four lines that read calls abstain.
+  function gradeBody(evidence: boolean): Record<string, unknown> {
+    const line = (id: string, pass: boolean, reason: string) => ({ id, pass, applicable: true, reason })
+    const abstain = (id: string) => ({ id, pass: null, applicable: false, reason: 'No evidence was asked for.', not_applicable_reason: 'not_requested' })
+    return {
+      ok: true,
+      outcome: 'graded',
+      rewrite: null,
+      optimize_id: 'opt_7f3c2a',
+      run_id: GRADE_RUN,
+      summary: 'Graded.',
+      lift: null,
+      evidence: evidence ? { requested: 'workspace', used: true } : { requested: 'off', used: false, reason: 'not_requested' },
+      unsupported_claims: [],
+      grade: evidence
+        ? {
+            score: 4.2,
+            passed: 4,
+            total: 5,
+            bar: 4.2,
+            passes_bar: true,
+            judge: { model: 'claude-sonnet-5-5', judge_version: 'v7', role: 'final' },
+            lines: [
+              line('relevant_positioning', true, 'It names what Corvid shipped.'),
+              line('grounding', true, 'Helix is in a call.'),
+              line('verified_specifics', true, 'The 70% is in a call.'),
+              line('differentiation', false, 'It reads like boilerplate.'),
+              line('cta_clarity', true, 'One clear ask.'),
+            ],
+            not_applicable_reason: null,
+          }
+        : {
+            score: 5,
+            passed: 1,
+            total: 1,
+            bar: 4.2,
+            passes_bar: true,
+            judge: { model: 'claude-sonnet-5-5', judge_version: 'v7', role: 'final' },
+            lines: [abstain('relevant_positioning'), abstain('grounding'), abstain('verified_specifics'), abstain('differentiation'), line('cta_clarity', true, 'One clear ask.')],
+            not_applicable_reason: null,
+          },
+      disclosures: { single_run: true, not_reply_prediction: true, repeat_spread: { model: 'claude-sonnet-5-5', moved_past: 0.2, share: 0.15, measured: 'a test' } },
+    }
+  }
+
+  // The docs' finished prompt runs (message-optimizer/improve-a-prompt).
+  function promptBody(mode: string): Record<string, unknown> {
+    const rates = { cta_clarity: { passed: 2, total: 2, rate: 1 }, grounding: { passed: 0, total: 0, rate: null } }
+    const email = (label: string, variant: string, split: string, score: number, text: string) => ({
+      recipient: 0,
+      label,
+      variant,
+      split,
+      email: text,
+      grade: { score, passed: 2, total: 5 },
+      placeholders: [],
+      unsupported_claims: [],
+    })
+    const judges = { final: { model: 'claude-sonnet-5-5', judge_version: 'v7', role: 'final' } }
+    const disclosures = { single_run: true, not_reply_prediction: true, repeat_spread: null }
+    if (mode === 'grade') {
+      return {
+        prompt_mode: 'grade',
+        outcome: 'graded',
+        grade: { original: { mean: 3.4, n: 4, emails_passing_bar: 1, bar: 4.2, lines: rates }, revised: null },
+        lift: null,
+        lift_reportable: false,
+        emails: [email('Helix', 'original', 'graded', 3.4, 'Hi Jordan, Helix cut tickets by 70%. Worth 15 minutes?')],
+        judges,
+        disclosures,
+      }
+    }
+    return {
+      prompt_mode: 'improve',
+      outcome: 'improved',
+      prompt: 'Write a first-touch email to a Head of Platform. Name what they shipped, then ask for 15 minutes.',
+      grade: {
+        original: { mean: 2.6, n: 2, emails_passing_bar: 0, bar: 4.2, lines: rates },
+        revised: { mean: 3.4, n: 2, emails_passing_bar: 1, bar: 4.2, lines: rates },
+      },
+      lift: null,
+      lift_reportable: false,
+      lift_not_reportable_reason: 'held_out_under_3',
+      emails: [
+        email('Helix', 'original', 'held_out', 2.6, 'Hi there, we help with provisioning.'),
+        email('Helix', 'revised', 'held_out', 3.4, 'Hi Jordan, you shipped SSO. Worth 15 minutes?'),
+        email('Brightpath', 'original', 'train', 2.2, 'Hello.'),
+      ],
+      train: { recipients: [0, 1], kept: 'revision_1' },
+      judges,
+      disclosures: { ...disclosures, train_scores_are_not_lift: true },
+    }
+  }
+
+  function overviewBody(): Record<string, unknown> {
+    return {
+      surfaces: [
+        { surface: 'interactions', row_count: 12431, earliest_at: '2025-01-03T10:00:00Z', latest_at: '2026-11-10T16:20:00Z', time_field: 'timestamp' },
+        { surface: 'deals', row_count: 214, earliest_at: '2025-02-01T00:00:00Z', latest_at: '2026-10-30T00:00:00Z', time_field: 'close_date' },
+        { surface: 'deal_qualification', row_count: null, earliest_at: null, latest_at: null, time_field: 'computed_at' },
+      ],
+    }
+  }
+
+  function fieldsBody(): Record<string, unknown> {
+    const f = (name: string, type: string, description: string, extra: Record<string, unknown> = {}) => ({ name, type, description, operators: ['eq', 'in'], ...extra })
+    return {
+      surfaces: [
+        {
+          surface: 'interactions',
+          fields: [
+            f('company_name', 'STRING', 'The account the conversation was with.'),
+            f('interaction_type', 'STRING', 'What kind of conversation it was.', { sample_values: ['CALL', 'EMAIL', 'MEETING'] }),
+            f('timestamp', 'TIMESTAMP', 'When it happened.'),
+          ],
+        },
+        { surface: 'deals', fields: [f('deal_name', 'STRING', 'The deal.'), f('deal_amount', 'NUMERIC', 'Its amount.'), f('close_date', 'DATE', 'When it closed.')] },
+        { surface: 'deal_qualification', fields: [f('company_id', 'STRING', 'The company.'), f('computed_at', 'TIMESTAMP', 'When it was last scored.')] },
+      ],
+    }
+  }
+
   function batchSummary(id: string, items: unknown[], done: boolean, running?: { eta: number }) {
     const failed = done ? (options.batchFailures?.length ?? 0) : 0
     return {

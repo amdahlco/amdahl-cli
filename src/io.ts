@@ -51,9 +51,11 @@ export interface Io {
   /**
    * Print `question` on stderr and read a pasted message from the terminal,
    * up to an empty line typed after it (or Ctrl+D). Empty lines inside a paste
-   * stay in the message. Rejects with PromptCancelled on Ctrl+C.
+   * stay in the message. Rejects with PromptCancelled on Ctrl+C. With
+   * `emptyEnds`, an empty line before any text ends it with '' (a question the
+   * person may skip by pressing Enter).
    */
-  readPaste: (question: string) => Promise<string>
+  readPaste: (question: string, options?: { emptyEnds?: boolean }) => Promise<string>
   /** Ask one question on the terminal and return the answer line. Rejects with PromptCancelled on Ctrl+C or Ctrl+D. */
   prompt: (question: string) => Promise<string>
   /**
@@ -221,7 +223,7 @@ export function realIo(): Io {
     stdoutIsTTY: Boolean(process.stdout.isTTY),
     stderrIsTTY: Boolean(process.stderr.isTTY),
     readStdin: readAllStdin,
-    readPaste: (question) => readPaste(process.stdin, process.stderr, question),
+    readPaste: (question, options) => readPaste(process.stdin, process.stderr, question, options),
     prompt: promptLine,
     select: (question, choices, options) =>
       selectMenu(process.stdin, process.stderr, question, choices, {

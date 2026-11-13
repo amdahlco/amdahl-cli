@@ -186,7 +186,11 @@ function errorDetails(body: string | undefined): Record<string, unknown> {
 /** What each call does, said as a verb, for "This credential cannot <verb>." Longest path first. */
 const CALL_VERBS: [string, string][] = [
   ['/messages/optimize/batch', 'optimize a list'],
-  ['/messages/optimize/runs/', 'record feedback'],
+  ['/messages/optimize_prompt', 'grade or improve a prompt'],
+  ['/feedback', 'record feedback'],
+  ['/messages/optimize/runs/', 'read a run'],
+  ['/search/overview', 'read what the workspace holds'],
+  ['/search/fields', 'read what the workspace holds'],
   ['/messages/optimize', 'optimize'],
   ['/messages/report_send', 'report sends'],
   ['/research/', 'read research'],
