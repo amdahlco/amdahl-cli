@@ -453,18 +453,27 @@ amdahl search --recipe whitespace --products "Analytics, Forecasting"
 amdahl search --recipe stalled-deals
 ```
 
-`recipes` lists the console's recipe library: the same ids, titles,
-fill-ins and search questions (`src/recipes-data.ts` names the file and commit
-they are copied from). Twelve of the library's recipes run as a search; the
-rest are prompts for an AI client and are in the console. `search --recipe
-<id>` asks a recipe's question with its fill-in in place. A fill-in is a flag
+`recipes` reads the library from the server (`GET /search/suggestions`) and
+lists it by category: the same ids, titles, fill-ins and search questions the
+console has. Above it, "For you" shows up to four recipes that suit this
+workspace now, each with why (for example "1 deal lost in the last 90 days") and
+the command that runs it, with any fill-in the server already knows. Only the
+console can hide a suggestion, so the CLI offers no hide. A workspace with
+nothing connected gets the server's message in place of "For you". When the
+server cannot be read (not signed in, a server without the route, any failure)
+the list is the copy bundled in this CLI (`src/recipes-data.ts` names the file
+and commit it was copied from), with no "For you" and no error. `search --recipe
+<id>` asks a recipe's question with its fill-in in place, and sends the recipe's
+id (`recipe_id`) with the search when the library came from the server. A recipe
+whose fill-in this version does not know says to update amdahl. The rest of the
+console's recipes are prompts for an AI client and are in the console. A fill-in is a flag
 named for it (`--account`, `--products`, `--messages`, `--objection`); one the
 recipe needs and was not given, or one it has no use for, exits 2 before any
 request. A fill-in is cut at 300 characters, as the console cuts it, and the
 CLI says so. `--research` and `--limit` work with a recipe; a question beside
 `--recipe` is refused. With `--json` the result is the same answer a search
 gives, and `amdahl recipes --json` lists every recipe with its question and
-fill-ins.
+fill-ins, `for_you`, and `source` (`server` or `bundled`).
 
 Each table prints as a plain ASCII table that fits 80 columns: a long cell
 wraps (a column is narrowed to its longest word first, so an id or a timestamp

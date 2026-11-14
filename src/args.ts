@@ -198,11 +198,11 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
   const spec = COMMAND_OPTIONS[name]
   if (!spec) throw usageError(`Unknown command \`${positionals.slice(0, words).join(' ')}\`.`, `Run \`${amdahlCommand('--help')}\` to see the commands.`)
 
-  const strict = strictParse(argv, { ...GLOBAL_OPTIONS, ...spec })
+  const strict = strictParse(argv, { ...GLOBAL_OPTIONS, ...spec }, name === 'search' && argv.some((a) => a === '--recipe' || a.startsWith('--recipe=')))
   return { command: name, args: strict.positionals.slice(words), flags: strict.values }
 }
 
-function strictParse(argv: string[], options: OptionSpec) {
+function strictParse(argv: string[], options: OptionSpec, withRecipe = false) {
   try {
     const parsed = parseArgs({ args: argv, options, allowPositionals: true, strict: true })
     return {
@@ -210,7 +210,12 @@ function strictParse(argv: string[], options: OptionSpec) {
       values: parsed.values as Record<string, string | boolean | undefined>,
     }
   } catch (err) {
-    throw usageError(...parseErrorMessage(err))
+    const [message, hint] = parseErrorMessage(err)
+    // With --recipe, an option this version lacks is most likely a fill-in the server's newer recipes take.
+    if (withRecipe && (err as { code?: string } | null)?.code === 'ERR_PARSE_ARGS_UNKNOWN_OPTION') {
+      throw usageError(message, `If it is a recipe's fill-in, this version of amdahl does not know it: update with \`npm install -g amdahl@latest\`. Or run \`${amdahlCommand('--help')}\`.`)
+    }
+    throw usageError(message, hint)
   }
 }
 

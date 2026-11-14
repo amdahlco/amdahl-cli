@@ -29,7 +29,7 @@ import { blockLines } from '../blocks'
 import { clip, count, cutAtWord, day, field, paragraphs, plainMarkdown, record, records, wrap } from '../text'
 import { FILL_MAX } from '../recipes-data'
 import { connectLine } from './connections'
-import { FILL_FLAGS, recipeById, recipeQuestion } from './recipes'
+import { FILL_FLAGS, loadLibrary, recipeById, recipeQuestion } from './recipes'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -306,10 +306,17 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   const { out } = ctx
   if (typeof ctx.flags['research-id'] === 'string') return readResearch(ctx, args)
   let question = args.join(' ').trim()
+  let recipeServerId: string | undefined
   const fills = fillValues(ctx)
   if (typeof ctx.flags.recipe === 'string') {
     if (question) throw usageError('Give a question or --recipe, not both.', `${amdahlCommand('recipes')} lists the recipes.`)
-    const recipe = recipeById(ctx.flags.recipe)
+    // The library as the server has it, else the bundled copy; `recipe_id` goes with the search only when the server was read.
+    const library = await loadLibrary(ctx)
+    const recipe = recipeById(ctx.flags.recipe, library)
+    if (recipe.fills.some((f) => !FILL_FLAGS.includes(f.key))) {
+      throw usageError(`${recipe.title} takes a fill-in this version of amdahl does not know.`, 'Update amdahl: npm install -g amdahl@latest.')
+    }
+    recipeServerId = library.source === 'server' ? recipe.id : undefined
     const built = recipeQuestion(recipe, fills)
     question = built.question
     if (built.cut.length > 0 && !out.json) out.info(`Used the first ${FILL_MAX} characters of ${built.cut.map((k) => `--${k}`).join(' and ')}.`)
@@ -321,6 +328,7 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   if (!question) throw usageError('Ask a question.', `Usage: ${amdahlCommand('search "<question>" [--research]')}. Or a recipe: ${amdahlCommand('recipes')}`)
   if (question.length > MAX_QUESTION_CHARS) throw usageError(`A question is at most ${MAX_QUESTION_CHARS} characters.`)
   const body: Record<string, unknown> = { query: question, answer: true }
+  if (recipeServerId) body.recipe_id = recipeServerId
   if (ctx.flags.research === true) body.route = 'research'
   const limit = str(ctx.flags.limit)
   if (limit !== undefined) {
