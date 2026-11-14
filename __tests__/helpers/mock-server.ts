@@ -104,6 +104,8 @@ export interface MockOptions {
    * What `GET /search/suggestions` answers (inside `data`). Unset: the route is not on this server (a 404), and
    * `search.query` takes no `recipe_id`. Set: the route answers, and `recipe_id` must be a library id.
    */
+  /** `GET /search/suggestions` never answers (a hanging server). */
+  suggestionsHang?: boolean
   suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown> }
   /** What `GET /search/overview` answers (inside `data`). */
   overview?: Record<string, unknown>
@@ -591,6 +593,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
 
       // search.overview and search.fields (data:read).
       if (path === '/api/platform/v1/search/suggestions' && req.method === 'GET') {
+        if (options.suggestionsHang) return
         if (!options.suggestions) return err(res, 404, 'not_found', 'No such route.')
         return json(res, 200, { data: { for_you: [], library: SUGGESTED_LIBRARY, generated_at: '2026-11-13T22:40:02.728Z', ...options.suggestions } })
       }

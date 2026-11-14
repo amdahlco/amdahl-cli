@@ -3,6 +3,7 @@
 // search --recipe, search --research-id, and the questions sent and feedback
 // ask at a terminal. All against the strict mock server.
 
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
@@ -1304,7 +1305,7 @@ describe('0.5.1: "For you" and the library from the server', () => {
     expect(r.code).toBe(0)
     const head = r.stdout.slice(0, r.stdout.indexOf('\nAccounts\n'))
     expect(head).toContain(`For you\n  why-deals-die          ${titleOf('why-deals-die')}\n    1 deal lost in the last 90 days.\n    Run: amdahl search --recipe why-deals-die\n`)
-    expect(head).toContain(`  account-brief          ${titleOf('account-brief')}\n    Acme has a call tomorrow.\n    Run: amdahl search --recipe account-brief --account "Acme \\"Corp\\""\n`)
+    expect(head).toContain(`  account-brief          ${titleOf('account-brief')}\n    Acme has a call tomorrow.\n    Run: amdahl search --recipe account-brief --account 'Acme "Corp"'\n`)
     expect(r.stdout.indexOf('For you')).toBeLessThan(r.stdout.indexOf('\nAccounts\n'))
     expect(r.stdout).not.toMatch(/hide|dismiss/i)
     fits80(r.stdout)
@@ -1376,6 +1377,108 @@ describe('0.5.1: "For you" and the library from the server', () => {
     expect((await cli(old, 'search', '--recipe', 'why-deals-die')).code).toBe(0)
     expect(sentBody('/api/platform/v1/search/query').recipe_id).toBeUndefined()
     expect((await cli(old, 'search', '--recipe', 'at-risk-deals')).stderr).toContain('No recipe called "at-risk-deals".')
+  })
+
+  it('a Run: line has every fill-in the recipe needs, the server\'s value where it sent one and the example where it did not', async () => {
+    const io = await signedIn({
+      suggestions: {
+        for_you: [
+          { recipe_id: 'call-prep', kind: 'try', reason: 'Acme has a call tomorrow', fills: { account: 'Acme' } },
+          { recipe_id: 'whitespace', kind: 'try', reason: 'Which accounts have room to grow?', fills: {} },
+          // A key the recipe does not have is not passed on.
+          { recipe_id: 'objection-handling', kind: 'try', reason: 'Price came up', fills: { account: 'Acme', objection: 'Too expensive' } },
+        ],
+      },
+    })
+    const r = await cli(io, 'recipes')
+    expect(r.stdout).toContain("Run: amdahl search --recipe call-prep --account 'Acme'\n")
+    expect(r.stdout).toContain("Run: amdahl search --recipe whitespace --products 'Analytics, Forecasting, Extra seats'\n    Swap in your own --products.\n")
+    expect(r.stdout).toContain("Run: amdahl search --recipe objection-handling --objection 'Too expensive'\n")
+    // A reason that is a question keeps its question mark, with no full stop after it.
+    expect(r.stdout).toContain('    Which accounts have room to grow?\n')
+    expect(r.stdout).not.toContain('?.')
+    // Every Run: line is a command that runs: none stops at "needs --...".
+    for (const row of (await cli(io, 'recipes', '--json')).json.for_you as { command: string }[]) {
+      const words = execFileSync('sh', ['-c', `printf '%s\\n' ${row.command.replace('amdahl ', '')}`], { encoding: 'utf8' }).trimEnd().split('\n')
+      const ran = await cli(io, ...words)
+      expect(ran.stderr).not.toContain('needs --')
+      expect(ran.code).toBe(0)
+    }
+    const json = (await cli(io, 'recipes', '--json')).json
+    expect(json.for_you[2].fills).toEqual({ objection: 'Too expensive' })
+    expect(json.for_you[1]).toMatchObject({ fills: {}, command: "amdahl search --recipe whitespace --products 'Analytics, Forecasting, Extra seats'" })
+  })
+
+  it('a CRM account name cannot run anything when the Run: line is pasted into a shell', async () => {
+    const name = 'Ca$h `whoami` "x" \'y\'\n$(id)\tz'
+    const io = await signedIn({ suggestions: { for_you: [{ recipe_id: 'account-brief', kind: 'try', reason: 'Call tomorrow', fills: { account: name } }] } })
+    const r = await cli(io, 'recipes')
+    const json = (await cli(io, 'recipes', '--json')).json
+    const command = String(json.for_you[0].command)
+    // One line, the name in single quotes with each ' as '\'' and its whitespace collapsed.
+    expect(command).toBe("amdahl search --recipe account-brief --account 'Ca$h `whoami` \"x\" '\\''y'\\'' $(id) z'")
+    expect(r.stdout).toContain(`Run: ${command}`.split('\n')[0]!.slice(0, 40))
+    // In a real shell the words come out as one argument, and nothing is run.
+    const printed = execFileSync('sh', ['-c', `printf '%s\n' ${command.replace('amdahl ', '')}`], { encoding: 'utf8' })
+    expect(printed).toBe(`search\n--recipe\naccount-brief\n--account\nCa$h \`whoami\` "x" 'y' $(id) z\n`)
+  })
+
+  it('says the server\'s connect-your-data message even when it also sent rows', async () => {
+    const io = await signedIn({
+      suggestions: {
+        for_you: [{ recipe_id: 'churn-risk', kind: 'setup', reason: 'Needs your CRM and calls', fills: {} }],
+        setup_needed: { reason: 'no_sources_connected', message: 'Connect your CRM to get recipes made for you.' },
+      },
+    })
+    const r = await cli(io, 'recipes')
+    expect(r.stdout).toContain('Connect your CRM to get recipes made for you.')
+    expect(r.stdout).toContain('For you\n  churn-risk')
+    expect(r.stdout.indexOf('Connect your CRM')).toBeLessThan(r.stdout.indexOf('For you'))
+    expect((await cli(io, 'recipes', '--json')).json.setup_needed).toEqual({ message: 'Connect your CRM to get recipes made for you.' })
+  })
+
+  it('wraps a long server title under itself', async () => {
+    const library = SUGGESTED_LIBRARY.map((r) => (r.id === 'why-deals-die' ? { ...r, title: 'Why we lose deals to the competitors our buyers name most often in their own words on calls' } : r))
+    const io = await signedIn({ suggestions: { for_you: [{ recipe_id: 'why-deals-die', kind: 'try', reason: 'x', fills: {} }], library } })
+    const r = await cli(io, 'recipes')
+    fits80(r.stdout)
+    expect(r.stdout).toContain('  why-deals-die          Why we lose deals to the competitors our buyers name\n                         most often in their own words on calls\n')
+  })
+
+  it('a server that never answers costs a few seconds, not minutes, and the bundled list is used with no error', async () => {
+    const io = await signedIn({ suggestionsHang: true })
+    io.env.AMDAHL_LIBRARY_TIMEOUT_MS = '150'
+    const started = Date.now()
+    const r = await cli(io, 'recipes')
+    expect(Date.now() - started).toBeLessThan(3000)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toBe('')
+    expect(r.stdout).toContain('account-brief')
+    // A search by recipe runs too, from the bundled copy and with no recipe_id.
+    expect((await cli(io, 'search', '--recipe', 'why-deals-die')).code).toBe(0)
+    expect(sentBody('/api/platform/v1/search/query').recipe_id).toBeUndefined()
+  })
+
+  it('a dead sign-in says so on recipes (it is cleared), still lists the bundled recipes, and stops search --recipe', async () => {
+    const io = await signedIn({ expiresIn: 30, refresh: 'invalid_grant', suggestions: { for_you: [] } })
+    const r = await cli(io, 'recipes')
+    expect(r.code).toBe(0)
+    expect(r.stderr).toContain('Your sign-in has expired.')
+    expect(r.stderr).toContain('amdahl login')
+    expect(r.stdout).toContain('account-brief')
+    const again = await cli(io, 'search', '--recipe', 'why-deals-die')
+    expect(again.code).toBe(3)
+  })
+
+  it('--region (an option this version lacks) with --recipe says to update amdahl, not just "Unknown option"', async () => {
+    const io = await signedIn({ suggestions: { for_you: [] } })
+    const r = await cli(io, 'search', '--recipe', 'whitespace', '--region', 'EMEA')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Unknown option --region.')
+    expect(r.stderr).toContain('npm install -g amdahl@latest')
+    // Without --recipe it is just unknown.
+    expect((await cli(io, 'search', 'what is new', '--region', 'EMEA')).stderr).not.toContain('npm install')
+    expect(requests('/search/query')).toHaveLength(0)
   })
 
   it('a recipe with a fill-in this version does not know says to update, and searches nothing', async () => {

@@ -321,9 +321,9 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
 
   async function request<T>(
     path: string,
-    options: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
+    options: { method?: string; body?: unknown; headers?: Record<string, string>; signal?: AbortSignal } = {}
   ): Promise<T> {
-    const { method = 'GET', body, headers = {} } = options
+    const { method = 'GET', body, headers = {}, signal } = options
     const allHeaders: Record<string, string> = { ...headers, ...CLIENT_HEADER, Authorization: `Bearer ${token}` }
     if (body && !allHeaders['Content-Type']) allHeaders['Content-Type'] = 'application/json'
 
@@ -331,6 +331,7 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
       method,
       headers: allHeaders,
       body: body ? JSON.stringify(body) : undefined,
+      signal,
     })
 
     if (!response.ok) {

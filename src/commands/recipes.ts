@@ -5,7 +5,6 @@
 // The ids, titles, fill-ins and questions are copied from the console
 // (`recipes-data.ts` names the file and commit), so a recipe asks the same
 // question here as there.
-
 //
 // The library is read from the server (`GET /search/suggestions`, which also
 // says which recipes suit this workspace now: "For you"). The bundled copy is
@@ -14,11 +13,17 @@
 
 import { amdahlCommand } from '../command-name'
 import { apiClient, resolveCredential, type Ctx } from '../context'
-import { EXIT, usageError } from '../errors'
+import { CliError, EXIT, usageError } from '../errors'
 import { FILL_MAX, NEEDS_LABEL, RECIPES, RECIPE_CATEGORIES, type Recipe, type RecipeCategory } from '../recipes-data'
 import { field, record, records, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
+
+/** How long the suggestions read may take before the bundled copy is used (milliseconds). The env var is for tests. */
+function readTimeout(ctx: Ctx): number {
+  const n = Number(ctx.io.env.AMDAHL_LIBRARY_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? n : 5000
+}
 
 /** The most "For you" rows shown. */
 const FOR_YOU_MAX = 4
@@ -66,13 +71,15 @@ function categoriesOf(recipes: readonly Recipe[]): { id: string; label: string }
 
 /**
  * The recipe library, from the server when it can be read (signed in, the route
- * exists, the answer has recipes), else the bundled copy. Never throws and never
- * prints: a server without the route (a 404) is the same as no server.
+ * exists, the answer has recipes), else the bundled copy. A read that takes more
+ * than a few seconds, a server without the route (a 404) and any other failure
+ * are the same as no server: no output. The one thing it does throw is a dead
+ * sign-in (`invalid_grant`), because reading the sign-in has just cleared it.
  */
 export async function loadLibrary(ctx: Ctx): Promise<Library> {
   try {
     const credential = await resolveCredential(ctx)
-    const answer = await apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/search/suggestions`)
+    const answer = await apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/search/suggestions`, { signal: AbortSignal.timeout(readTimeout(ctx)) })
     const recipes = records(answer.library).flatMap((e) => parseRecipe(e) ?? [])
     if (recipes.length === 0) return BUNDLED
     const forYou = records(answer.for_you).flatMap((s) => {
@@ -83,7 +90,8 @@ export async function loadLibrary(ctx: Ctx): Promise<Library> {
     })
     const setup = field(record(answer.setup_needed)?.message)
     return { recipes, categories: categoriesOf(recipes), forYou: forYou.slice(0, FOR_YOU_MAX), source: 'server', ...(field(answer.generated_at) ? { generatedAt: field(answer.generated_at) } : {}), ...(setup ? { setup } : {}) }
-  } catch {
+  } catch (err) {
+    if (err instanceof CliError && err.code === 'invalid_grant') throw err
     return BUNDLED
   }
 }
@@ -103,6 +111,29 @@ export function recipeById(id: string, library: Library = BUNDLED): Recipe {
 /** `--account <Account>` for each fill-in of the recipe. */
 function fillUsage(recipe: Recipe): string {
   return recipe.fills.map((f) => `--${f.key} <${f.label}>`).join(' ')
+}
+
+/** `text` as one shell word: whitespace and control characters collapsed, inside single quotes (a `'` becomes `'\''`), so nothing in it runs when pasted. */
+export function shellWord(text: string): string {
+  const flat = text.replace(/[\u0000-\u001f\u007f\s]+/g, ' ').trim()
+  return `'${flat.replace(/'/g, `'\\''`)}'`
+}
+
+/**
+ * The command that runs a "For you" suggestion: every fill-in of the recipe, and only those. The server's value
+ * where it sent one (`known`), else the recipe's example (named in `examples`, for the person to swap). Values are
+ * quoted so a name from the workspace cannot run anything when pasted.
+ */
+function forYouCommand(recipe: Recipe, s: ForYou): { command: string; known: Record<string, string>; examples: string[] } {
+  const known: Record<string, string> = {}
+  const examples: string[] = []
+  const flags = recipe.fills.map((f) => {
+    const sent = s.fills[f.key]
+    if (sent) known[f.key] = sent
+    else examples.push(`--${f.key}`)
+    return ` --${f.key} ${shellWord(sent ?? (f.example || f.label))}`
+  })
+  return { command: amdahlCommand(`search --recipe ${recipe.id}${flags.join('')}`), known, examples }
 }
 
 /** The command that runs a recipe, with an example value for each fill-in. */
@@ -136,20 +167,34 @@ export function recipeQuestion(recipe: Recipe, values: Record<string, string | u
   return { question, cut }
 }
 
+/** `  <id>  <title>`, with a long title wrapped under itself. */
+function titleLines(id: string, title: string, idWidth: number): string[] {
+  const [first = '', ...rest] = wrap(title, 80 - 2 - idWidth)
+  return [`  ${id.padEnd(idWidth)}${first}`, ...rest.map((l) => `  ${' '.repeat(idWidth)}${l}`)]
+}
+
 /** `amdahl recipes`. */
 export async function recipes(ctx: Ctx): Promise<number> {
   const { out } = ctx
-  const library = await loadLibrary(ctx)
+  let library: Library
+  try {
+    library = await loadLibrary(ctx)
+  } catch (err) {
+    // Listing the recipes needs no sign-in: say the sign-in is gone (reading it cleared it), and list the bundled ones.
+    if (!(err instanceof CliError)) throw err
+    out.info(`${err.message} This is the list built into amdahl, with nothing picked for you. ${err.hint ?? ''}`.trim())
+    library = BUNDLED
+  }
   const forYouOf = (s: ForYou) => {
     const recipe = library.recipes.find((r) => r.id === s.recipe_id)!
-    return { recipe, command: amdahlCommand(`search --recipe ${s.recipe_id}${Object.entries(s.fills).map(([k, v]) => ` --${k} "${v.replace(/"/g, '\\"')}"`).join('')}`) }
+    return { recipe, ...forYouCommand(recipe, s) }
   }
   if (out.json) {
     out.result({
       ok: true,
       source: library.source,
       ...(library.generatedAt ? { generated_at: library.generatedAt } : {}),
-      for_you: library.forYou.map((s) => ({ recipe_id: s.recipe_id, title: forYouOf(s).recipe.title, kind: s.kind, reason: s.reason, fills: s.fills, command: forYouOf(s).command })),
+      for_you: library.forYou.map((s) => ({ recipe_id: s.recipe_id, title: forYouOf(s).recipe.title, kind: s.kind, reason: s.reason, fills: forYouOf(s).known, command: forYouOf(s).command })),
       ...(library.setup ? { setup_needed: { message: library.setup } } : {}),
       recipes: library.recipes.map((r) => ({
         id: r.id,
@@ -167,24 +212,26 @@ export async function recipes(ctx: Ctx): Promise<number> {
   // Every id's column is as wide as the longest id and two spaces, so no id runs into its title.
   const idWidth = Math.max(...library.recipes.map((r) => r.id.length)) + 2
   const lines: string[] = ['Questions the console\'s recipe library asks as a search.']
+  // The server's note that it has no data to suggest from (nothing connected yet) is always said, with or without rows.
+  if (library.setup) lines.push('', ...wrap(library.setup))
   // "For you": the recipes that suit this workspace now, each with why. Nothing to hide here: only the console can.
   if (library.forYou.length > 0) {
     lines.push('', 'For you')
     for (const s of library.forYou) {
-      const { recipe, command } = forYouOf(s)
-      lines.push(`  ${s.recipe_id.padEnd(idWidth)}${recipe.title}`)
-      if (s.reason) lines.push(...wrap(`${s.reason}.`.replace(/\.\.$/, '.'), 80, '    '))
-      lines.push(...wrap(`Run: ${command}`, 80, '    '))
+      const { recipe, command, examples } = forYouOf(s)
+      lines.push(...titleLines(s.recipe_id, recipe.title, idWidth))
+      if (s.reason) lines.push(...wrap(/[.?!…]$/.test(s.reason) ? s.reason : `${s.reason}.`, 80, '    '))
+      // Not wrapped: a command broken at a space inside its quotes would paste as a different one.
+      lines.push(`    Run: ${command}`)
+      if (examples.length > 0) lines.push(...wrap(`Swap in your own ${examples.join(' and ')}.`, 80, '    '))
     }
-  } else if (library.setup) {
-    lines.push('', ...wrap(library.setup))
   }
   for (const category of library.categories) {
     const rows = library.recipes.filter((r) => r.category === category.id)
     if (rows.length === 0) continue
     lines.push('', category.label)
     for (const r of rows) {
-      lines.push(`  ${r.id.padEnd(idWidth)}${r.title}`, ...wrap(r.blurb, 80, '    '))
+      lines.push(...titleLines(r.id, r.title, idWidth), ...wrap(r.blurb, 80, '    '))
       const needs = NEEDS_LABEL[r.needs]
       const meta = [needs ? `Reads ${needs}.` : '', r.fills.length > 0 ? `Needs ${fillUsage(r)}.` : ''].filter(Boolean).join(' ')
       if (meta) lines.push(...wrap(meta, 80, '    '))
