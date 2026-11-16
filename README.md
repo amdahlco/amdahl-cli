@@ -707,6 +707,16 @@ what a single optimize returns). With `--json`, the batch and every item go
 to stdout and no file is written. A failed item exits 1. A refused list
 names the line of the first item the server refused.
 
+A message that still fails a hard rule comes back with `incomplete: true`
+and the rules it fails in `failed_rules` (`ask`, `length` and others).
+`amdahl optimize` then prints a warning on stderr just before the message,
+naming the rules. A list prints one line after the count saying how many
+messages fail a hard rule. When any result carries `incomplete`,
+`failed_rules` or `notes`, the results CSV also gets those three columns after
+`error`: `true` or `false`, the rules one per line, and the notes one per
+line as `code (audience): what it says`. Results that carry none of them
+look the same as before.
+
 A spreadsheet runs a cell that starts with `=`, `+`, `-` or `@` as a formula,
 so in the results CSV such a cell (and one that starts with a tab or a
 carriage return) starts with a `'`. That includes the cells copied through

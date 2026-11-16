@@ -26,7 +26,11 @@
 // written messages as an import file for that sequencer (see send-to.ts), and
 // the three steps to import it. A spreadsheet
 // runs a cell that starts with `=`, `+`, `-` or `@` as a formula, so the CSV
-// results start such a cell with a quote. Ctrl+C stops the wait, not the batch.
+// results start such a cell with a quote. When any item's result carries
+// `incomplete`, `failed_rules` or `notes`, the CSV results gain those three
+// columns, and a line says how many messages still fail a hard rule. An older
+// optimizer sends none of them, so its results are as before. Ctrl+C stops
+// the wait, not the batch.
 
 import { existsSync, writeFileSync } from 'node:fs'
 import { basename, dirname, extname, join } from 'node:path'
@@ -37,7 +41,7 @@ import { readTextFile } from '../files'
 import { sentLines } from '../next-steps'
 import { canAsk } from '../terminal'
 import { buildSendToFile, guideLines, leftOutLine, overLimitLine, planSendTo, readyLine, sendToFileName, toolFor, writtenOf, SEND_TO_IDS, type SendToFile, type SendToPlan } from '../send-to'
-import { COLUMNS, clip, count, field, record, records, truthfulSummary, wrap } from '../text'
+import { COLUMNS, clip, count, failedRules, field, isIncomplete, record, records, truthfulSummary, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -324,14 +328,23 @@ export function neutralise(cell: string): string {
 /** The results columns a CSV list gains. */
 export const RESULT_COLUMNS = ['optimized_message', 'status', 'summary', 'run_id', 'error']
 
+/** The results columns a CSV list also gains when any result says how its message stands against the hard rules. */
+export const RULE_COLUMNS = ['incomplete', 'failed_rules', 'notes']
+
+/** Whether an item's result carries any of {@link RULE_COLUMNS}. */
+function hasRuleFields(item: Record<string, unknown>): boolean {
+  const result = record(item.result)
+  return !!result && RULE_COLUMNS.some((key) => result[key] !== undefined && result[key] !== null)
+}
+
 /**
  * The names of the results columns for a list with this header. A column the
  * list already has under a name (a CRM export may have `status`) keeps it, and
  * Amdahl's column takes `amdahl_` in front, so nothing is written over.
  */
-export function resultColumnNames(header: string[]): string[] {
+export function resultColumnNames(header: string[], withRules = false): string[] {
   const taken = new Set(header.map((h) => h.trim().toLowerCase()))
-  return RESULT_COLUMNS.map((name) => {
+  return (withRules ? [...RESULT_COLUMNS, ...RULE_COLUMNS] : RESULT_COLUMNS).map((name) => {
     let candidate = name
     while (taken.has(candidate)) candidate = `amdahl_${candidate}`
     taken.add(candidate)
@@ -347,6 +360,37 @@ function resultCells(item: Record<string, unknown> | undefined, context: unknown
   // The message is the sender's own text: kept as sent, line breaks and all.
   const message = typeof result.message === 'string' ? result.message : ''
   return [message, result.unchanged === true ? 'unchanged' : 'done', truthfulSummary(field(result.summary), context), field(result.run_id), '']
+}
+
+/**
+ * One item's {@link RULE_COLUMNS} cells: `true` or `false` as the result says
+ * (empty when it does not), the failed rules' codes and the notes, one per
+ * line, each note as `code (audience): what it says`.
+ */
+function ruleCells(item: Record<string, unknown> | undefined): string[] {
+  const result = record(item?.result)
+  if (!result) return ['', '', '']
+  const incomplete = typeof result.incomplete === 'boolean' ? String(result.incomplete) : ''
+  const notes = records(result.notes).map((note) => {
+    const audience = field(note.audience)
+    const code = `${field(note.code)}${audience ? ` (${audience})` : ''}`
+    const says = field(note.says)
+    return code && says ? `${code}: ${says}` : code || says
+  })
+  return [incomplete, failedRules(result).join('\n'), notes.filter(Boolean).join('\n')]
+}
+
+/**
+ * The line after the count when messages still fail a hard rule: how many,
+ * and which rules among them. Empty when none does.
+ */
+export function incompleteListLine(items: Record<string, unknown>[]): string {
+  const results = items.map((i) => record(i.result)).filter((r): r is Record<string, unknown> => !!r && r.ok !== false && isIncomplete(r))
+  if (results.length === 0) return ''
+  const rules = [...new Set(results.flatMap(failedRules))]
+  const which = rules.length ? ` (${rules.join(', ')})` : ''
+  const them = results.length === 1 ? 'it' : 'them'
+  return `Incomplete: ${count(results.length, 'message')} still ${results.length === 1 ? 'fails' : 'fail'} a hard rule${which}; check ${them} before sending. The results say which under incomplete and failed_rules.`
 }
 
 /** Where the results of a run go: next to its list, or `<id>.optimized.jsonl` here. */
@@ -385,7 +429,9 @@ function writeResults(list: ListFile | null, id: string, items: Record<string, u
   const byIndex = new Map(items.map((i) => [i.index, i]))
   const path = resultsFile(list, id, cwd)
   if (list?.kind === 'csv' && list.header && list.rows) {
-    const rows = [[...list.header, ...resultColumnNames(list.header)], ...list.rows.map((row, i) => [...row, ...resultCells(byIndex.get(i), contexts[i])])]
+    const withRules = items.some(hasRuleFields)
+    const cells = (i: number) => [...resultCells(byIndex.get(i), contexts[i]), ...(withRules ? ruleCells(byIndex.get(i)) : [])]
+    const rows = [[...list.header, ...resultColumnNames(list.header, withRules)], ...list.rows.map((row, i) => [...row, ...cells(i)])]
     writeNew(path, toCsv(rows.map((row) => row.map(neutralise))), force, pickUp)
     return path
   }
@@ -537,6 +583,8 @@ export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>)
   const path = writeResults(list, id, items, ctx.io.cwd, force, contexts, pickUpFor(id))
   const done = items.length - failed
   out.info(`${done} of ${count(items.length, 'message')} optimized${failed ? `, ${failed} failed` : ''}.`)
+  const incomplete = incompleteListLine(items)
+  if (incomplete) out.info(incomplete)
   out.result({}, `Results: ${path}`)
   const sent = plan && list ? writeSendTo(plan, list, items, force, pickUpFor(id)) : null
   if (plan && sent) printSendTo(ctx, plan, sent)

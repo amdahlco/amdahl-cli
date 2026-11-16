@@ -6,7 +6,8 @@
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
 // summary and up to three lines on what Amdahl did go to stderr, then the run
-// id. A feedback link to the run's internal page follows only for Amdahl staff
+// id. A message that still fails a hard rule (`incomplete`, `failed_rules`)
+// has a warning line on stderr just before it, naming the rules. A feedback link to the run's internal page follows only for Amdahl staff
 // who turn it on (`feedbackLink` in the config, or AMDAHL_FEEDBACK_LINK=1).
 //
 // With no file at a terminal it asks for the message to be pasted instead
@@ -30,7 +31,7 @@ import { consoleUrlFor } from '../oauth'
 import { printable } from '../output'
 import { rememberRun } from '../history'
 import { sentLines } from '../next-steps'
-import { truthfulSummary } from '../text'
+import { incompleteLine, truthfulSummary } from '../text'
 import { atTerminal, canAsk } from '../terminal'
 import { browserSignIn } from './auth'
 import { optimizeList } from './batch'
@@ -392,6 +393,8 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   }
   out.info(VERSION_RULE)
   if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
+  const incomplete = incompleteLine(result)
+  if (incomplete) out.info(incomplete)
   out.result({}, String(result.message ?? ''))
   const did = whatAmdahlDid(result)
   const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
@@ -454,6 +457,8 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       if (inputs.length > 1) out.info(`== ${file} ==`)
       if (result.unchanged === true) out.info('No rewrite beat your draft; it is returned unchanged.')
       else if (typeof result.summary === 'string' && truthfulSummary(result.summary, base.context)) out.info(truthfulSummary(result.summary, base.context))
+      const incomplete = incompleteLine(result)
+      if (incomplete) out.info(incomplete)
       out.result({}, String(result.message ?? ''))
       const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx))]
       if (lines.length) out.info(lines.join('\n'))

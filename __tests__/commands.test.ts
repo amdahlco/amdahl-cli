@@ -214,6 +214,39 @@ describe('optimize', () => {
     expect(json.stderr).not.toContain('Flagged')
   })
 
+  it('a message that still fails a hard rule says so, and which rules, just before it; --json passes the fields through', async () => {
+    const optimizeResult = {
+      ok: true,
+      message: 'Hi Sam, ...',
+      summary: 'Tighter opener.',
+      run_id: 'r1',
+      incomplete: true,
+      failed_rules: ['ask', 'length'],
+      notes: [{ audience: 'sender', code: 'served_under_veto', says: 'No version passed every rule.' }],
+    }
+    const io = await loggedIn({ optimizeResult })
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    const r = await cli(io, 'optimize', file)
+    expect(r.stdout).toBe('Hi Sam, ...\n')
+    expect(r.stderr.split('\n').slice(0, 2)).toEqual(['Tighter opener.', 'Incomplete: it still fails 2 hard rules (ask, length); check before sending.'])
+
+    const json = await cli(io, 'optimize', file, '--json')
+    expect(json.json).toEqual({ ok: true, file, result: optimizeResult })
+    expect(json.stderr).not.toContain('Incomplete')
+  })
+
+  it('incomplete with no rule named still warns; failed_rules: [] with incomplete: false prints nothing extra', async () => {
+    const io = await loggedIn({ optimizeResult: { ok: true, message: 'm', run_id: 'r1', incomplete: true } })
+    const file = join(io.homedir, 'a.md')
+    writeFileSync(file, 'draft')
+    expect((await cli(io, 'optimize', file)).stderr).toContain('Incomplete: it still fails a hard rule; check before sending.\n')
+    await server!.close()
+    const clean = await loggedIn({ optimizeResult: { ok: true, message: 'm', run_id: 'r1', incomplete: false, failed_rules: [], notes: [] } })
+    writeFileSync(join(clean.homedir, 'a.md'), 'draft')
+    expect((await cli(clean, 'optimize', join(clean.homedir, 'a.md'))).stderr).not.toContain('Incomplete')
+  })
+
   it('sends X-Amdahl-Client: cli/<version> and User-Agent: amdahl-cli/<version> on every request to the API', async () => {
     const io = await loggedIn()
     writeFileSync(join(io.homedir, 'a.md'), 'draft')
@@ -421,6 +454,14 @@ describe('optimize with no file at a terminal', () => {
     )
     const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
     expect(bodies).toEqual([{ message: 'Hi Sam,\n\nLong draft.', channel: 'linkedin' }])
+  })
+
+  it('a pasted message that still fails a hard rule says so under the rule, before the message', async () => {
+    const io = await loggedIn({ optimizeResult: { ok: true, message: 'Hi Sam, short.', incomplete: true, failed_rules: ['sources'] } })
+    io.answers.push('draft')
+    const r = await cli(io, 'optimize')
+    expect(r.code).toBe(0)
+    expect(r.stderr).toContain(`${VERSION_RULE}\nIncomplete: it still fails a hard rule (sources); check before sending.\n`)
   })
 
   it('not signed in: signs in through the browser first, then asks for the paste', async () => {

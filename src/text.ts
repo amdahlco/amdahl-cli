@@ -172,3 +172,28 @@ export function truthfulSummary(summary: string, context: unknown): string {
 export function count(n: number, one: string, many = `${one}s`): string {
   return `${n} ${n === 1 ? one : many}`
 }
+
+/**
+ * The hard rules a result says its message fails, by code (`ask`, `length`,
+ * `sources` and others the optimizer may add). [] when it names none.
+ */
+export function failedRules(result: Record<string, unknown>): string[] {
+  return Array.isArray(result.failed_rules) ? result.failed_rules.map(field).filter(Boolean) : []
+}
+
+/**
+ * Whether a result says its message fails a hard rule: `incomplete` is true
+ * when no version passed them all, so the closest one came back. An older
+ * optimizer sends neither field, so its results never read as incomplete.
+ */
+export function isIncomplete(result: Record<string, unknown>): boolean {
+  return result.incomplete === true || failedRules(result).length > 0
+}
+
+/** The warning a message that fails a hard rule prints with; '' when it fails none. */
+export function incompleteLine(result: Record<string, unknown>): string {
+  if (!isIncomplete(result)) return ''
+  const rules = failedRules(result)
+  const which = rules.length ? ` (${rules.join(', ')})` : ''
+  return `Incomplete: it still fails ${rules.length > 1 ? `${rules.length} hard rules` : 'a hard rule'}${which}; check before sending.`
+}

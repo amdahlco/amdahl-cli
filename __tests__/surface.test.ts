@@ -446,6 +446,69 @@ describe('optimize --list', () => {
     expect(rows[2]?.slice(0, 5)).toEqual(['Beta', 'Hi Sam', 'sam@beta.io', '', ''])
   })
 
+  it('results that say how each message stands against the hard rules add incomplete, failed_rules and notes columns and a warning line', async () => {
+    const run = (i: number) => batchRun(i)
+    const io = await signedIn({
+      batchResults: (item, i) => ({
+        status: 'done',
+        result: {
+          ok: true,
+          message: `better: ${String(item.message)}`,
+          summary: 'Tighter opener.',
+          run_id: run(i),
+          unchanged: false,
+          ...(i === 0
+            ? {
+                incomplete: true,
+                failed_rules: ['ask', 'length'],
+                notes: [
+                  { audience: 'sender', code: 'served_under_veto', says: 'No version passed every rule.' },
+                  { audience: 'developer', code: 'max_words_ignored', says: 'max_words changed nothing.' },
+                ],
+              }
+            : i === 1
+              ? { incomplete: true, failed_rules: ['sources'] }
+              : { incomplete: false, failed_rules: [] }),
+        },
+      }),
+    })
+    const list = join(io.cwd, 'crm.csv')
+    // A CRM export's own Notes column keeps its name; Amdahl's takes amdahl_.
+    writeFileSync(list, 'message,Notes\na,mine\nb,\nc,\n')
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.code).toBe(0)
+    expect(r.stderr).toContain(
+      '3 of 3 messages optimized.\nIncomplete: 2 messages still fail a hard rule (ask, length, sources); check them before sending. The results say which under incomplete and failed_rules.\n'
+    )
+    expect(parseCsv(readFileSync(join(io.cwd, 'crm.optimized.csv'), 'utf8')).rows).toEqual([
+      ['message', 'Notes', 'optimized_message', 'status', 'summary', 'run_id', 'error', 'incomplete', 'failed_rules', 'amdahl_notes'],
+      ['a', 'mine', 'better: a', 'done', 'Tighter opener.', run(0), '', 'true', 'ask\nlength', 'served_under_veto (sender): No version passed every rule.\nmax_words_ignored (developer): max_words changed nothing.'],
+      ['b', '', 'better: b', 'done', 'Tighter opener.', run(1), '', 'true', 'sources', ''],
+      ['c', '', 'better: c', 'done', 'Tighter opener.', run(2), '', 'false', '', ''],
+    ])
+  })
+
+  it('one incomplete message in a JSONL list: the warning speaks of it alone, and the results keep the fields as sent', async () => {
+    const io = await signedIn({
+      batchResults: (item, i) => ({ status: 'done', result: { ok: true, message: `better: ${String(item.message)}`, run_id: batchRun(i), ...(i === 1 ? { incomplete: true } : {}) } }),
+    })
+    const list = join(io.cwd, 'd.jsonl')
+    writeFileSync(list, '{"message":"a"}\n{"message":"b"}\n')
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.stderr).toContain('Incomplete: 1 message still fails a hard rule; check it before sending.')
+    const lines = readFileSync(join(io.cwd, 'd.optimized.jsonl'), 'utf8').trim().split('\n')
+    expect(JSON.parse(lines[1] ?? '{}')).toMatchObject({ index: 1, result: { incomplete: true } })
+  })
+
+  it('results that carry none of the three fields add no columns and no warning', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'd.csv')
+    writeFileSync(list, 'message\na\n')
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.stderr).not.toContain('Incomplete')
+    expect(parseCsv(readFileSync(join(io.cwd, 'd.optimized.csv'), 'utf8')).rows[0]).toEqual(['message', 'optimized_message', 'status', 'summary', 'run_id', 'error'])
+  })
+
   it('keeps a list column that has the name of one of its results columns, and names its own with amdahl_', async () => {
     const io = await signedIn()
     const list = join(io.cwd, 'x.csv')
