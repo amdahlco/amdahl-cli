@@ -242,7 +242,31 @@ export function toCliError(err: unknown): CliError {
     return new CliError(err.errorCode ?? `http_${err.statusCode}`, plainMessage(err) ?? err.message, exit, hint)
   }
   const message = err instanceof Error ? err.message : String(err)
+  if (droppedMidRequest(err)) {
+    return new CliError(
+      'network_error',
+      'The connection dropped while Amdahl was working, before its answer came back.',
+      EXIT.network,
+      'Run the same command again. An optimize that finished on Amdahl\'s side comes back at no cost.',
+      message
+    )
+  }
   return new CliError('network_error', `Could not reach the Amdahl API: ${message}`, EXIT.network, NETWORK_HINT)
+}
+
+/** Errors that mean the request never left this computer: no address, refused, no route, connect timeout. */
+const NEVER_CONNECTED = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED', 'ENETUNREACH', 'EHOSTUNREACH', 'UND_ERR_CONNECT_TIMEOUT', 'ENETDOWN'])
+
+/**
+ * True when fetch failed after the connection was made: the socket closed or reset, or the answer
+ * timed out. The request was sent, so the server may have run it ("Could not reach" would be wrong).
+ */
+function droppedMidRequest(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const cause = (err as { cause?: unknown }).cause
+  const code = cause && typeof cause === 'object' ? String((cause as { code?: unknown }).code ?? '') : ''
+  if (!code || NEVER_CONNECTED.has(code)) return false
+  return /^(ECONNRESET|EPIPE|ETIMEDOUT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|UND_ERR_CLOSED)$/.test(code)
 }
 
 /** Run a request and rethrow any failure as a CliError. */

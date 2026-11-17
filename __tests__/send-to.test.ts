@@ -156,6 +156,8 @@ describe('--for writes the console file', () => {
     expect(sendToFileName('/x/café list.CSV', reply)).toBe('cafe-list-reply-io.csv')
     expect(sendToFileName('/x/___.csv', reply)).toBe('leads-reply-io.csv')
     expect(sendToFileName('/x/contacts', reply)).toBe('contacts-reply-io.csv')
+    // The list's own underscores stay (QA 0.5.1 N15).
+    expect(sendToFileName('/x/l_utf8bom.csv', reply)).toBe('l_utf8bom-reply-io.csv')
     expect(snakeHeader('  Q4 / Région  ')).toBe('q4_region')
   })
 })

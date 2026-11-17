@@ -151,6 +151,29 @@ export function day(iso: unknown): string {
   return Number.isFinite(ms) ? new Date(ms).toISOString().slice(0, 10) : ''
 }
 
+/**
+ * An ISO timestamp as a day a person reads (`Dec 1, 2026`), in UTC so a reset
+ * at midnight UTC is not shown as the day before; '' when it does not parse.
+ */
+export function readableDay(iso: unknown): string {
+  if (typeof iso !== 'string') return ''
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return ''
+  return new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' })
+}
+
+/**
+ * When a near deadline falls, from now: `in 10 minutes (8:43 AM)`, in this
+ * computer's time; `at <timestamp>` when it does not parse.
+ */
+export function inMinutes(iso: string, now = Date.now()): string {
+  const ms = Date.parse(iso)
+  if (!Number.isFinite(ms)) return `at ${iso}`
+  const minutes = Math.max(0, Math.round((ms - now) / 60_000))
+  const clock = new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  return `in ${count(minutes, 'minute')} (${clock})`
+}
+
 /** True when a context (as sent) holds at least one fact or rule. */
 export function hasFactsOrRules(context: unknown): boolean {
   const c = record(context)

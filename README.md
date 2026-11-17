@@ -541,7 +541,9 @@ lines it rests on, each with its verdict and reason. Without
 `--evidence workspace` only the ask is evaluated: the four lines that read your
 customers' calls say "Not evaluated: evidence was off", and the headline says
 how many lines the score rests on: `Grade 5 of 5, on 1 of the 5 lines (1 of 1
-line passed).` A line that could not be evaluated is not a fail. When no line could be,
+line passed).` When fewer than half the lines were evaluated there is no bar verdict:
+the next line says the grade is not a verdict on the draft, and, when no calls are
+synced yet, how to connect them. A line that could not be evaluated is not a fail. When no line could be,
 the grade is `Not graded.`, never 0. Every grade says it is one reading and does
 not predict replies. The run id comes last; `amdahl run <id>` opens it. With
 `--json` it prints `{ok, file, result}`: the grade is `.result.grade`.

@@ -536,7 +536,7 @@ export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>)
   if (list?.ignored?.length) {
     const shown = list.ignored.slice(0, 6).join(', ')
     const more = list.ignored.length > 6 ? ` and ${list.ignored.length - 6} more` : ''
-    out.info(`Not sent, and copied to the results as they are: ${count(list.ignored.length, 'column')} Amdahl does not read (${shown}${more}).`)
+    out.info(`Kept as they are in the results (not sent to Amdahl): ${shown}${more}.`)
   }
   if (!resume && list && list.items.length > MAX_BATCH_ITEMS) {
     throw usageError(`A batch takes at most ${MAX_BATCH_ITEMS} messages, and ${list.path} has ${list.items.length}.`, 'Split the list into files of 500 or fewer, and run each one.')

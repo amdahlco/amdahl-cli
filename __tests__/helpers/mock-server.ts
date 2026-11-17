@@ -107,6 +107,10 @@ export interface MockOptions {
   /** `GET /search/suggestions` never answers (a hanging server). */
   suggestionsHang?: boolean
   suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown> }
+  /** setup/status's `free_usage` (a self-serve workspace on its free credit). */
+  freeUsage?: Record<string, unknown>
+  /** optimize_prompt refuses with this message (a 422), as the server does with no recipients on an empty workspace. */
+  promptRefusal?: string
   /** What `GET /search/overview` answers (inside `data`). */
   overview?: Record<string, unknown>
   /** What `GET /search/fields` answers (inside `data`), before the surface filter. */
@@ -336,6 +340,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             workspace: options.degradedStatus ? null : { id: BIZ, name: 'Acme', slug: 'acme' },
             caller: { user_id: USER, email: 'dev@example.com', role: 'editor', auth_method: kind, client_id: null, scopes: [] },
             optimize: { allowed: blocker === null, blocker, quota: { limit: 1000, used, remaining: 1000 - used, resets_at: '2026-12-01T00:00:00Z' } },
+            ...(options.freeUsage ? { free_usage: options.freeUsage } : {}),
             connections: options.degradedStatus
               ? { omitted: 'unavailable' }
               : options.noConnections
@@ -365,7 +370,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             })
           }
           return json(res, 200, {
-            data: {
+            data: options.searchResult ?? {
               success: true,
               mode_ran: 'fuzzy',
               results: [{ id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' }],
@@ -566,6 +571,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         const input = JSON.parse(body) as { mode?: string; recipients?: { recipient: Record<string, unknown>; label?: string }[] }
         const problems = promptProblems(input)
         if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
+        if (options.promptRefusal && !input.recipients) return json(res, 422, { error: { code: 'invalid_input', message: options.promptRefusal } })
         const mode = input.mode ?? 'improve'
         promptRuns.set(PROMPT_RUN, { mode, polls: 0 })
         const labels = input.recipients?.map((r) => r.label ?? String(r.recipient.company ?? r.recipient.name)) ?? ['Corvid Health', 'Brightpath', 'Helix', 'Northwind']

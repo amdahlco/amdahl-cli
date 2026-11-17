@@ -93,7 +93,9 @@ describe('grade', () => {
     const r = await cli(io, 'grade', write(io, 'd.txt', 'Hello there'))
     expect(r.code).toBe(0)
     expect(r.stdout).toContain('  n/a   Grounding\n        Not evaluated: not requested.')
-    expect(r.stdout).toContain("Grade 5 of 5, on 1 of the 5 lines (1 of 1 line passed).\nIt meets the bar of 4.2.")
+    // One line of five is not a verdict on the draft (QA 0.5.1 N10): no "meets the bar".
+    expect(r.stdout).toContain('Grade 5 of 5, on 1 of the 5 lines (1 of 1 line passed).\nOnly 1 of the 5 lines could be checked, so this is not a verdict on the draft.')
+    expect(r.stdout).not.toContain('meets the bar')
     expect(r.stdout).toContain("Four of the five lines read your customers' calls; add --evidence workspace to\ngrade them.")
     expect(r.stdout).toContain('It does not predict replies.')
     fits80(r.stdout)
@@ -197,9 +199,10 @@ describe('prompt', () => {
     const grade = await cli(io, 'prompt', write(io, 'p.md', PROMPT), '--mode', 'grade')
     expect(grade.code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/optimize_prompt')).toEqual({ prompt: PROMPT, mode: 'grade' })
-    expect(grade.stdout).toContain('Prompt grade: 3.4 of 5, over 4 emails, 1 passing the bar of 4.2.')
+    // The coverage is in the headline (QA 0.5.1 N9), so the note under the lines is not repeated.
+    expect(flat(grade.stdout)).toContain('Prompt grade: 3.4 of 5, over 4 emails, 1 passing the bar of 4.2, on 1 of the 2 lines.')
     expect(grade.stdout).toContain('Lines, over the emails: Clear ask 2 of 2, Grounding not evaluated.')
-    expect(flat(grade.stdout)).toContain('The score rests on 1 of the 2 lines; the others were not evaluated.')
+    expect(flat(grade.stdout)).not.toContain('The score rests on')
     expect(grade.stdout).toContain('Emails it wrote:')
     expect(grade.stdout).not.toMatch(/lift/i)
     fits80(grade.stdout)
@@ -316,7 +319,7 @@ describe('a key that cannot do it', () => {
 describe('runs and run', () => {
   it('lists the runs this computer made, newest first, and says the list is from this computer', async () => {
     const io = await signedIn({ optimizeResult: { ok: true, message: 'better', run_id: KNOWN_RUN } })
-    expect((await cli(io, 'runs')).stdout).toContain('No runs yet from this computer.')
+    expect((await cli(io, 'runs')).stdout).toContain('No runs yet in Acme from this computer.')
     expect((await cli(io, 'optimize', write(io, 'a.txt', 'Hi'), '--channel', 'linkedin')).code).toBe(0)
     expect((await cli(io, 'grade', write(io, 'b.txt', 'Hi'))).code).toBe(0)
     expect((await cli(io, 'prompt', write(io, 'p.md', 'Write an email.'), '--no-wait')).code).toBe(0)

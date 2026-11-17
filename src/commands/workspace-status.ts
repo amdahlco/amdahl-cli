@@ -11,7 +11,7 @@ import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
-import { day } from '../text'
+import { readableDay, record } from '../text'
 import { connectLine, connectionUrl, connectionsUrl } from './connections'
 
 /** What to do about each optimize blocker. */
@@ -19,7 +19,7 @@ const BLOCKER_FIX: Record<string, (status: CliSetupStatus) => string> = {
   missing_scope: () => `This credential cannot optimize. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`,
   role_too_low: () => 'Your role cannot optimize. Ask a workspace admin to raise it.',
   quota_exhausted: (status) => {
-    const resets = day(status.optimize.quota?.resets_at)
+    const resets = readableDay(status.optimize.quota?.resets_at)
     return `The monthly optimize quota is used up.${resets ? ` It resets on ${resets}.` : ''}`
   },
 }
@@ -41,6 +41,21 @@ function connectionFix(status: CliSetupStatus, consoleUrl: string): string {
   return `  ${verb}: ${connectionUrl(consoleUrl, slug, only.id)}`
 }
 
+/** Dollars from micros, with cents only when there are any: `$100`, `$99.32`. */
+function usd(micros: number): string {
+  const dollars = micros / 1_000_000
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`
+}
+
+/** `Free usage: $99.32 of $100 left` for a workspace on its free credit; '' otherwise. */
+function freeUsageLine(status: CliSetupStatus): string {
+  const free = record((status as unknown as Record<string, unknown>).free_usage)
+  const granted = free?.granted_micros
+  const remaining = free?.remaining_micros
+  if (typeof granted !== 'number' || typeof remaining !== 'number' || granted <= 0) return ''
+  return `Free usage: ${usd(remaining)} of ${usd(granted)} left`
+}
+
 /** Human summary of a setup status. */
 function describe(status: CliSetupStatus, consoleUrl: string): string {
   const lines = [
@@ -50,8 +65,10 @@ function describe(status: CliSetupStatus, consoleUrl: string): string {
   const opt = status.optimize
   lines.push(`Optimize:   ${opt.allowed ? 'ready' : `blocked (${opt.blocker})`}`)
   if (opt.quota) {
-    lines.push(`Quota:      ${opt.quota.used} of ${opt.quota.limit} used, resets ${opt.quota.resets_at}`)
+    lines.push(`Quota:      ${opt.quota.used} of ${opt.quota.limit} used, resets ${readableDay(opt.quota.resets_at) || opt.quota.resets_at}`)
   }
+  const free = freeUsageLine(status)
+  if (free) lines.push(free)
   const fix = opt.blocker ? BLOCKER_FIX[opt.blocker] : undefined
   if (!opt.allowed && fix) {
     lines.push(`            ${fix(status)}`)
@@ -64,8 +81,8 @@ function describe(status: CliSetupStatus, consoleUrl: string): string {
         : 'Connections: could not be read right now'
     )
   } else {
-    lines.push(`Connections: ${conns.healthy} of ${conns.total} healthy`)
-    if (conns.total === 0) lines.push(`  No data connected yet. ${connectLine()}`)
+    if (conns.total === 0) lines.push('Connections: none yet', `  ${connectLine()}`)
+    else lines.push(`Connections: ${conns.healthy} of ${conns.total} healthy`)
     for (const c of conns.needs_attention) {
       lines.push(`  needs attention: ${c.name} (${c.connector_type}): ${c.status}`)
     }

@@ -139,6 +139,11 @@ export function recentRuns(ctx: Ctx, owner: RunOwner = currentOwner(ctx)): RunRe
     .reverse()
 }
 
+/** How many runs this computer keeps for this API host under another sign-in, workspace or key. */
+export function otherOwnersRuns(ctx: Ctx, owner: RunOwner = currentOwner(ctx)): number {
+  return readAll(ctx).filter((r) => r.api_url === ctx.apiUrl && !sameOwner(r, owner)).length
+}
+
 function sameOwner(r: RunRecord, owner: RunOwner): boolean {
   if (owner.profile) return r.profile === owner.profile
   if (owner.key) return !r.profile && (r.key === owner.key || r.key === undefined)

@@ -195,7 +195,7 @@ describe('search', () => {
     expect(json.json.research.research_id).toBe('66666666-6666-4666-8666-666666666666')
   })
 
-  it('a workspace with nothing connected prints the message and link, then the connect command', async () => {
+  it('a workspace with nothing connected prints the message and link once, with no second connect line', async () => {
     const setup = {
       success: true,
       mode_ran: 'fuzzy',
@@ -206,7 +206,7 @@ describe('search', () => {
     const r = await cli(io, 'search', 'anything')
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(
-      'This workspace has no data connected yet. Connect it at\nhttps://console.example/acme/settings/connections.\nConnect your CRM or call recorder: amdahl connect\n'
+      'This workspace has no data connected yet. Connect it at\nhttps://console.example/acme/settings/connections.\n'
     )
     expect((await cli(io, 'search', 'anything', '--json')).json.setup_needed.reason).toBe('no_sources_connected')
   })
@@ -438,7 +438,7 @@ describe('optimize --list', () => {
     expect(sentBody('/api/platform/v1/messages/optimize/batch')).toEqual({
       items: [{ message: 'Hi Dana, quick one', context: { facts: ['Dana runs ops'] } }, { message: 'Hi Sam' }],
     })
-    expect(r.stderr).toContain('Not sent, and copied to the results as they are: 3 columns Amdahl does not read (Company, Email, Notes).\n')
+    expect(r.stderr).toContain('Kept as they are in the results (not sent to Amdahl): Company, Email, Notes.\n')
     // Every input column stays where it was, then Amdahl's columns.
     const rows = parseCsv(readFileSync(join(io.cwd, 'crm.optimized.csv'), 'utf8')).rows
     expect(rows[0]).toEqual(['Company', 'Message', 'Email', 'facts', 'Notes', 'optimized_message', 'status', 'summary', 'run_id', 'error'])
@@ -542,7 +542,7 @@ describe('optimize --list', () => {
     expect(requests('/messages/optimize/batch')).toEqual([])
     // Seven ignored columns: six are named, the rest are counted.
     writeFileSync(list, 'a,b,c,d,e,f,g,message\n1,2,3,4,5,6,7,Hi\n')
-    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).stderr).toContain('7 columns Amdahl does not read (a, b, c, d, e, f and 1 more).')
+    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).stderr).toContain('Kept as they are in the results (not sent to Amdahl): a, b, c, d, e, f and 1 more.')
   })
 
   it('a refused item names its line in the list', async () => {
@@ -935,8 +935,8 @@ describe('next steps', () => {
     server!.options.blocker = 'quota_exhausted'
     const empty = await cli(io, 'status')
     expect(empty.stdout).toContain('Optimize:   blocked (quota_exhausted)\n')
-    expect(empty.stdout).toContain('            The monthly optimize quota is used up. It resets on 2026-12-01.\n')
-    expect(empty.stdout).toContain('Connections: 0 of 0 healthy\n  No data connected yet. Connect your CRM or call recorder: amdahl connect\n')
+    expect(empty.stdout).toContain('            The monthly optimize quota is used up. It resets on Dec 1, 2026.\n')
+    expect(empty.stdout).toContain('Connections: none yet\n  Connect your CRM or call recorder: amdahl connect\n')
     server!.options.blocker = 'role_too_low'
     expect((await cli(io, 'status')).stdout).toContain('Ask a workspace admin to raise it.')
     // --json is the server's body, unchanged.

@@ -23,6 +23,7 @@ import { CliError, EXIT, usageError } from '../errors'
 import { EXPIRES_DAYS, PRESET_BUNDLES, generateKey } from '../keygen'
 import type { AmdahlClient } from '../api'
 import { canOpenBrowser } from '../terminal'
+import { inMinutes, readableDay } from '../text'
 
 /** Wait this long between polls when the server rate-limits them. */
 const RATE_LIMIT_BACKOFF_MS = 10_000
@@ -34,7 +35,7 @@ function announce(ctx: Ctx, req: CliKeyRequestCreated, verb: string): void {
   out.info(
     `To ${verb}, open this page while signed in to the console and enter the code.\n\n` +
       `  Code: ${out.bold(req.user_code)}\n  Page: ${req.approve_url}\n\n` +
-      `The request expires at ${req.expires_at}. Waiting for approval...`
+      `The request expires ${inMinutes(req.expires_at)}. Waiting for approval...`
   )
   // Only for a person at a terminal, as `login` and `connect` do: a script, CI, an agent or
   // `--json` gets the link above and no browser.
@@ -131,6 +132,14 @@ async function workspaceId(ctx: Ctx, client: AmdahlClient, fromProfile: boolean)
   return me.business_id
 }
 
+/** A bundle as the `--preset` name that makes it (`mcp_customer_agent` is `agent`), or the bundle when none does. */
+export function presetName(bundle: string | null | undefined): string {
+  if (!bundle) return ''
+  const preset = Object.entries(PRESET_BUNDLES).find(([, b]) => b === bundle)?.[0]
+  // A bundle with no preset (a newer server's) reads as its words: `mcp_search_only` is `search-only`.
+  return preset ?? bundle.replace(/^mcp_/, '').replace(/_/g, '-')
+}
+
 /** `amdahl keys list`. */
 export async function keysList(ctx: Ctx): Promise<number> {
   const credential = await resolveCredential(ctx)
@@ -154,7 +163,7 @@ export async function keysList(ctx: Ctx): Promise<number> {
       : rows
           .map(
             (k) =>
-              `${k.key_prefix}...  ${k.name}  ${k.bundle_name ?? ''}  expires ${k.expires_at ?? 'never'}  ${k.is_mine ? '(you)' : (k.creator_email ?? '')}  ${k.id}`
+              `${k.key_prefix}...  ${k.name}  ${presetName(k.bundle_name)}  ${k.expires_at ? `expires ${readableDay(k.expires_at) || k.expires_at}` : 'never expires'}  ${k.is_mine ? '(you)' : (k.creator_email ?? '')}  ${k.id}`
           )
           .join('\n')
   ctx.out.result({ ok: true, keys: rows }, human)

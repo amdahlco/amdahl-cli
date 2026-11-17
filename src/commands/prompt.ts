@@ -86,6 +86,13 @@ function side(grade: Record<string, unknown> | null): string | null {
   return parts.join(', ')
 }
 
+/** `1 of the 5 lines` when only some lines were evaluated; '' when all were (or none are listed). */
+function coverage(grade: Record<string, unknown> | null): string {
+  const rates = lineRates(grade)
+  const evaluated = rates.filter((r) => !r.endsWith('not evaluated')).length
+  return evaluated > 0 && evaluated < rates.length ? `${evaluated} of the ${rates.length} lines` : ''
+}
+
 /** Each line's pass rate over the emails: `Clear ask 2 of 2`, `Grounding not evaluated`. */
 function lineRates(grade: Record<string, unknown> | null): string[] {
   const lines = record(grade?.lines)
@@ -102,12 +109,14 @@ function lineRates(grade: Record<string, unknown> | null): string[] {
 const SPLIT: Record<string, string> = { held_out: 'held out', graded: 'graded', train: 'train' }
 
 /** One email the run wrote: who it is for, which version, its grade, and the email. */
-function emailLines(email: Record<string, unknown>, showRevisedScore: boolean): string[] {
+function emailLines(email: Record<string, unknown>, showRevisedScore: boolean, onlyOriginal = false): string[] {
   const grade = record(email.grade)
   const score = typeof grade?.score === 'number' ? `${grade.score} of 5` : 'not graded'
-  const passed = typeof grade?.passed === 'number' && typeof grade?.total === 'number' ? ` (${grade.passed} of ${grade.total} lines)` : ''
+  const passed = typeof grade?.passed === 'number' && typeof grade?.total === 'number' ? ` (${grade.passed} of ${grade.total} ${grade.total === 1 ? 'line' : 'lines'})` : ''
   const split = SPLIT[field(email.split)] ?? field(email.split)
-  const head = [field(email.label), field(email.variant), split].filter(Boolean).join(', ')
+  // In a grade run every email is from the person's own prompt: "original" there says nothing.
+  const variant = onlyOriginal && field(email.variant) === 'original' ? '' : field(email.variant)
+  const head = [field(email.label), variant, split].filter(Boolean).join(', ')
   // A revised email's score beside the original's is a before and after: only a reportable lift may show one.
   const hidden = field(email.variant) === 'revised' && !showRevisedScore
   const lines = [hidden ? `${head || 'Email'}` : `${head || 'Email'}: ${score}${passed}`]
@@ -147,7 +156,9 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
   } else if (outcome === 'unchanged') {
     lines.push(...wrap(`No revision wrote better email on the held-out recipients, so your prompt stays as it is. ${was ? `It averages ${was}.` : 'Its emails could not be graded.'}`))
   } else {
-    lines.push(...wrap(was ? `Prompt grade: ${was}.` : 'Not graded: none of its emails could be graded.'))
+    // The coverage goes in the headline, as grade's does: a 5 over one line is not a 5 over five.
+    const covered = coverage(original)
+    lines.push(...wrap(was ? `Prompt grade: ${was}${covered ? `, on ${covered}` : ''}.` : 'Not graded: none of its emails could be graded.'))
   }
   if (outcome === 'improved' || outcome === 'unchanged') {
     if (run.lift_reportable === true && typeof run.lift === 'number') {
@@ -172,14 +183,15 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
     lines.push('', ...wrap(`Lines, over the ${outcome === 'graded' ? '' : 'held-out '}emails: ${rates.join(', ')}.`))
     // A mean over fewer lines than the rubric has says so: one line passing is a 5, but it is one line.
     const unevaluated = rates.filter((r) => r.endsWith('not evaluated')).length
-    if (unevaluated > 0 && unevaluated < rates.length) lines.push(...wrap(`The score rests on ${rates.length - unevaluated} of the ${rates.length} lines; the others were not evaluated.`))
+    if (unevaluated > 0 && unevaluated < rates.length && (outcome === 'improved' || outcome === 'unchanged')) lines.push(...wrap(`The score rests on ${rates.length - unevaluated} of the ${rates.length} lines; the others were not evaluated.`))
   }
 
   const emails = records(run.emails)
   const shown = emails.filter((e) => field(e.split) !== 'train')
   if (shown.length > 0) {
     lines.push('', 'Emails it wrote:')
-    shown.forEach((email, i) => lines.push(...(i > 0 ? [''] : []), ...emailLines(email, reportable)))
+    const onlyOriginal = shown.every((e) => field(e.variant) !== 'revised')
+    shown.forEach((email, i) => lines.push(...(i > 0 ? [''] : []), ...emailLines(email, reportable, onlyOriginal)))
   }
   const trained = emails.length - shown.length
   if (trained > 0) lines.push('', ...wrap(`${count(trained, 'email')} trained the revision. Their scores are not lift; they are in --json.`))
@@ -187,6 +199,17 @@ export function promptRunLines(run: Record<string, unknown>): string[] {
   const judge = field(record(record(run.judges)?.final)?.model)
   lines.push('', ...wrap(`This is one reading${judge ? ` by ${judge}` : ''}. It measures the emails against the rubric${record(run.evidence)?.used === true ? ' and your evidence' : ''}. It does not predict replies.`))
   return lines
+}
+
+/**
+ * The server refuses a run with no recipients on a workspace with no customer speech, and says
+ * "Send recipients": in the CLI that is the --recipients flag, so the error names it.
+ */
+export function recipientsNeeded(err: unknown, sentRecipients: boolean): unknown {
+  if (sentRecipients || !(err instanceof CliError) || !/send recipients/i.test(err.message)) return err
+  const message = err.message.replace(/\s*Send recipients\.?/i, '').trim()
+  const hint = `Add --recipients recipients.json: ${RECIPIENTS.min} to ${RECIPIENTS.max} people, for example [{"recipient":{"company":"Helix"}}].`
+  return new CliError(err.code, message, err.exit, hint, err.detail, err.data)
 }
 
 /** The recipients file: 1 to 6 objects with a `recipient`, as the API takes them. */
@@ -324,7 +347,9 @@ export async function prompt(ctx: Ctx, args: string[]): Promise<number> {
   body.prompt = text
 
   credential ??= await resolveCredential(ctx)
-  const started = await call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize_prompt`, { method: 'POST', body }))
+  const started = await call(() => apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/messages/optimize_prompt`, { method: 'POST', body })).catch((err: unknown) => {
+    throw recipientsNeeded(err, !!recipientsPath)
+  })
   const id = field(started.run_id)
   if (!id) throw new CliError('unexpected_response', 'The prompt run started, but the server sent no run id.', EXIT.general)
   rememberRun(ctx, { run_id: id, kind: 'prompt', channel }, credential)
