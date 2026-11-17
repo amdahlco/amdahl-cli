@@ -82,7 +82,7 @@ const CODEX_LOGIN = 'codex mcp login amdahl'
 export function toolScreen(name: string, already: boolean): string[] {
   return [
     already ? `✓ ${name} already has Amdahl.` : `✓ Added Amdahl to ${name}.`,
-    `One step left, in ${name}:`,
+    `Two steps left, in ${name}:`,
     `  1. ${SIGN_IN[name] ?? ''}`,
     `  2. ${TRY_IN[name] ?? ''}`,
   ]
@@ -202,11 +202,14 @@ export function finishLines(names: string[], inClaudeCode = false): string[] {
 export type SetupMode = { kind: 'menu' } | { kind: 'agent' } | { kind: 'usage'; reason: string }
 
 /**
- * The menu when stdin, stdout and stderr (the menu draws on stderr) are a
- * terminal and no agent says it runs the command. In CI (see
- * {@link ciVariable}) or with AMDAHL_NO_PROMPT=1, the usage. Anything else (an agent, a pipe, no
- * terminal) is the agent setup. Reads only `io`, so the usage path builds no
- * context.
+ * The menu when stdin and stderr (the menu draws on stderr) are a terminal
+ * and no agent says it runs the command: stdout may be piped or redirected
+ * (`amdahl | tee setup.log`), and a person is still there to answer. With
+ * stdin a terminal but stderr redirected, the question could not be seen, so
+ * the usage with the reason, and nothing is written. In CI (see
+ * {@link ciVariable}) or with AMDAHL_NO_PROMPT=1, the usage. An agent, or no
+ * terminal on stdin, is the agent setup. Reads only `io`, so the usage path
+ * builds no context.
  */
 export function setupMode(io: Io): SetupMode {
   const { env } = io
@@ -214,7 +217,8 @@ export function setupMode(io: Io): SetupMode {
   if (ci) return { kind: 'usage', reason: `${ci} is set` }
   if (env.AMDAHL_NO_PROMPT === '1') return { kind: 'usage', reason: 'AMDAHL_NO_PROMPT=1 is set' }
   if (env.CLAUDECODE || env.CURSOR_AGENT) return { kind: 'agent' }
-  return io.stdinIsTTY && io.stdoutIsTTY && io.stderrIsTTY ? { kind: 'menu' } : { kind: 'agent' }
+  if (!io.stdinIsTTY) return { kind: 'agent' }
+  return io.stderrIsTTY ? { kind: 'menu' } : { kind: 'usage', reason: 'the question needs stderr on a terminal, and it is redirected' }
 }
 
 /** The command that sets up one client, for when the setup does not. */
@@ -311,21 +315,22 @@ function enterOrSkip(io: Io): Promise<boolean> {
  * (where `codex` is a `.cmd` shim that cannot be spawned without a shell),
  * the steps.
  */
-async function codexScreen(ctx: Ctx, tool: Ready, say: (line: string) => void, detail: (text: string) => void, lead: string[]): Promise<void> {
+async function codexScreen(ctx: Ctx, tool: Ready, say: (line: string) => void, detail: (text: string) => void, lead: string[]): Promise<boolean> {
   say(tool.already ? '✓ Codex already has Amdahl.' : '✓ Added Amdahl to Codex.')
   detail(tool.detail)
-  for (const line of lead) say(line)
   if (ctx.io.platform === 'win32' || !(await onPath(ctx, 'codex'))) {
-    say('One step left, in your terminal:')
+    say('Two steps left, in your terminal:')
     say(`  1. Run: ${CODEX_LOGIN}`)
     say(`  2. ${TRY_IN.Codex ?? ''}`)
-    return
+    return false
   }
+  // Codex signs in here and now: the new-user line belongs before that sign-in.
+  for (const line of lead) say(line)
   say('Press Enter to sign Codex in to Amdahl (opens your browser).')
   if (!(await enterOrSkip(ctx.io))) {
     say(`Skipped. To connect it later, run: ${CODEX_LOGIN}`)
     say(CODEX_TRY)
-    return
+    return lead.length > 0
   }
   const code = await ctx.io.runInteractive('codex', ['mcp', 'login', 'amdahl'])
   if (code === 0) say('✓ Codex is connected.')
@@ -335,6 +340,7 @@ async function codexScreen(ctx: Ctx, tool: Ready, say: (line: string) => void, d
     say(`Codex didn't finish signing in. To try again, run: ${CODEX_LOGIN}`)
   }
   say(CODEX_TRY)
+  return lead.length > 0
 }
 
 /** Bare `amdahl`, or `amdahl setup`, in the menu or agent mode. */
@@ -388,10 +394,11 @@ export async function setup(ctx: Ctx, mode: 'menu' | 'agent'): Promise<number> {
 
   const rows = [...SHOWN.map((c) => c.name), TERMINAL]
   const picks = await io.multiSelect(QUESTION, rows, {
-    ticked: [...SHOWN.map((c) => found[c.client]), false],
+    // With no tool here, "This terminal" starts ticked, so the first Enter goes on to sign-in
+    // instead of "Nothing picked" (a new user's first key is Enter, not Space).
+    ticked: [...SHOWN.map((c) => found[c.client]), detected.length === 0],
     tags: [...SHOWN.map((c) => (found[c.client] ? FOUND_TAG : undefined)), undefined],
     note: detected.length === 0 ? NONE_FOUND : undefined,
-    // With no tool here, the marker starts on "This terminal": Space, then Enter.
     initial: detected.length === 0 ? SHOWN.length : undefined,
     hint: MENU_HINT,
     color: out.color,
@@ -418,21 +425,25 @@ export async function setup(ctx: Ctx, mode: 'menu' | 'agent'): Promise<number> {
   // The tools first, with no sign-in here: whatever happens after, they are set up.
   const done = await installEach(ctx, chosen)
   if (exit === EXIT.ok) exit = done.exit
+  // The new-user line is said once: before the first sign-in this run starts (Codex's, or this
+  // terminal's), or else after the last tool's steps.
   let lead = [NEW_USER]
   for (const [i, tool] of done.ready.entries()) {
     if (i > 0) say('')
     if (tool.client === 'codex') {
-      await codexScreen(ctx, tool, say, detail, lead)
+      if (await codexScreen(ctx, tool, say, detail, lead)) lead = []
     } else {
       const [first, ...steps] = toolScreen(tool.name, tool.already)
       say(first ?? '')
       detail(tool.detail)
-      for (const line of [...steps, ...lead]) say(line)
+      for (const line of steps) say(line)
     }
-    lead = []
   }
 
-  if (!here) return exit
+  if (!here) {
+    for (const line of done.ready.length > 0 ? lead : []) say(line)
+    return exit
+  }
   if (done.ready.length > 0) say('')
   try {
     const code = await tryHere(ctx, say, lead)

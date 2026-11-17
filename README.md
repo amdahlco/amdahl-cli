@@ -80,10 +80,10 @@ It finds Claude Code, Cursor and Codex by their command on your PATH
 (`claude`, `cursor`, `codex`) or their files in your home folder (`.claude`
 or `.claude.json`, `.cursor`, `.codex`). Only the ones it finds are ticked
 and tagged "found on your machine" (in dim grey where colour is allowed).
-"This terminal" is always there and never ticked for you. If it finds none
-of the three, it says so under the question, points Claude and ChatGPT app
-users to https://amdahl.ai/connect, and the marker starts on "This
-terminal", so Space then Enter picks it:
+"This terminal" is always there. If it finds none of the three, it says so
+under the question, points Claude and ChatGPT app users to
+https://amdahl.ai/connect, and "This terminal" starts ticked with the marker
+on it, so Enter goes straight on to sign-in:
 
 ```
 Where should Amdahl work?
@@ -92,7 +92,7 @@ Using the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect
   [ ] Claude Code
   [ ] Cursor
   [ ] Codex
-> [ ] This terminal
+> [x] This terminal
 ↑↓ move · Space tick/untick · Enter continue
 ```
 
@@ -115,7 +115,7 @@ screen is six lines or fewer:
 
 ```
 ✓ Added Amdahl to Claude Code.
-One step left, in Claude Code:
+Two steps left, in Claude Code:
   1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.
   2. Paste an email and say: "Use Amdahl to make this sound less like AI"
 New to Amdahl? The sign-in sets up your free workspace.
@@ -123,7 +123,7 @@ New to Amdahl? The sign-in sets up your free workspace.
 
 ```
 ✓ Added Amdahl to Cursor.
-One step left, in Cursor:
+Two steps left, in Cursor:
   1. If it's open, quit and reopen it. In Customize > MCPs, sign in to amdahl.
   2. In chat, paste an email, say: "Use Amdahl to make this sound less like AI"
 ```
@@ -227,9 +227,12 @@ where the sign-in is stored.
 ### Run by an agent, or with no terminal
 
 You can ask Claude Code, Cursor or Codex to run `npx -y amdahl` for you. With
-no terminal (an agent's shell, a pipe such as `npx -y amdahl | cat`, or stdin,
-stdout or stderr redirected), and whenever `CLAUDECODE` or `CURSOR_AGENT`
-is set, it sets up without a question and without a browser sign-in:
+no terminal on stdin (an agent's shell, or `npx -y amdahl < /dev/null`), and
+whenever `CLAUDECODE` or `CURSOR_AGENT` is set, it sets up without a question
+and without a browser sign-in. A person who only redirects the output
+(`npx -y amdahl | tee setup.log`, `> out.txt`) still gets the question, drawn on
+stderr. With stdin at a terminal but stderr redirected, the question could not
+be seen, so it prints the usage with that reason and changes nothing:
 
 - `CLAUDECODE` set (Claude Code runs it): Claude Code only.
 - `CURSOR_AGENT` set (Cursor runs it): Cursor only.
