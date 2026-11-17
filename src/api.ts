@@ -115,6 +115,7 @@ export interface CliSetupStatus {
 /** The scope bundles a key can be minted from (see `--preset`). */
 export type McpKeyBundleName =
   | 'mcp_read_only'
+  | 'mcp_optimize'
   | 'mcp_customer_agent'
   | 'mcp_internal_agent'
   | 'mcp_full_admin'
@@ -127,7 +128,8 @@ export type CreateCliKeyRequestInput =
   | {
       action: 'create'
       name: string
-      bundle_name: McpKeyBundleName
+      /** Omitted when no `--preset` was given: the server picks the default (Search and optimize). */
+      bundle_name?: McpKeyBundleName
       expires_in_days: CliKeyExpiresInDays
       /** sha256 hex of the full key. The key itself never leaves the device. */
       key_hash: string

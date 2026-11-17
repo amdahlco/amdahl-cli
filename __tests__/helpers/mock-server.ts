@@ -118,6 +118,8 @@ export interface MockOptions {
   /** The error code the server sends with a 401 (default `Unauthorized`, the server's own) and with a missing scope (default `forbidden`). */
   unauthenticatedCode?: string
   forbiddenCode?: string
+  /** Scopes the 403 lists in `error.details.missing_scopes`, as servers since QA 2026-11-17 C4 do. Unset: the message only. */
+  missingScopesDetail?: string[]
   /** Status reads of a batch before it completes. */
   batchPolls?: number
   /** Of those reads, how many answer "one item running, none done" (with a falling estimate) before the batch completes. */
@@ -313,7 +315,12 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       if (path.startsWith('/api/') && !kind) return err(res, 401, options.unauthenticatedCode ?? 'Unauthorized', 'Authentication required')
       // The server refuses a call whose scope the credential lacks, in these words and as a 403 `forbidden`.
       const needsMessages = /^\/api\/platform\/v1\/messages\//.test(path)
-      if (needsMessages && kind === 'readonly') return err(res, 403, options.forbiddenCode ?? 'forbidden', 'Missing required scope(s): messages:execute')
+      if (needsMessages && kind === 'readonly') {
+        const message = 'Missing required scope(s): messages:execute'
+        const code = options.forbiddenCode ?? 'forbidden'
+        if (!options.missingScopesDetail) return err(res, 403, code, message)
+        return json(res, 403, { error: { code, message, details: { missing_scopes: options.missingScopesDetail } } })
+      }
 
       if (path === '/api/platform/v1/me/context') {
         return json(res, 200, {
@@ -536,7 +543,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         const status = decided ? (options.decision ?? 'approved') : 'pending'
         const out: Record<string, unknown> = { request_id: id, action: entry.action, status, expires_at: new Date(Date.now() + 600_000).toISOString() }
         if (status === 'approved' && entry.action === 'create') {
-          out.key = { id: '55555555-5555-4555-8555-555555555555', key_prefix: entry.key_prefix, name: entry.name, bundle_name: entry.bundle_name, expires_at: '2027-01-01T00:00:00Z' }
+          out.key = { id: '55555555-5555-4555-8555-555555555555', key_prefix: entry.key_prefix, name: entry.name, bundle_name: entry.bundle_name ?? 'mcp_optimize', expires_at: '2027-01-01T00:00:00Z' }
         }
         if (entry.action === 'revoke') out.key_id = entry.key_id
         return json(res, 200, out)

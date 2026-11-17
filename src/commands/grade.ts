@@ -180,8 +180,8 @@ export async function grade(ctx: Ctx, args: string[]): Promise<number> {
     result = await optimizeOne(ctx, credential, message, base, file ?? '-')
   } catch (err) {
     // The refusal names the call by its path, which a grade shares with a rewrite: say what was asked.
-    if (err instanceof CliError && err.message.startsWith('This credential cannot optimize.')) {
-      throw new CliError(err.code, err.message.replace('cannot optimize', 'cannot grade'), err.exit, err.hint, err.detail, err.data)
+    if (err instanceof CliError && err.message.startsWith('This credential ') && err.message.includes('cannot optimize.')) {
+      throw new CliError(err.code, err.message.replace('cannot optimize.', 'cannot grade.'), err.exit, err.hint, err.detail, err.data)
     }
     throw err
   }

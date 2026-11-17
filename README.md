@@ -391,7 +391,7 @@ amdahl sent <run-id> --provider <provider> --channel <channel> --sent-as returne
                 [--sent-at <time>] [--provider-campaign-id <id>] [--sequence-step <n>]
                 [--provider-variant-id <id>] [--provider-lead-id <id>] [--thread-id <id>]
                 [--sent-text <file>|-]
-amdahl keys create --name <name> [--preset read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
+amdahl keys create --name <name> [--preset optimize|read-only|agent|internal|admin] [--expires 30d|90d|365d] [--no-browser]
 amdahl keys list
 amdahl keys revoke <id|prefix> [--yes] [--no-browser]
 amdahl workspace list | amdahl workspace use <profile>
@@ -907,10 +907,12 @@ Three failures print a plain sentence each. Only the sentence changed from
 0.4.0: the `--json` error `code` is still the server's (or `http_<status>`) and
 its `hint` is the same, because scripts and agents branch on them.
 
-- A credential that lacks a scope says what it cannot do and what to use: `This
-  credential cannot optimize. Use a Customer agent key, or run \`amdahl
-  login\` again.` (exit 4). It never prints the server's `Missing required
-  scope(s)`.
+- A credential that lacks a scope names the permission, what it stops, and the
+  command that makes a key with it: `This credential is missing the
+  messages:execute permission, so it cannot optimize. Make a key that has it:
+  \`amdahl keys create --name ci\`, or run \`amdahl login\` again.` (exit 4).
+  For research or workspace changes the command adds `--preset agent`. It
+  never prints the server's bare `Missing required scope(s)`.
 - A key the server will not take (revoked or expired): `This key isn't valid
   (revoked or expired).` and the hint, `Run amdahl login, or check
   AMDAHL_KEY.` (exit 3). An OAuth access token in `AMDAHL_ACCESS_TOKEN` says
@@ -1129,6 +1131,18 @@ the default profile). `whoami` names the source that won. `keys create`,
 `keys create` generates the key on your machine and sends only its sha256 hash
 and 14-character prefix. You approve the request in the console by typing the
 code shown in the terminal; then the key is printed once and stored nowhere.
+
+`--preset` picks what the key can do:
+
+| `--preset` | Access |
+|---|---|
+| `optimize` (default) | Search and optimize: search, reads, and writing and grading messages. Changes no workspace settings or data. |
+| `read-only` | Read only: search and reads, no changes. |
+| `agent` | Customer agent: everything `optimize` does, plus research and paid web search, and it can change and delete workspace settings, writing context, evals and tracked social accounts, and email workspace members. |
+| `internal`, `admin` | The admin levels. Workspace admins only. |
+
+With no `--preset` the request names no bundle and the server picks its
+default, so a key made for CI can optimize.
 
 ## Exit codes
 

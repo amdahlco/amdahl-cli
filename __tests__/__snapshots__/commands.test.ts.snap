@@ -121,7 +121,7 @@ Commands:
                                              Report that a message went out
            At a terminal, what is left out is asked (at most three questions);
            with --json, in an agent or in CI, nothing is asked.
-  keys create --name <name> [--preset read-only|agent|internal|admin]
+  keys create --name <name> [--preset optimize|read-only|agent|internal|admin]
               [--expires 30d|90d|365d] [--no-browser]
   keys list
   keys revoke <id|prefix> [--yes] [--no-browser]

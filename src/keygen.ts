@@ -26,9 +26,13 @@ export function generateKey(): GeneratedKey {
   }
 }
 
-/** The key bundles behind each `--preset`. */
+/**
+ * The key bundles behind each `--preset`. With no `--preset` the request names
+ * no bundle and the server picks its default, `mcp_optimize`.
+ */
 export const PRESET_BUNDLES = {
   'read-only': 'mcp_read_only',
+  optimize: 'mcp_optimize',
   agent: 'mcp_customer_agent',
   internal: 'mcp_internal_agent',
   admin: 'mcp_full_admin',

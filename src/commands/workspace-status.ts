@@ -8,7 +8,7 @@
 
 import type { CliSetupStatus } from '../api'
 import { amdahlCommand } from '../command-name'
-import { apiClient, call, resolveCredential, type Ctx } from '../context'
+import { apiClient, call, missingScopeMessage, resolveCredential, type Ctx } from '../context'
 import { EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
 import { day } from '../text'
@@ -16,7 +16,8 @@ import { connectLine, connectionUrl, connectionsUrl } from './connections'
 
 /** What to do about each optimize blocker. */
 const BLOCKER_FIX: Record<string, (status: CliSetupStatus) => string> = {
-  missing_scope: () => `This credential cannot optimize. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`,
+  // Optimize needs messages:execute (the server's setup.status gates on it).
+  missing_scope: () => missingScopeMessage('optimize', ['messages:execute']),
   role_too_low: () => 'Your role cannot optimize. Ask a workspace admin to raise it.',
   quota_exhausted: (status) => {
     const resets = day(status.optimize.quota?.resets_at)

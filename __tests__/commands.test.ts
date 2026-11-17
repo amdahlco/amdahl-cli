@@ -531,12 +531,22 @@ describe('keys edge cases', () => {
     expect(r.json.error.code).toBe('request_expired')
   })
 
-  it('defaults to read-only for 90 days', async () => {
+  // QA 2026-11-17 C4: with no --preset the request names no bundle, so the
+  // server's default (Search and optimize) applies; it used to be read-only.
+  it('leaves the bundle to the server with no --preset, for 90 days', async () => {
     const io = await loggedIn()
     await cli(io, 'keys', 'create', '--name', 'x', '--no-browser', '--json')
     const [req] = [...server!.keyRequests.values()]
-    expect(req).toMatchObject({ bundle_name: 'mcp_read_only', expires_in_days: 90 })
+    expect(req).toMatchObject({ expires_in_days: 90 })
+    expect(req).not.toHaveProperty('bundle_name')
     expect(io.opened.filter((u) => u.includes('/cli/approve'))).toEqual([])
+  })
+
+  it('--preset optimize asks for the Search and optimize bundle', async () => {
+    const io = await loggedIn()
+    await cli(io, 'keys', 'create', '--name', 'x', '--preset', 'optimize', '--no-browser', '--json')
+    const [req] = [...server!.keyRequests.values()]
+    expect(req).toMatchObject({ bundle_name: 'mcp_optimize' })
   })
 
   it('rejects an unknown preset or expiry', async () => {

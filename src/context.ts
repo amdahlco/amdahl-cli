@@ -200,13 +200,56 @@ const CALL_VERBS: [string, string][] = [
 ]
 
 /**
+ * The scopes a refusal names: the server's `error.details.missing_scopes`, else
+ * the list in its `Missing required scope(s): a, b` message (servers before the
+ * field). Empty when neither says.
+ */
+function missingScopes(err: AmdahlApiError): string[] {
+  const listed = errorDetails(err.responseBody).missing_scopes
+  if (Array.isArray(listed)) return listed.filter((s): s is string => typeof s === 'string' && s.length > 0)
+  const match = /^Missing required scope\(s\):\s*(.+?)\.?$/i.exec(err.message)
+  return match ? match[1]!.split(/,\s*/).map((s) => s.trim()).filter(Boolean) : []
+}
+
+/** Scopes only a Customer agent key (`--preset agent`) carries among the presets a member can pick. */
+const AGENT_ONLY_SCOPES = new Set([
+  'conversations:write',
+  'external_search:execute',
+  'config:write',
+  'context:write',
+  'context:query',
+  'data:write',
+  'evals:execute',
+  'evals:write',
+  'notifications:write',
+  'versioning:write',
+])
+
+/**
+ * The sentence for a credential that lacks a scope: which permission is
+ * missing, what it stops, and the command that makes a key that has it. A key
+ * made with no `--preset` can optimize and search; research and workspace
+ * changes need `--preset agent`.
+ */
+export function missingScopeMessage(verb: string, scopes: readonly string[]): string {
+  const agent = scopes.some((s) => AGENT_ONLY_SCOPES.has(s))
+  const make = amdahlCommand(`keys create --name ci${agent ? ' --preset agent' : ''}`)
+  const login = amdahlCommand('login')
+  if (scopes.length === 0) {
+    return `This credential cannot ${verb}. Make a key that can: \`${make}\`, or run \`${login}\` again.`
+  }
+  const which = `the ${scopes.join(' and ')} permission${scopes.length > 1 ? 's' : ''}`
+  return `This credential is missing ${which}, so it cannot ${verb}. Make a key that has it: \`${make}\`, or run \`${login}\` again.`
+}
+
+/**
  * The sentence a person reads for a refusal of the credential, or null when
  * the server's own message is the one to show. Only this sentence changes: the
  * error's `code` (the server's) and its `hint` stay what they were, because
  * agents branch on them. A key or token the server will not take says so, a
  * sign-in it will not take says so, and a missing scope says what this
- * credential cannot do and what to use, never the server's
- * `Missing required scope(s)`.
+ * credential cannot do, the permission it lacks and the command that makes a key
+ * that has it, never the server's bare `Missing required scope(s)`.
  */
 function plainMessage(err: AmdahlApiError): string | null {
   if (err.statusCode === 401 && err.credentialSource) {
@@ -217,7 +260,7 @@ function plainMessage(err: AmdahlApiError): string | null {
   }
   if (err.errorCode === 'missing_scope' || /^Missing required scope/i.test(err.message)) {
     const verb = CALL_VERBS.find(([prefix]) => err.path.includes(prefix))?.[1] ?? 'do this'
-    return `This credential cannot ${verb}. Use a Customer agent key, or run \`${amdahlCommand('login')}\` again.`
+    return missingScopeMessage(verb, missingScopes(err))
   }
   return null
 }

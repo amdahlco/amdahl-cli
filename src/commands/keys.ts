@@ -84,9 +84,11 @@ export async function keysCreate(ctx: Ctx): Promise<number> {
   const name = str(ctx.flags.name)?.trim()
   if (!name) throw usageError('--name is required.', `Example: ${amdahlCommand('keys create --name "CI pipeline"')}`)
   if (name.length > 80) throw usageError('--name must be at most 80 characters.')
-  const preset = str(ctx.flags.preset) ?? 'read-only'
-  const bundle = PRESET_BUNDLES[preset as keyof typeof PRESET_BUNDLES]
-  if (!bundle) throw usageError(`--preset must be one of: ${Object.keys(PRESET_BUNDLES).join(', ')}.`)
+  // No --preset: the request names no bundle, and the server picks its default
+  // (Search and optimize), so every CLI version gets the same default.
+  const preset = str(ctx.flags.preset)
+  const bundle = preset === undefined ? undefined : PRESET_BUNDLES[preset as keyof typeof PRESET_BUNDLES]
+  if (preset !== undefined && !bundle) throw usageError(`--preset must be one of: ${Object.keys(PRESET_BUNDLES).join(', ')}.`)
   const expires = str(ctx.flags.expires) ?? '90d'
   const days = EXPIRES_DAYS[expires as keyof typeof EXPIRES_DAYS]
   if (!days) throw usageError(`--expires must be one of: ${Object.keys(EXPIRES_DAYS).join(', ')}.`)
@@ -98,7 +100,7 @@ export async function keysCreate(ctx: Ctx): Promise<number> {
     client.cli.createKeyRequest({
       action: 'create',
       name,
-      bundle_name: bundle,
+      ...(bundle ? { bundle_name: bundle } : {}),
       expires_in_days: days,
       key_hash: key.hash,
       key_prefix: key.prefix,

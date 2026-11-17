@@ -331,15 +331,20 @@ flag, --channel too, is a usage error.
 ${GLOBAL}`,
 
   'keys create': `Usage: amdahl keys create --name <name>
-                          [--preset read-only|agent|internal|admin]
+                          [--preset optimize|read-only|agent|internal|admin]
                           [--expires 30d|90d|365d] [--no-browser]
 
 Make an API key for a server or CI. You approve it in the console, then the key
 is printed once. It needs your own sign-in.
 
   --name <name>    What to call the key. Required.
-  --preset <kind>  read-only (default), agent (reads, optimize and research),
-                   internal or admin (workspace admins only).
+  --preset <kind>  optimize (default): search, reads, and writing and grading
+                   messages. Changes no workspace settings or data.
+                   read-only: search and reads, no changes.
+                   agent: optimize, plus research and paid web search, and it
+                   can change and delete workspace settings, context, evals
+                   and tracked accounts, and email workspace members.
+                   internal or admin: workspace admins only.
   --expires <days> 30d, 90d (default) or 365d.
   --no-browser     Print the approval link instead of opening a browser.
 `,

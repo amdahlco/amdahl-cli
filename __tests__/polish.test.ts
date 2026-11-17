@@ -97,9 +97,11 @@ describe('search: what a person reads', () => {
 })
 
 describe('a refused credential: a plain sentence, and the same code and hint as 0.4.0', () => {
-  const scope = (verb: string) => `This credential cannot ${verb}. Use a Customer agent key, or run \`amdahl login\` again.`
+  // QA 2026-11-17 C4: the sentence names the missing permission and the command that makes a key with it.
+  const scope = (verb: string) =>
+    `This credential is missing the messages:execute permission, so it cannot ${verb}. Make a key that has it: \`amdahl keys create --name ci\`, or run \`amdahl login\` again.`
 
-  it('a read-only key: optimize, a list, feedback and sent each say what this credential cannot do, never "Missing required scope(s)"', async () => {
+  it('a read-only key: optimize, a list, feedback and sent each name the missing permission, never the bare "Missing required scope(s)"', async () => {
     const io = await withKey(READONLY_KEY)
     const draft = join(io.homedir, 'a.md')
     writeFileSync(draft, 'draft')
@@ -120,6 +122,17 @@ describe('a refused credential: a plain sentence, and the same code and hint as 
     const json = await cli(io, 'optimize', draft, '--json')
     expect(json.json).toEqual({ ok: false, error: { code: 'forbidden', message: scope('optimize') } })
     expect(requests('/messages/optimize').length).toBeGreaterThan(0)
+  })
+
+  it('names the scopes the server lists in error.details.missing_scopes, and asks for an agent key when research needs it', async () => {
+    const io = await withKey(READONLY_KEY, { missingScopesDetail: ['messages:execute', 'conversations:write'] })
+    const draft = join(io.homedir, 'a.md')
+    writeFileSync(draft, 'draft')
+    const r = await cli(io, 'optimize', draft)
+    expect(r.code).toBe(4)
+    expect(r.stderr).toBe(
+      'Error: This credential is missing the messages:execute and conversations:write permissions, so it cannot optimize. Make a key that has it: `amdahl keys create --name ci --preset agent`, or run `amdahl login` again.\n'
+    )
   })
 
   it('the --json error code is the one the server sent, whatever it is, for a refused scope and a refused key', async () => {

@@ -158,7 +158,7 @@ describe('grade', () => {
     const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: READONLY_KEY })
     const r = await cli(io, 'grade', write(io, 'd.txt', 'Hello'))
     expect(r.code).toBe(4)
-    expect(r.stderr).toContain('This credential cannot grade.')
+    expect(r.stderr).toContain('This credential is missing the messages:execute permission, so it cannot grade.')
     expect(r.stderr).not.toContain('cannot optimize')
   })
 })
@@ -304,12 +304,14 @@ describe('a key that cannot do it', () => {
     const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: READONLY_KEY })
     const p = await cli(io, 'prompt', write(io, 'p.md', 'Write an email to anyone.'))
     expect(p).toMatchObject({ code: 4 })
-    expect(p.stderr).toContain('This credential cannot grade or improve a prompt. Use a Customer agent key')
+    expect(p.stderr).toContain(
+      'This credential is missing the messages:execute permission, so it cannot grade or improve a prompt. Make a key that has it: `amdahl keys create --name ci`'
+    )
     const r = await cli(io, 'run', KNOWN_RUN)
     expect(r.code).toBe(4)
-    expect(r.stderr).toContain('This credential cannot read a run.')
+    expect(r.stderr).toContain('This credential is missing the messages:execute permission, so it cannot read a run.')
     const f = await cli(io, 'feedback', KNOWN_RUN, '--evidence', 'inferred', '--outcome', 'used')
-    expect(f.stderr).toContain('This credential cannot record feedback.')
+    expect(f.stderr).toContain('This credential is missing the messages:execute permission, so it cannot record feedback.')
   })
 })
 
