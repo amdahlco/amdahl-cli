@@ -19,7 +19,7 @@ const FILE = `${SITE}/skills/amdahl/call-prep.md`
 const PAGE = `${SITE}/skills/amdahl/call-prep`
 const SKILL = '---\nname: call-prep\ndescription: "Brief a seller before a call: who is on it."\n---\n\n# Call prep\n'
 const TEXT = 'Flagged: it may send your data somewhere else (line 14), and 2 more. Read it before you install.'
-/** The field as the site sends it (apps/landing lib/skills/ai-warning.ts aiWarningFacts). */
+/** The field as the site sends it. */
 const WARNING = { check: 'Security review', result: 'warn', flagged: 'data_leaving', line: 14, flags: 3, more: false, text: TEXT }
 
 /** What every flagged run prints first, on stderr. */

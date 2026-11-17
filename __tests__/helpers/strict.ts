@@ -1,8 +1,8 @@
 // What the real server refuses, for the mock server to refuse too. The mock
 // used to accept any body, so a request production rejects passed the tests
 // (`amdahl sent r1 r2` has no send key, and the real report_send refuses it).
-// Each rule below names the amdahl-app file it copies (main, 2026-11-12); a
-// change there belongs here too.
+// Each rule below names the server rule it copies (2026-11-12); a change
+// there belongs here too.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -94,7 +94,7 @@ export function feedbackProblem(input: unknown): string | null {
 
 // ── messages.report_send: messages/_reportSendSchema.ts, messageOptimizer/sendReports ────────
 
-// `SEND_PROVIDERS` in amdahl-app src/shared/providers/registry.generated.ts (main, 2026-11-13).
+// The server's send providers (2026-11-13).
 export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'smartlead', 'reply_io', 'lgm', 'woodpecker', 'linkedin_manual', 'other']
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
 const REPORT_KEYS = ['run_id', 'provider', 'channel', 'sent_as', 'sent_at', 'provider_send_id', 'provider_campaign_id', 'sequence_step', 'provider_variant_id', 'provider_lead_id', 'thread_id', 'recipient', 'recipient_key_hash', 'sent_text']

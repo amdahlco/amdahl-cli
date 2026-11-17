@@ -490,7 +490,7 @@ describe('recipes and search --recipe', () => {
   })
 
   it('pins the console library: the 12 search recipes, their fill-ins and questions', () => {
-    // Copied from amdahl-frontend apps/universal-ui/lib/prompt-library.ts (dd187f42); see src/recipes-data.ts.
+    // Copied from the console's prompt library; see src/recipes-data.ts.
     expect(RECIPES.map((r) => r.id)).toEqual(['account-brief', 'call-prep', 'qbr-prep', 'expansion-signals', 'churn-risk', 'whitespace', 'asked-for-never-sold', 'stalled-deals', 'why-deals-die', 'competitors', 'positioning-vs-buyers', 'objection-handling'])
     expect(RECIPES.flatMap((r) => r.fills.map((f) => `${r.id}:${f.key}`))).toEqual(['account-brief:account', 'call-prep:account', 'qbr-prep:account', 'whitespace:products', 'positioning-vs-buyers:messages', 'objection-handling:objection'])
     expect(RECIPES.find((r) => r.id === 'stalled-deals')?.question).toBe('Which open deals have had no conversation with the buyer in 30 days or are past their close date, and what did the buyer say last?')

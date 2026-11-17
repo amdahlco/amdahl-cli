@@ -1,8 +1,7 @@
 // 0.4.2: `amdahl optimize --list <file.csv> --for <tool>` writes the messages
 // Amdahl wrote as a file a sequencer imports, and says how to import it. The
-// console's "Send to" writes the same file, so the first test is its own
-// end-to-end scenario (amdahl-frontend, e2e-stub/optimizer-send-to.spec.ts)
-// run through the CLI: same list, same results, same header names and cells.
+// console's "Send to" writes the same file, so the first test is the
+// console's own end-to-end scenario, run through the CLI: same list, same results, same header names and cells.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

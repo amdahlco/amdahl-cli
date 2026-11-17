@@ -978,9 +978,9 @@ writes anything: the skill, the sentence from the skill page, and the page's
 link.
 
 ```
-Warning: amdahl.ai's security review flagged amdahl/call-prep.
+Warning: amdahl.ai's security review flagged amdahl/system-diagram.
   Flagged: it may send your data somewhere else (line 14), and 2 more. Read it before you install.
-  See what was flagged: https://amdahl.ai/skills/amdahl/call-prep
+  See what was flagged: https://amdahl.ai/skills/amdahl/system-diagram
 ```
 
 In a terminal, it then asks `Install this skill?` in the same kind of menu.
@@ -1069,7 +1069,7 @@ nothing. `--site <origin>` sends both requests to another origin, for
 example a local copy of the site (`--site http://localhost:6782`). The
 origin must be `https`; `http` is allowed only for localhost.
 
-## Feedback link
+## Run id
 
 Without `--json`, `amdahl optimize` ends each run with its run id:
 
@@ -1079,35 +1079,24 @@ Run: 3f2c8a1e-...
 
 Under `--json` the run id is in `result.run_id` and nothing extra prints.
 
-Amdahl staff can opt in to a feedback link after the run id. The link opens the
-run's internal page in the Amdahl console, which only staff can see. It is off
-by default. To turn it on:
-
-- Set `"feedbackLink": true` at the top level of the config file
-  (`${XDG_CONFIG_HOME:-~/.config}/amdahl/config.json`, or
-  `%APPDATA%\amdahl\config.json` on Windows).
-- Or set `AMDAHL_FEEDBACK_LINK=1` for one command or shell.
-  `AMDAHL_FEEDBACK_LINK=0` turns it off even when the config turns it on.
-
-The link uses the console for your API host (see
-[Targeting staging](#targeting-staging)).
-
 Every request to the Amdahl API sends the headers
 `X-Amdahl-Client: cli/<version>` and `User-Agent: amdahl-cli/<version>`, so
-Amdahl can tell which runs came from the CLI. The headers are only labels. It never changes what a credential can do.
+Amdahl can tell which runs came from the CLI. The headers are only labels. They
+never change what a credential can do.
 
-## Targeting staging
+## API host
+
+The CLI uses `https://app.amdahl.ai` by default. To use a different host, set
+`AMDAHL_API_URL` or pass `--api-url`:
 
 ```sh
-AMDAHL_API_URL=https://staging.amdahl.ai amdahl login
-# or: amdahl login --api-url https://staging.amdahl.ai
+AMDAHL_API_URL=https://<api-host> amdahl login
+# or: amdahl login --api-url https://<api-host>
 ```
 
 A profile remembers its API host, so later commands need no flag. A profile's
 token is only ever sent to that host. Messages that link to the console use
-`AMDAHL_CONSOLE_URL` when set, otherwise the console for the known API host
-(`staging.amdahl.ai` -> `https://stagingui.amdahl.ai`, otherwise
-`https://console.amdahl.ai`).
+`AMDAHL_CONSOLE_URL` when set, otherwise `https://console.amdahl.ai`.
 
 ## Credentials
 
