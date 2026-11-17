@@ -566,3 +566,89 @@ describe('the help says what the server allows and what the CLI guards', () => {
     expect(parseCsv(readFileSync(join(io.cwd, 'phones.optimized.csv'), 'utf8')).rows[1]?.slice(0, 3)).toEqual(['Hi', "'+1 555 0100", "'-20"])
   })
 })
+
+describe('list and draft files in other encodings (QA 1117 S7)', () => {
+  const batchBody = () => JSON.parse(server!.log.filter((l) => l.path === '/api/platform/v1/messages/optimize/batch').at(-1)?.body ?? '{}')
+
+  it.each<[string, Buffer]>([
+    ['Windows-1252', Buffer.from('message\nHi Zo\xeb, we help S\xe3o Paulo teams\n', 'latin1')],
+    ['Latin-1', Buffer.from('message\nHola Jos\xe9\n', 'latin1')],
+  ])('a %s CSV is refused before anything is sent, with how to save it as UTF-8', async (_label, bytes) => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'l.csv')
+    writeFileSync(list, bytes)
+    const r = await cli(io, 'optimize', '--list', list)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(
+      `Error: ${list} isn't UTF-8 text, so names like José or Zoë would arrive garbled. Nothing was sent.\n` +
+        'Save it as UTF-8 (in Excel: File > Save As > "CSV UTF-8"), then run the same command again.\n'
+    )
+    expect(requests('/messages/optimize/batch')).toHaveLength(0)
+  })
+
+  it('a draft that is not UTF-8 is refused the same way, and not sent', async () => {
+    const io = await signedIn()
+    const draft = join(io.cwd, 'd.md')
+    writeFileSync(draft, Buffer.from('Hi Zo\xeb\n', 'latin1'))
+    expect((await cli(io, 'optimize', draft)).code).toBe(2)
+    expect(requests('/messages/optimize')).toHaveLength(0)
+  })
+
+  it('a UTF-16 file (Excel "Unicode Text") with tabs is read as it is', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'l.txt')
+    writeFileSync(list, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('name\tmessage\r\nZoë\tHi Zoë, São Paulo?\r\n', 'utf16le')]))
+    const r = await cli(io, 'optimize', '--list', list, '--no-wait')
+    expect(r.code).toBe(0)
+    expect(batchBody().items).toEqual([{ message: 'Hi Zoë, São Paulo?' }])
+  })
+
+  it('a semicolon-separated CSV is read by its header', async () => {
+    const io = await signedIn()
+    const list = join(io.cwd, 'l.csv')
+    writeFileSync(list, 'name;message\nJosé;"Hola José; ¿qué tal?"\n')
+    expect((await cli(io, 'optimize', '--list', list, '--no-wait')).code).toBe(0)
+    expect(batchBody().items).toEqual([{ message: 'Hola José; ¿qué tal?' }])
+  })
+})
+
+describe('typos and bare command groups (QA 1117 S9, N1, N14)', () => {
+  it.each<[string[], string]>([
+    [['optimze'], 'optimize'],
+    [['serach', 'foo'], 'search'],
+    [['statsu'], 'status'],
+    [['recipe'], 'recipes'],
+    [['conect', 'hubspot'], 'connect'],
+    [['keys', 'delete', 'x'], 'keys revoke'],
+    [['keys', 'creat'], 'keys create'],
+    [['workspace', 'switch', 'x'], 'workspace use'],
+  ])('%o suggests `amdahl %s`', async (argv, near) => {
+    const r = await cli(fakeIo({}), ...argv)
+    expect(r.code).toBe(2)
+    expect(r.stderr.split('\n')[1]).toBe(`Did you mean \`amdahl ${near}\`?`)
+  })
+
+  it('a word near nothing points at the help, and says an older amdahl may not have it yet', async () => {
+    const r = await cli(fakeIo({}), 'frobnicate')
+    expect(r.stderr).toBe(
+      'Error: Unknown command `frobnicate`.\n' +
+        'Run `amdahl --help` to see the commands. If the docs show it, this amdahl may be older than the docs: update with `npm install -g amdahl@latest`, or run `npx -y amdahl@latest`.\n'
+    )
+  })
+
+  it.each<[string, string]>([
+    ['keys', 'Commands: amdahl keys create, amdahl keys list, amdahl keys revoke'],
+    ['workspace', 'Commands: amdahl workspace list, amdahl workspace use'],
+  ])('`amdahl %s` alone lists its subcommands', async (group, hint) => {
+    const r = await cli(fakeIo({}), group)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`Error: \`amdahl ${group}\` needs a subcommand.\n${hint}\n`)
+  })
+
+  it('a connector one or two letters off is named', async () => {
+    const io = await signedIn()
+    const r = await cli(io, 'connect', 'hubspto')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe('Error: Amdahl has no connector called "hubspto".\nDid you mean `amdahl connect hubspot`?\n')
+  })
+})

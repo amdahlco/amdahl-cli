@@ -13,6 +13,7 @@
 
 import { amdahlCommand } from '../command-name'
 import { apiClient, resolveCredential, type Ctx } from '../context'
+import { connectLine } from './connections'
 import { CliError, EXIT, usageError } from '../errors'
 import { FILL_MAX, NEEDS_LABEL, RECIPES, RECIPE_CATEGORIES, type Recipe, type RecipeCategory } from '../recipes-data'
 import { field, record, records, wrap } from '../text'
@@ -213,14 +214,17 @@ export async function recipes(ctx: Ctx): Promise<number> {
   const idWidth = Math.max(...library.recipes.map((r) => r.id.length)) + 2
   const lines: string[] = ['Questions the console\'s recipe library asks as a search.']
   // The server's note that it has no data to suggest from (nothing connected yet) is always said, with or without rows.
-  if (library.setup) lines.push('', ...wrap(library.setup))
+  // With nothing connected, the first step is to connect: the suggestions are for after that, with no
+  // Run lines, since each would only say again that there is nothing to search.
+  if (library.setup) lines.push('', ...wrap(library.setup), connectLine())
   // "For you": the recipes that suit this workspace now, each with why. Nothing to hide here: only the console can.
   if (library.forYou.length > 0) {
-    lines.push('', 'For you')
+    lines.push('', library.setup ? 'For you, once something is connected' : 'For you')
     for (const s of library.forYou) {
       const { recipe, command, examples } = forYouOf(s)
       lines.push(...titleLines(s.recipe_id, recipe.title, idWidth))
       if (s.reason) lines.push(...wrap(/[.?!…]$/.test(s.reason) ? s.reason : `${s.reason}.`, 80, '    '))
+      if (library.setup) continue
       // Not wrapped: a command broken at a space inside its quotes would paste as a different one.
       lines.push(`    Run: ${command}`)
       if (examples.length > 0) lines.push(...wrap(`Swap in your own ${examples.join(' and ')}.`, 80, '    '))
@@ -238,7 +242,7 @@ export async function recipes(ctx: Ctx): Promise<number> {
     }
   }
   const sample = library.recipes.find((r) => r.fills.length > 0) ?? library.recipes[0]!
-  lines.push('', 'Run one:', `  ${recipeCommand(sample)}`, `The console has more recipes that are prompts for an AI client: ${amdahlCommand('open')}`)
+  lines.push('', library.setup ? 'Once something is connected, run one:' : 'Run one:', `  ${recipeCommand(sample)}`, `The console has more recipes that are prompts for an AI client: ${amdahlCommand('open')}`)
   out.result({}, lines.join('\n'))
   return EXIT.ok
 }

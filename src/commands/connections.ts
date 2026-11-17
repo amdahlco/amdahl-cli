@@ -22,6 +22,7 @@ import { CliError, EXIT, usageError } from '../errors'
 import { consoleUrlFor } from '../oauth'
 import { canOpenBrowser } from '../terminal'
 import { clip, day, field, record, records, wrap } from '../text'
+import { nearest } from '../suggest'
 
 const PLATFORM = '/api/platform/v1'
 
@@ -153,6 +154,8 @@ export async function connect(ctx: Ctx, args: string[]): Promise<number> {
     entry = findConnector(entries, wanted)
     if (!entry) {
       const names = entries.filter((e) => e.connectable).map((e) => e.type)
+      const near = nearest(wanted.toLowerCase().replace(/[\s-]+/g, '_'), names)
+      if (near) throw usageError(`Amdahl has no connector called "${clip(wanted, 40)}".`, `Did you mean \`${amdahlCommand(`connect ${near}`)}\`?`)
       throw usageError(`Amdahl has no connector called "${clip(wanted, 40)}".`, names.length ? wrap(`Connectors: ${names.join(', ')}`).join('\n') : undefined)
     }
     if (!entry.connectable) {

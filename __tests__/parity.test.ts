@@ -1432,7 +1432,11 @@ describe('0.5.1: "For you" and the library from the server', () => {
     })
     const r = await cli(io, 'recipes')
     expect(r.stdout).toContain('Connect your CRM to get recipes made for you.')
-    expect(r.stdout).toContain('For you\n  churn-risk')
+    expect(r.stdout).toContain('Connect your CRM to get recipes made for you.\nConnect your CRM or call recorder: amdahl connect\n')
+    // The suggestions are for after the connect: no Run line, since a run would only say there is nothing to search.
+    expect(r.stdout).toContain('For you, once something is connected\n  churn-risk')
+    expect(r.stdout).not.toContain('Run: amdahl search --recipe churn-risk')
+    expect(r.stdout).toContain('Once something is connected, run one:')
     expect(r.stdout.indexOf('Connect your CRM')).toBeLessThan(r.stdout.indexOf('For you'))
     expect((await cli(io, 'recipes', '--json')).json.setup_needed).toEqual({ message: 'Connect your CRM to get recipes made for you.' })
   })

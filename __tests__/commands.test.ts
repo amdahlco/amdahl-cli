@@ -76,7 +76,7 @@ describe('exit codes', () => {
     expect(flag).toMatchObject({ code: 2, stderr: 'Error: Unknown option --foo.\nRun `amdahl --help`.\n' })
     expect((await cli(io, 'whoami', '-x')).stderr).toBe('Error: Unknown option -x.\nRun `amdahl --help`.\n')
     expect((await cli(io, 'login', '--port')).stderr).toBe('Error: --port needs a value.\nRun `amdahl --help`.\n')
-    expect((await cli(io, 'nope')).stderr).toBe('Error: Unknown command `nope`.\nRun `amdahl --help` to see the commands.\n')
+    expect((await cli(io, 'nope')).stderr).toBe('Error: Unknown command `nope`.\nRun `amdahl --help` to see the commands. If the docs show it, this amdahl may be older than the docs: update with `npm install -g amdahl@latest`, or run `npx -y amdahl@latest`.\n')
   })
 
   it('`amdahl help` is --help', async () => {
@@ -158,6 +158,19 @@ describe('optimize', () => {
     expect(r.json[1]).toMatchObject({ ok: true, file: join(dir, 'b.md'), result: { message: 'better: second draft' } })
     const bodies = server!.log.filter((l) => l.path.endsWith('/messages/optimize')).map((l) => JSON.parse(l.body))
     expect(bodies[0]).toEqual({ message: 'first draft', include_tries: true, context: { rules: ['be brief'], voice_examples: [], facts: [] } })
+  })
+
+  it('at a terminal, says on stderr that the rewrite can take a minute, before it is sent; not when stderr is redirected', async () => {
+    const io = await loggedIn()
+    io.stderrIsTTY = true
+    writeFileSync(join(io.homedir, 'a.md'), 'draft')
+    const r = await cli(io, 'optimize', join(io.homedir, 'a.md'))
+    expect(r.stderr.startsWith('Amdahl is rewriting it. This can take a minute.\n')).toBe(true)
+    expect(r.stdout).toBe('better: draft\n')
+    io.stderrIsTTY = false
+    expect((await cli(io, 'optimize', join(io.homedir, 'a.md'))).stderr).not.toContain('This can take a minute')
+    io.stderrIsTTY = true
+    expect((await cli(io, 'optimize', join(io.homedir, 'a.md'), '--json')).stderr).not.toContain('This can take a minute')
   })
 
   it('prints only the rewrite on stdout without --json', async () => {
@@ -537,6 +550,27 @@ describe('keys edge cases', () => {
     const [req] = [...server!.keyRequests.values()]
     expect(req).toMatchObject({ bundle_name: 'mcp_read_only', expires_in_days: 90 })
     expect(io.opened.filter((u) => u.includes('/cli/approve'))).toEqual([])
+  })
+
+  it.each<[string, (io: ReturnType<typeof fakeIo>) => void, string[]]>([
+    ['--json at a terminal', (io) => (io.stdoutIsTTY = true), ['--json']],
+    ['stdin closed (a script)', (io) => Object.assign(io, { stdinIsTTY: false, stdoutIsTTY: true }), []],
+    ['CI=true', (io) => Object.assign(io, { stdoutIsTTY: true, env: { ...io.env, CI: 'true' } }), []],
+    ['stdout piped', (io) => (io.stdoutIsTTY = false), []],
+  ])('keys create opens no browser for %s, and still prints the approve link', async (_label, change, extra) => {
+    const io = await loggedIn()
+    change(io)
+    const r = await cli(io, 'keys', 'create', '--name', 'x', ...extra)
+    expect(r.code).toBe(0)
+    expect(r.stdout + r.stderr).toContain('/cli/approve')
+    expect(io.opened.filter((u) => u.includes('/cli/approve'))).toEqual([])
+  })
+
+  it('create opens the approve page for a person at a terminal', async () => {
+    const io = await loggedIn()
+    io.stdoutIsTTY = true
+    expect((await cli(io, 'keys', 'create', '--name', 'x')).code).toBe(0)
+    expect(io.opened.filter((u) => u.includes('/cli/approve'))).toHaveLength(1)
   })
 
   it('rejects an unknown preset or expiry', async () => {

@@ -22,6 +22,7 @@ import {
 import { CliError, EXIT, usageError } from '../errors'
 import { EXPIRES_DAYS, PRESET_BUNDLES, generateKey } from '../keygen'
 import type { AmdahlClient } from '../api'
+import { canOpenBrowser } from '../terminal'
 
 /** Wait this long between polls when the server rate-limits them. */
 const RATE_LIMIT_BACKOFF_MS = 10_000
@@ -35,7 +36,9 @@ function announce(ctx: Ctx, req: CliKeyRequestCreated, verb: string): void {
       `  Code: ${out.bold(req.user_code)}\n  Page: ${req.approve_url}\n\n` +
       `The request expires at ${req.expires_at}. Waiting for approval...`
   )
-  if (!ctx.flags['no-browser']) void io.openUrl(req.approve_url)
+  // Only for a person at a terminal, as `login` and `connect` do: a script, CI, an agent or
+  // `--json` gets the link above and no browser.
+  if (!ctx.flags['no-browser'] && !out.json && canOpenBrowser(ctx)) void io.openUrl(req.approve_url)
 }
 
 /**

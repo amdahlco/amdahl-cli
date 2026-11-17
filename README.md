@@ -694,6 +694,14 @@ optimize takes, and the server refuses a key it does not know. The optimize flag
 item that does not set its own; a row's facts and a `--context` file's rules
 and voice examples are both sent.
 
+Columns may be separated by commas, or, in a header with no comma, by tabs or
+semicolons (as Excel saves them in some regions). Every file the CLI reads,
+a list or a draft, must be UTF-8, or UTF-16 with a byte-order mark (Excel's
+"Unicode Text"). A file in another encoding, such as Excel's plain "CSV" saved
+as Windows-1252, is refused before anything is sent: its accented letters
+would otherwise arrive garbled, and a list would be billed as written. Save
+it as "CSV UTF-8" and run the same command again.
+
 The whole file is read and checked first. A missing `message` column says
 which columns it reads. Progress goes to stderr, in place at a terminal: a
 queued batch says it is queued, and each line after that says where it stands
@@ -1129,6 +1137,9 @@ the default profile). `whoami` names the source that won. `keys create`,
 `keys create` generates the key on your machine and sends only its sha256 hash
 and 14-character prefix. You approve the request in the console by typing the
 code shown in the terminal; then the key is printed once and stored nowhere.
+`keys create` and `keys revoke` open the approve page in the browser only for
+a person at a terminal, as `login` and `connect` do. From a script, CI, an
+agent or with `--json`, they print the link and open nothing.
 
 ## Exit codes
 
