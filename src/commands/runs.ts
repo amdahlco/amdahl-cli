@@ -15,7 +15,7 @@
 import { amdahlCommand } from '../command-name'
 import { apiClient, call, resolveCredential, str, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
-import { currentOwner, findRun, recentRuns, type RunRecord } from '../history'
+import { currentOwner, findRun, otherOwnersRuns, recentRuns, type RunRecord } from '../history'
 import { count, field, paragraphs, record, records, wrap } from '../text'
 import { gradeLines } from './grade'
 import { runId } from './feedback'
@@ -32,6 +32,24 @@ function minute(iso: string): string {
 }
 
 const NOTE = 'Runs made from this computer. A run made in the console or an AI client is not listed here, but its id opens: amdahl run <id>.'
+
+/**
+ * What `runs` says when this sign-in or key has none: signed out is not "no runs", and runs
+ * kept under another sign-in, workspace or key are counted, so they don't read as lost.
+ */
+function emptyRunsLines(ctx: Ctx, owner: ReturnType<typeof currentOwner>): string[] {
+  const signedOut = !owner.key && !ctx.profile && !ctx.io.env.AMDAHL_ACCESS_TOKEN
+  const others = otherOwnersRuns(ctx, owner)
+  if (signedOut) {
+    const kept = others > 0 ? ` This computer keeps ${count(others, 'run')} from an earlier sign-in.` : ''
+    return wrap(`Not signed in, so no runs are listed.${kept} Sign in to see them: ${amdahlCommand('login')}`)
+  }
+  const where = ctx.profile?.workspace.name ? ` in ${ctx.profile.workspace.name}` : owner.key ? ` with the key ${owner.key}...` : ''
+  const lines = wrap(`No runs yet${where} from this computer.`)
+  if (others > 0) lines.push(...wrap(`${count(others, 'run')} from this computer ${others === 1 ? 'was' : 'were'} made in another workspace or with another key. Switch with ${amdahlCommand('workspace use <slug>')}.`))
+  lines.push(...wrap(`${amdahlCommand('optimize draft.md')} makes one, and it is listed here.`))
+  return lines
+}
 
 /** `amdahl runs [--limit <n>]`. */
 export async function runs(ctx: Ctx): Promise<number> {
@@ -50,7 +68,7 @@ export async function runs(ctx: Ctx): Promise<number> {
     return EXIT.ok
   }
   if (all.length === 0) {
-    out.result({}, [...wrap('No runs yet from this computer.'), ...wrap(`${amdahlCommand('optimize draft.md')} makes one, and it is listed here.`)].join('\n'))
+    out.result({}, emptyRunsLines(ctx, owner).join('\n'))
     return EXIT.ok
   }
   const row = (r: RunRecord) => `${r.run_id}  ${minute(r.created_at)}  ${r.kind.padEnd(9)}${r.channel ?? ''}`.trimEnd()

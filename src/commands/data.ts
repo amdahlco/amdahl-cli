@@ -52,9 +52,14 @@ export function overviewLines(overview: Record<string, unknown>, columns = 80): 
   const rows = records(overview.surfaces)
   const width = Math.max(0, ...rows.map((r) => (SURFACES[field(r.surface)] ?? field(r.surface)).length))
   const lines = ['What this workspace holds:', ...rows.flatMap((r) => overviewLine(r, width, columns))]
-  const known = rows.filter((r) => typeof r.row_count === 'number')
-  if (known.length > 0 && known.every((r) => r.row_count === 0)) lines.push('', 'Nothing has synced yet.', ...wrap(connectLine(), columns))
+  if (nothingSynced(overview)) lines.push('', 'Nothing has synced yet.', ...wrap(connectLine(), columns))
   return lines
+}
+
+/** True when every surface's count was read and is 0. */
+function nothingSynced(overview: Record<string, unknown>): boolean {
+  const known = records(overview.surfaces).filter((r) => typeof r.row_count === 'number')
+  return known.length > 0 && known.every((r) => r.row_count === 0)
 }
 
 /** The plain view of the fields: each surface's names, wrapped. */
@@ -109,6 +114,12 @@ export async function data(ctx: Ctx): Promise<number> {
   const width = Math.max(40, Math.min(ctx.io.columns() ?? 80, 80))
   const surfaces = records(fields.surfaces)
   const shownOverview = surface ? { ...overview, surfaces: records(overview.surfaces).filter((r) => field(r.surface) === surface) } : overview
-  out.result({}, [...overviewLines(shownOverview, width), ...(surface ? fieldDetails(surfaces, width) : fieldNames(surfaces, width))].join('\n'))
+  // With nothing synced, the field names are a wall of text about data that isn't there: --surface still lists them.
+  const fieldLines = surface
+    ? fieldDetails(surfaces, width)
+    : nothingSynced(overview)
+      ? ['', ...wrap(`The fields a search can filter on: ${amdahlCommand('data --surface deals')}`, width)]
+      : fieldNames(surfaces, width)
+  out.result({}, [...overviewLines(shownOverview, width), ...fieldLines].join('\n'))
   return EXIT.ok
 }

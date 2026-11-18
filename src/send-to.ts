@@ -326,8 +326,15 @@ export function snakeHeader(header: string): string {
 
 /** `<list-name>-<tool>.csv`: `q4 leads.csv` for lemlist is `q4-leads-lemlist.csv`. */
 export function sendToFileName(listPath: string, preset: SendToPreset): string {
+  // The list's name, as the help promises (`<list>-<tool>.csv`): spaces and accents are tidied, but its
+  // own underscores stay, so `l_utf8bom.csv` gives `l_utf8bom-instantly.csv`.
   const list = basename(listPath).replace(/\.(csv|tsv|txt)$/i, '')
-  const base = snakeHeader(list).replace(/_/g, '-') || 'leads'
+  const base =
+    list
+      .split('_')
+      .map((part) => snakeHeader(part).replace(/_/g, '-'))
+      .filter(Boolean)
+      .join('_') || 'leads'
   return `${base}-${preset.id.replace(/_/g, '-')}.csv`
 }
 

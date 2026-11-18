@@ -1,5 +1,5 @@
 // A tar.gz writer for the tests, built the way amdahl.ai builds a folder
-// skill's archive (apps/landing/lib/skills/tar.ts in amdahl-frontend): ustar
+// skill's archive: ustar
 // headers, entries sorted by their UTF-8 bytes, an explicit entry for each
 // folder, mode 0644 / 0755, two zero blocks at the end, and gzip of STORED
 // deflate blocks with a fixed header. `rawTar` writes any entry at all, so a

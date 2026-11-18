@@ -61,6 +61,18 @@ function lineCount(n: number): string {
 
 const MARK = { pass: 'pass', fail: 'fail', none: 'n/a ' }
 
+/** `Only 1 of the 5 lines could be checked, so this is not a verdict on the draft.` */
+function thinGradeLine(rubricSize: number, total: number): string {
+  return `Only ${total} of the ${rubricSize} lines could be checked, so this is not a verdict on the draft.`
+}
+
+/** True when a line abstained, or the evidence was not read, because no calls are synced yet. */
+function noCallsSynced(result: Record<string, unknown>): boolean {
+  const empty = (code: unknown) => field(code).trim().toLowerCase().replace(/[\s-]+/g, '_') === 'corpus_empty'
+  const grade = record(result.grade)
+  return empty(record(result.evidence)?.reason) || empty(grade?.not_applicable_reason) || records(grade?.lines).some((l) => empty(l.not_applicable_reason))
+}
+
 /**
  * The grade for a person, as lines: the score (or "Not graded"), each rubric
  * line with its verdict and reason, what the evidence did, and what a grade
@@ -84,7 +96,12 @@ export function gradeLines(result: Record<string, unknown>): string[] {
     const passedOf = passed !== null && total !== null ? `${passed} of ${lineCount(total)} passed` : ''
     const coverage = partial ? `, on ${total} of the ${rubricSize} lines${passedOf ? ` (${passedOf})` : ''}` : passedOf ? `: ${passedOf}` : ''
     lines.push(`Grade ${score} of 5${coverage}.`)
-    if (bar !== null && typeof grade?.passes_bar === 'boolean') lines.push(`It ${grade.passes_bar ? 'meets' : 'is below'} the bar of ${bar}.`)
+    // A grade on fewer than half the lines is not a verdict on the draft: "meets the bar" on one line
+    // read as approval of a draft the other four never looked at. Say what could be checked instead.
+    const thin = partial && total !== null && total * 2 < rubricSize
+    if (thin) lines.push(...wrap(thinGradeLine(rubricSize, total)))
+    else if (bar !== null && typeof grade?.passes_bar === 'boolean') lines.push(`It ${grade.passes_bar ? 'meets' : 'is below'} the bar of ${bar}.`)
+    if (thin && noCallsSynced(result)) lines.push(...wrap(`Connect your calls or CRM to grade the other ${rubricSize - total}: ${amdahlCommand('connect')}`))
   }
 
   const rubric = records(grade?.lines)

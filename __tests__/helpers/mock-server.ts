@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import type { AddressInfo } from 'node:net'
 import { batchProblems, feedbackProblem, optimizeProblems, promptProblems, reportSendProblem, reportSendRejection, searchProblem } from './strict'
 
-/** The recipe library `GET /search/suggestions` answers with on staging (2026-11-13): 14 recipes, each with its search question and fill-ins. */
+/** The recipe library `GET /search/suggestions` answers with (2026-11-13): 14 recipes, each with its search question and fill-ins. */
 export const SUGGESTED_LIBRARY: Record<string, unknown>[] = JSON.parse(readFileSync(new URL('../fixtures/suggestions-library.json', import.meta.url), 'utf8'))
 export const BIZ = '11111111-1111-4111-8111-111111111111'
 export const USER = '22222222-2222-4222-8222-222222222222'
@@ -24,7 +24,7 @@ export const UNKNOWN_RUN = '00000000-0000-4000-8000-000000000000'
 /** The run id the mock gives a grade. */
 export const GRADE_RUN = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 /** The id the mock gives the prompt run it starts. */
-// A prompt run's id is `opt_` and 32 hex characters (staging, 2026-11-13), not a UUID.
+// A prompt run's id is `opt_` and 32 hex characters (2026-11-13), not a UUID.
 export const PROMPT_RUN = 'opt_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 /** What `GET /messages/optimize/runs/:id` returns for KNOWN_RUN. */
 export const KNOWN_RUN_BODY = {
@@ -59,7 +59,7 @@ export interface MockOptions {
   /**
    * A signed-in person with no workspace yet: authorize answers the self-serve
    * create page until `POST /oauth/authorize/self-serve` creates one, which
-   * returns to the same authorize request (as amdahl-app does with V0 on).
+   * returns to the same authorize request (as the server does).
    */
   selfServe?: boolean
   /** Answer authorize with a different state. */
@@ -107,6 +107,10 @@ export interface MockOptions {
   /** `GET /search/suggestions` never answers (a hanging server). */
   suggestionsHang?: boolean
   suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown> }
+  /** setup/status's `free_usage` (a self-serve workspace on its free credit). */
+  freeUsage?: Record<string, unknown>
+  /** optimize_prompt refuses with this message (a 422), as the server does with no recipients on an empty workspace. */
+  promptRefusal?: string
   /** What `GET /search/overview` answers (inside `data`). */
   overview?: Record<string, unknown>
   /** What `GET /search/fields` answers (inside `data`), before the surface filter. */
@@ -343,6 +347,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             workspace: options.degradedStatus ? null : { id: BIZ, name: 'Acme', slug: 'acme' },
             caller: { user_id: USER, email: 'dev@example.com', role: 'editor', auth_method: kind, client_id: null, scopes: [] },
             optimize: { allowed: blocker === null, blocker, quota: { limit: 1000, used, remaining: 1000 - used, resets_at: '2026-12-01T00:00:00Z' } },
+            ...(options.freeUsage ? { free_usage: options.freeUsage } : {}),
             connections: options.degradedStatus
               ? { omitted: 'unavailable' }
               : options.noConnections
@@ -353,7 +358,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       // search.query: a CLI OAuth token has no conversations:write, so a research handoff
-      // falls back to the search with the server's note, as amdahl-app does.
+      // falls back to the search with the server's note, as the server does.
       if (path === '/api/platform/v1/search/query' && req.method === 'POST') {
         const input = JSON.parse(body) as { query?: string; route?: string }
         const problem = searchProblem(input, options.suggestions ? (options.suggestions.library ?? SUGGESTED_LIBRARY).map((r) => String(r.id)) : null)
@@ -372,7 +377,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             })
           }
           return json(res, 200, {
-            data: {
+            data: options.searchResult ?? {
               success: true,
               mode_ran: 'fuzzy',
               results: [{ id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' }],
@@ -559,7 +564,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
         if (input.mode === 'grade') {
           runs.set(GRADE_RUN, Date.now())
-          runBodies.set(GRADE_RUN, { run_id: GRADE_RUN, draft: input.message ?? null, context: input.context ?? null, message: input.message ?? null, // staging stores a grade's draft back as its message (2026-11-13)
+          runBodies.set(GRADE_RUN, { run_id: GRADE_RUN, draft: input.message ?? null, context: input.context ?? null, message: input.message ?? null, // the server stores a grade's draft back as its message (2026-11-13)
              created_at: new Date().toISOString(), omitted: [] })
           return json(res, 200, { data: options.gradeResult ?? gradeBody(input.evidence === 'workspace') })
         }
@@ -573,6 +578,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         const input = JSON.parse(body) as { mode?: string; recipients?: { recipient: Record<string, unknown>; label?: string }[] }
         const problems = promptProblems(input)
         if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
+        if (options.promptRefusal && !input.recipients) return json(res, 422, { error: { code: 'invalid_input', message: options.promptRefusal } })
         const mode = input.mode ?? 'improve'
         promptRuns.set(PROMPT_RUN, { mode, polls: 0 })
         const labels = input.recipients?.map((r) => r.label ?? String(r.recipient.company ?? r.recipient.name)) ?? ['Corvid Health', 'Brightpath', 'Helix', 'Northwind']

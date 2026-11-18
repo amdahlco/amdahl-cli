@@ -64,12 +64,12 @@ const CURSOR_TRY = `Try it: ${AGENT_ASK} in Cursor.\nBefore that, sign in when C
 // What a person's run ends with, for each tool.
 const NEW = `${NEW_USER}\n`
 const claudeScreen = (already = false) =>
-  `${already ? '✓ Claude Code already has Amdahl.' : '✓ Added Amdahl to Claude Code.'}\nOne step left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.\n  2. Paste an email and say: ${ASK}\n`
+  `${already ? '✓ Claude Code already has Amdahl.' : '✓ Added Amdahl to Claude Code.'}\nTwo steps left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.\n  2. Paste an email and say: ${ASK}\n`
 const cursorScreen = (already = false) =>
-  `${already ? '✓ Cursor already has Amdahl.' : '✓ Added Amdahl to Cursor.'}\nOne step left, in Cursor:\n  1. If it's open, quit and reopen it. In Customize > MCPs, sign in to amdahl.\n  2. In chat, paste an email, say: ${ASK}\n`
+  `${already ? '✓ Cursor already has Amdahl.' : '✓ Added Amdahl to Cursor.'}\nTwo steps left, in Cursor:\n  1. If it's open, quit and reopen it. In Customize > MCPs, sign in to amdahl.\n  2. In chat, paste an email, say: ${ASK}\n`
 /** Codex without `codex` on PATH: the steps, to run by hand. */
-const codexSteps = (lead = NEW, already = false) =>
-  `${already ? '✓ Codex already has Amdahl.' : '✓ Added Amdahl to Codex.'}\n${lead}One step left, in your terminal:\n  1. Run: codex mcp login amdahl\n  2. In codex, paste an email, say: ${ASK}\n`
+const codexSteps = (already = false) =>
+  `${already ? '✓ Codex already has Amdahl.' : '✓ Added Amdahl to Codex.'}\nTwo steps left, in your terminal:\n  1. Run: codex mcp login amdahl\n  2. In codex, paste an email, say: ${ASK}\n`
 const TITLE = 'Amdahl · predictive ML for GTM\n'
 const HINT = "Browser didn't open? Press Enter for the link.\n"
 // A finished sign-in erases the one-line hint: up one line, clear to the end of the screen.
@@ -78,6 +78,8 @@ const REWRITING = 'Amdahl is rewriting it. This can take a minute.\n'
 const NEXT_TIME = 'Next time: amdahl optimize draft.txt\n'
 /** The menu as the fake records it: the three tools, then "This terminal". */
 const menu = (rows: string) => `${QUESTION} [${rows} |   ${TERMINAL}]`
+/** The menu with no tool found: "This terminal" starts ticked. */
+const NONE_FOUND_MENU = `${QUESTION} [  Claude Code |   Cursor |   Codex | x ${TERMINAL}]`
 const ran = (io: FakeIo, command: string) => io.run.mock.calls.filter((c) => c[0] === command).map((c) => (c[1] as string[]).join(' '))
 const NOTHING_PICKED = `Nothing picked, so nothing changed.\nTo try it here, run amdahl again and tick "This terminal".\nUsing the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect\n`
 
@@ -95,7 +97,7 @@ describe('bare amdahl: when it guides', () => {
     const r = await cli(io)
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(`${TITLE}${NOTHING_PICKED}`)
-    expect(io.prompts).toEqual([menu('  Claude Code |   Cursor |   Codex')])
+    expect(io.prompts).toEqual([NONE_FOUND_MENU])
     expect(r.stderr).not.toContain('Usage:')
   })
 
@@ -166,6 +168,33 @@ describe('bare amdahl: when it guides', () => {
     expect(io.prompts).toHaveLength(1)
   })
 
+  it.each<[string, Partial<FakeIo>]>([
+    ['stdout piped (`amdahl | tee setup.log`)', { stdoutIsTTY: false }],
+    ['stdout redirected to a file', { stdoutIsTTY: false }],
+  ])('asks the question when %s: a person is at the terminal, so nothing is written unasked', async (_label, change) => {
+    const io = terminal()
+    Object.assign(io, change)
+    for (const dir of ['.claude', '.cursor', '.codex']) mkdirSync(join(io.homedir, dir))
+    io.answers.push('none')
+    const r = await cli(io)
+    expect(io.prompts).toHaveLength(1)
+    expect(r.stdout).toBe(`${TITLE}${NOTHING_PICKED}`)
+    expect(io.run).not.toHaveBeenCalledWith('claude', expect.arrayContaining(['add']))
+    expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(false)
+    expect(existsSync(join(io.homedir, '.codex', 'config.toml'))).toBe(false)
+  })
+
+  it('stdin at a terminal but stderr redirected: the question could not be seen, so the usage with the reason, nothing written', async () => {
+    const io = terminal()
+    io.stderrIsTTY = false
+    for (const dir of ['.claude', '.cursor', '.codex']) mkdirSync(join(io.homedir, dir))
+    const r = await cli(io)
+    expect(r.code).toBe(2)
+    expect(r.stderr).toBe(`${noSetupLine('the question needs stderr on a terminal, and it is redirected')}${USAGE}`)
+    expect(io.prompts).toEqual([])
+    expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(false)
+  })
+
   it('`amdahl setup` is bare `amdahl`', async () => {
     const io = terminal()
     io.answers.push('none')
@@ -190,12 +219,12 @@ describe('bare amdahl: detection', () => {
     expect(ran(io, 'which')).toEqual(['claude', 'codex'])
   })
 
-  it('with none found, offers all three and this terminal, unticked, and the marker starts on this terminal', async () => {
+  it('with none found, offers all three, and this terminal starts ticked with the marker on it, so the first Enter takes it', async () => {
     const io = terminal()
     io.answers.push('none')
     const r = await cli(io)
-    expect(io.prompts).toEqual([menu('  Claude Code |   Cursor |   Codex')])
-    expect(io.tickOptions[0]).toMatchObject({ ticked: [false, false, false, false], initial: 3, note: NONE_FOUND })
+    expect(io.prompts).toEqual([NONE_FOUND_MENU])
+    expect(io.tickOptions[0]).toMatchObject({ ticked: [false, false, false, true], initial: 3, note: NONE_FOUND })
     expect(r.stdout).toBe(`${TITLE}${NOTHING_PICKED}`)
     expect(existsSync(join(io.homedir, '.claude'))).toBe(false)
   })
@@ -225,7 +254,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     expect(readFileSync(skillAt(io, '.agents', 'skills'), 'utf8')).toBe(SKILL_TEXT)
     expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(false)
     // One screen a tool, no paths, no profile, no notes; the new-user line once.
-    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}${NEW}\n${codexSteps('')}`)
+    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}\n${codexSteps()}${NEW}`)
     expect(r.stderr).toBe('')
     // Each screen is six lines or fewer.
     for (const screen of r.stdout.slice(TITLE.length).split('\n\n')) expect(screen.trimEnd().split('\n').length).toBeLessThanOrEqual(6)
@@ -251,7 +280,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     io.answers.push('')
     const r = await cli(io)
     expect(r.stdout).toBe(
-      `${TITLE}✓ Added Amdahl to Claude Code.\nOne step left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick\n     amdahl, sign in.\n  2. Paste an email and say: "Use Amdahl to make this sound\n     less like AI"\nNew to Amdahl? The sign-in sets up your free workspace.\n`
+      `${TITLE}✓ Added Amdahl to Claude Code.\nTwo steps left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick\n     amdahl, sign in.\n  2. Paste an email and say: "Use Amdahl to make this sound\n     less like AI"\nNew to Amdahl? The sign-in sets up your free workspace.\n`
     )
     expect(wrapLine('x'.repeat(70), 60)).toEqual(['x'.repeat(70)])
     expect(wrapLine('short', undefined)).toEqual(['short'])
@@ -264,7 +293,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     const r = await cli(io)
     expect(r.code).toBe(0)
     expect(r.stdout).toBe(
-      `${TITLE}✓ Added Amdahl to Claude Code.\nOne step left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.\n  2. Paste an email and say: "Use Amdahl to make this sound less like AI"\nNew to Amdahl? The sign-in sets up your free workspace.\n`
+      `${TITLE}✓ Added Amdahl to Claude Code.\nTwo steps left, in Claude Code:\n  1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.\n  2. Paste an email and say: "Use Amdahl to make this sound less like AI"\nNew to Amdahl? The sign-in sets up your free workspace.\n`
     )
     expect(io.opened).toEqual([])
     expect(JSON.parse(readFileSync(join(io.homedir, '.claude.json'), 'utf8')).mcpServers.amdahl).toEqual({ type: 'http', url: `${server!.url}/mcp` })
@@ -327,7 +356,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     io.answers.push('')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}${NEW}`)
     expect(io.runInteractive).not.toHaveBeenCalled()
   })
 
@@ -336,7 +365,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     mkdirSync(join(io.homedir, '.codex'))
     io.answers.push('')
     const r = await cli(io)
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}${NEW}`)
     expect(io.runInteractive).not.toHaveBeenCalled()
   })
 
@@ -345,7 +374,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     io.answers.push('1,2')
     const r = await cli(io)
     expect(r.code).toBe(0)
-    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}${NEW}\n${cursorScreen()}`)
+    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}\n${cursorScreen()}${NEW}`)
     expect(r.stdout).not.toContain('PATH')
     expect(JSON.parse(readFileSync(join(io.homedir, '.claude.json'), 'utf8'))).toEqual({ mcpServers: { amdahl: { type: 'http', url: `${server!.url}/mcp` } } })
   })
@@ -359,7 +388,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     expect(r.code).toBe(1)
     expect(r.stderr).toContain(`Error: ${join(io.homedir, '.cursor', 'mcp.json')} is not valid JSON; not changing it.`)
     expect(readFileSync(join(io.homedir, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.amdahl]')
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}${NEW}`)
   })
 
   it.each<[string, string | null]>([
@@ -388,7 +417,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     io.answers.push('')
     const r = await cli(io)
     expect(io.prompts).toEqual([menu('x Claude Code | x Cursor |   Codex')])
-    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}${NEW}\n${cursorScreen(true)}`)
+    expect(r.stdout).toBe(`${TITLE}${claudeScreen()}\n${cursorScreen(true)}${NEW}`)
   })
 
   it('a file it cannot write is that tool\'s error (exit 1), and the next tool still runs', async () => {
@@ -400,7 +429,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     expect(r.stderr).toContain(`Error: Could not update ${join(io.homedir, '.cursor', 'mcp.json')} (`)
     expect(r.stderr).not.toContain('Could not reach the Amdahl API')
     expect(readFileSync(join(io.homedir, '.codex', 'config.toml'), 'utf8')).toContain('[mcp_servers.amdahl]')
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}${NEW}`)
   })
 
   it('an unexpected failure is reported for that tool, and the next tool still runs', async () => {
@@ -415,7 +444,7 @@ describe('bare amdahl: setting up the AI tools', () => {
     expect(r.stderr).toContain('Error: Could not set up Claude Code: spawn blew up\n')
     expect(r.stderr).not.toContain('Could not reach the Amdahl API')
     expect(existsSync(join(io.homedir, '.codex', 'config.toml'))).toBe(true)
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}${NEW}`)
   })
 
   it('a key in the environment that Amdahl rejects does not matter to the tools: they set up', async () => {
@@ -565,7 +594,7 @@ describe('bare amdahl: this terminal', () => {
     const r = await cli(io)
     expect(r.code).toBe(0)
     expect(io.opened).toHaveLength(1)
-    expect(io.prompts).toEqual([menu('  Claude Code |   Cursor |   Codex'), PASTE_PROMPT])
+    expect(io.prompts).toEqual([NONE_FOUND_MENU, PASTE_PROMPT])
     expect(PASTE_PROMPT).toBe('Paste an email or LinkedIn message, then press Enter on an empty line:')
     expect(r.stdout).toBe(`${TITLE}${NEW}✓ Signed in · Acme\nbetter: Hi Sam,\n\nQuick question about Q3.\n`)
     expect(r.stderr).toBe(`Opening your browser…\n${HINT}${ERASE}${REWRITING}${VERSION_RULE}\nRun: r1\nSent it? amdahl sent r1\nOr say how it went: amdahl feedback r1\n${NEXT_TIME}`)
@@ -599,7 +628,7 @@ describe('bare amdahl: this terminal', () => {
     const r = await cli(io)
     expect(r.code).toBe(0)
     expect(io.opened).toHaveLength(1)
-    expect(r.stdout).toBe(`${TITLE}${cursorScreen()}${NEW}\n✓ Signed in · Acme\nbetter: draft\n`)
+    expect(r.stdout).toBe(`${TITLE}${cursorScreen()}\n${NEW}✓ Signed in · Acme\nbetter: draft\n`)
     expect(existsSync(join(io.homedir, '.cursor', 'mcp.json'))).toBe(true)
   })
 
@@ -900,9 +929,7 @@ describe('bare amdahl, run by an agent or with no terminal', () => {
 
   it.each<[string, (io: FakeIo) => void]>([
     ['no terminal at all (Codex sets no variable)', () => {}],
-    ['stdout piped', (io) => Object.assign(io, { stdinIsTTY: true, stderrIsTTY: true })],
     ['stdin piped', (io) => Object.assign(io, { stdoutIsTTY: true, stderrIsTTY: true })],
-    ['stderr redirected', (io) => Object.assign(io, { stdinIsTTY: true, stdoutIsTTY: true })],
   ])('%s: sets up every client it finds, and names each one\'s step', async (_label, change) => {
     const io = noTerminal(offline)
     change(io)
@@ -976,11 +1003,11 @@ describe('bare amdahl: the menu', () => {
     expect([QUESTION, TERMINAL, FOUND_TAG, MENU_HINT]).toEqual(['Where should Amdahl work?', 'This terminal', 'found on your machine', '↑↓ move · Space tick/untick · Enter continue'])
   })
 
-  it('found none: says so under the question, offers amdahl.ai/connect for the apps, and ticks none', async () => {
+  it('found none: says so under the question, offers amdahl.ai/connect for the apps, and ticks only this terminal', async () => {
     const io = terminal()
     io.answers.push('none')
     await cli(io)
-    expect(io.tickOptions[0]).toMatchObject({ ticked: [false, false, false, false], tags: [undefined, undefined, undefined, undefined], note: NONE_FOUND })
+    expect(io.tickOptions[0]).toMatchObject({ ticked: [false, false, false, true], tags: [undefined, undefined, undefined, undefined], note: NONE_FOUND })
     expect(NONE_FOUND).toBe("We didn't find Claude Code, Cursor or Codex on this computer.\nUsing the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect")
   })
 
@@ -1203,7 +1230,7 @@ describe('Claude Code without `claude` on PATH', () => {
     const r = await cli(io)
     expect(r.code).toBe(1)
     expect(io.opened).toHaveLength(1)
-    expect(r.stdout).toBe(`${TITLE}${codexSteps()}\n✓ Signed in · Acme\nbetter: draft\n`)
+    expect(r.stdout).toBe(`${TITLE}${codexSteps()}\n${NEW}✓ Signed in · Acme\nbetter: draft\n`)
     expect(readFileSync(join(io.homedir, '.cursor', 'mcp.json'), 'utf8')).toBe('{oops')
   })
 

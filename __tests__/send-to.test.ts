@@ -1,8 +1,7 @@
 // 0.4.2: `amdahl optimize --list <file.csv> --for <tool>` writes the messages
 // Amdahl wrote as a file a sequencer imports, and says how to import it. The
-// console's "Send to" writes the same file, so the first test is its own
-// end-to-end scenario (amdahl-frontend, e2e-stub/optimizer-send-to.spec.ts)
-// run through the CLI: same list, same results, same header names and cells.
+// console's "Send to" writes the same file, so the first test is the
+// console's own end-to-end scenario, run through the CLI: same list, same results, same header names and cells.
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -157,6 +156,8 @@ describe('--for writes the console file', () => {
     expect(sendToFileName('/x/café list.CSV', reply)).toBe('cafe-list-reply-io.csv')
     expect(sendToFileName('/x/___.csv', reply)).toBe('leads-reply-io.csv')
     expect(sendToFileName('/x/contacts', reply)).toBe('contacts-reply-io.csv')
+    // The list's own underscores stay (QA 0.5.1 N15).
+    expect(sendToFileName('/x/l_utf8bom.csv', reply)).toBe('l_utf8bom-reply-io.csv')
     expect(snakeHeader('  Q4 / Région  ')).toBe('q4_region')
   })
 })

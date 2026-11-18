@@ -86,9 +86,9 @@ export interface ListFile {
 /**
  * Parse CSV text (RFC 4180: quoted fields may hold commas, line breaks and
  * doubled quotes). Returns the rows and the line each starts on. A blank
- * line is skipped.
+ * line is skipped. `delimiter` is a comma, or what {@link csvDelimiter} found.
  */
-export function parseCsv(text: string): { rows: string[][]; lines: number[] } {
+export function parseCsv(text: string, delimiter = ','): { rows: string[][]; lines: number[] } {
   const rows: string[][] = []
   const lines: number[] = []
   let row: string[] = []
@@ -125,7 +125,7 @@ export function parseCsv(text: string): { rows: string[][]; lines: number[] } {
     if (c === '"' && cell === '') {
       quoted = true
       touched = true
-    } else if (c === ',') {
+    } else if (c === delimiter) {
       row.push(cell)
       cell = ''
       touched = true
@@ -159,9 +159,21 @@ function perLine(cell: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * The column separator, read from the header line: a comma, or, in a header with no comma, a tab
+ * (Excel's "Text (Tab delimited)") or a semicolon (Excel's CSV where the decimal mark is a comma).
+ */
+export function csvDelimiter(text: string): string {
+  const header = text.replace(/^\uFEFF/, '').split(/\r?\n/, 1)[0] ?? ''
+  if (header.includes(',')) return ','
+  if (header.includes('\t')) return '\t'
+  if (header.includes(';')) return ';'
+  return ','
+}
+
 /** Read a CSV list into batch items. */
 function csvList(path: string, text: string): ListFile {
-  const { rows, lines } = parseCsv(text)
+  const { rows, lines } = parseCsv(text, csvDelimiter(text))
   const [header, ...body] = rows
   if (!header) throw usageError(`${path} is empty.`)
   const names = header.map((h) => h.trim().toLowerCase())
@@ -524,7 +536,7 @@ export async function optimizeList(ctx: Ctx, requested: Record<string, unknown>)
   if (list?.ignored?.length) {
     const shown = list.ignored.slice(0, 6).join(', ')
     const more = list.ignored.length > 6 ? ` and ${list.ignored.length - 6} more` : ''
-    out.info(`Not sent, and copied to the results as they are: ${count(list.ignored.length, 'column')} Amdahl does not read (${shown}${more}).`)
+    out.info(`Kept as they are in the results (not sent to Amdahl): ${shown}${more}.`)
   }
   if (!resume && list && list.items.length > MAX_BATCH_ITEMS) {
     throw usageError(`A batch takes at most ${MAX_BATCH_ITEMS} messages, and ${list.path} has ${list.items.length}.`, 'Split the list into files of 500 or fewer, and run each one.')

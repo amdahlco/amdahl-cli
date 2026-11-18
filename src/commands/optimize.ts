@@ -378,7 +378,7 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
     out.info(`Nothing pasted, so nothing was sent.\n${nextTimeLine(ctx)}`)
     return EXIT.ok
   }
-  out.info('Amdahl is rewriting it. This can take a minute.')
+  out.info(REWRITING_LINE)
   const noData = noDataConnected(ctx, credential)
   const result = await optimizeOne(ctx, credential, message, base, 'your message')
   if (result.ok !== false) rememberRun(ctx, { run_id: result.run_id, kind: 'optimize', channel: channelOf(base) }, credential)
@@ -401,6 +401,9 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx)), ...connect, nextTimeLine(ctx)].join('\n'))
   return EXIT.ok
 }
+
+/** What a rewrite at a terminal says before the minute it can take. */
+export const REWRITING_LINE = 'Amdahl is rewriting it. This can take a minute.'
 
 /** `amdahl optimize [<file>... | -]`. */
 export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
@@ -444,6 +447,9 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
   const results: FileResult[] = []
   let exit: number = EXIT.ok
   for (const { file, message } of inputs) {
+    // A rewrite takes up to a minute: at a terminal, say so first, as the paste flow does, so
+    // nobody presses Ctrl+C thinking it hung. Not under --json, and not into a redirected stderr.
+    if (!out.json && io.stderrIsTTY) out.info(inputs.length > 1 ? `Amdahl is rewriting ${file}. This can take a minute.` : REWRITING_LINE)
     const result = await optimizeOne(ctx, credential, message, base, file)
     const ok = result.ok !== false
     results.push({ ok, file, result })

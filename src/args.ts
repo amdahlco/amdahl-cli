@@ -7,8 +7,9 @@
 
 import { parseArgs, type ParseArgsConfig } from 'node:util'
 import { amdahlCommand } from './command-name'
-import { usageError } from './errors'
+import { type CliError, usageError } from './errors'
 import { RECIPES } from './recipes-data'
+import { nearest } from './suggest'
 
 type OptionSpec = NonNullable<ParseArgsConfig['options']>
 
@@ -190,16 +191,62 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
         `To add a skill: npx -y amdahl skills add ${ref}`
       )
     }
-    if (second === undefined) throw usageError(`\`amdahl ${first}\` needs a subcommand.`)
+    if (second === undefined) throw usageError(`\`amdahl ${first}\` needs a subcommand.`, groupHint(first))
     name = `${first} ${second}`
     words = 2
   }
   name = ALIASES[name] ?? name
   const spec = COMMAND_OPTIONS[name]
-  if (!spec) throw usageError(`Unknown command \`${positionals.slice(0, words).join(' ')}\`.`, `Run \`${amdahlCommand('--help')}\` to see the commands.`)
+  if (!spec) throw unknownCommand(positionals.slice(0, words))
 
   const strict = strictParse(argv, { ...GLOBAL_OPTIONS, ...spec }, name === 'search' && argv.some((a) => a === '--recipe' || a.startsWith('--recipe=')))
   return { command: name, args: strict.positionals.slice(words), flags: strict.values }
+}
+
+/** The subcommands of a command group (`keys` → `keys create`, …), aliases included. */
+function groupCommands(group: string): string[] {
+  const names = [...Object.keys(COMMAND_OPTIONS), ...Object.keys(ALIASES)].filter((n) => n.startsWith(`${group} `))
+  return [...new Set(names)]
+}
+
+/** The hint under "`amdahl keys` needs a subcommand.": the commands it has. */
+function groupHint(group: string): string {
+  return `Commands: ${groupCommands(group).map((n) => amdahlCommand(n)).join(', ')}`
+}
+
+/** Other words people reach for, by the subcommand that does it. */
+const SYNONYMS: Record<string, string> = {
+  'keys delete': 'keys revoke',
+  'keys remove': 'keys revoke',
+  'keys rm': 'keys revoke',
+  'keys new': 'keys create',
+  'keys add': 'keys create',
+  'keys ls': 'keys list',
+  'workspace switch': 'workspace use',
+  'workspace ls': 'workspace list',
+}
+
+/**
+ * "Unknown command `optimze`." with the nearest command ("Did you mean `amdahl optimize`?"),
+ * or, with none near, the help and the update line: a command from newer docs may not be in
+ * this version.
+ */
+function unknownCommand(words: string[]): CliError {
+  const typed = words.join(' ')
+  const message = `Unknown command \`${typed}\`.`
+  const [first = '', second] = words
+  let near: string | null = SYNONYMS[typed] ?? null
+  if (!near && second !== undefined) {
+    const sub = nearest(second, groupCommands(first).map((n) => n.slice(first.length + 1)))
+    near = sub ? `${first} ${sub}` : null
+  }
+  if (!near && second === undefined) near = nearest(first, [...new Set(Object.keys(COMMAND_OPTIONS).map((n) => n.split(' ')[0] ?? n))])
+  if (near && TWO_WORD.has(near) && second === undefined) return usageError(message, `Did you mean \`${amdahlCommand(near)}\`? ${groupHint(near)}`)
+  if (near) return usageError(message, `Did you mean \`${amdahlCommand(near)}\`?`)
+  return usageError(
+    message,
+    `Run \`${amdahlCommand('--help')}\` to see the commands. If the docs show it, this amdahl may be older than the docs: update with \`npm install -g amdahl@latest\`, or run \`npx -y amdahl@latest\`.`
+  )
 }
 
 function strictParse(argv: string[], options: OptionSpec, withRecipe = false) {

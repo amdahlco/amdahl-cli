@@ -383,7 +383,9 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   }
   if (cut) out.info(outOfTimeLines(rows.length, researchAsked, researchId).join('\n'))
   if (setup) {
-    out.result({}, [...wrap(field(setup.message) || 'This workspace has no data connected yet.'), connectLine()].join('\n'))
+    // A person who asked for research hears why this is not it, even with nothing connected.
+    if (refusedForScope(notes)) out.info(wrap(researchKeyFirst()).join('\n'))
+    out.result({}, setupLines(field(setup.message)).join('\n'))
     return EXIT.ok
   }
   // Said before any rows: a person who asked for research should hear first why this is not it.
@@ -394,6 +396,15 @@ export async function search(ctx: Ctx, args: string[]): Promise<number> {
   }
   out.result({}, searchLines(result, question, ctx.flags.research === true).join('\n'))
   return EXIT.ok
+}
+
+/**
+ * The setup-needed answer: the server's message, and the connect command only when the message
+ * doesn't already say to connect (it names the console page), so the step is said once.
+ */
+export function setupLines(message: string): string[] {
+  if (!message) return [...wrap('This workspace has no data connected yet.'), connectLine()]
+  return /\bconnect/i.test(message) ? wrap(message) : [...wrap(message), connectLine()]
 }
 
 /** Print a settled (or still running) research job; the exit code says how it ended. */

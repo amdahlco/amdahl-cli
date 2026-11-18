@@ -35,7 +35,15 @@ describe('the amdahl package', () => {
     expect(statSync(join(root, 'packages/amdahl/amdahl.js')).mode & 0o111).not.toBe(0)
   })
 
-  it('ships the same licence, engines and publish settings as the CLI', () => {
+  // No `engines` in either package: npm installs the newest version whose `engines` match, so
+  // `>=22` made Node 20 get 0.3.7 silently, and the documented commands said "Unknown command".
+  // Without it, every Node gets the latest, and bin/amdahl.js refuses an old Node clearly.
+  it('declares no engines, so an old Node gets the latest and its clear Node message', () => {
+    expect(cli.engines).toBeUndefined()
+    expect(short.engines).toBeUndefined()
+  })
+
+  it('ships the same licence and publish settings as the CLI', () => {
     expect(read('packages/amdahl/LICENSE')).toBe(read('LICENSE'))
     expect(short.license).toBe(cli.license)
     expect(short.engines).toEqual(cli.engines)

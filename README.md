@@ -80,10 +80,10 @@ It finds Claude Code, Cursor and Codex by their command on your PATH
 (`claude`, `cursor`, `codex`) or their files in your home folder (`.claude`
 or `.claude.json`, `.cursor`, `.codex`). Only the ones it finds are ticked
 and tagged "found on your machine" (in dim grey where colour is allowed).
-"This terminal" is always there and never ticked for you. If it finds none
-of the three, it says so under the question, points Claude and ChatGPT app
-users to https://amdahl.ai/connect, and the marker starts on "This
-terminal", so Space then Enter picks it:
+"This terminal" is always there. If it finds none of the three, it says so
+under the question, points Claude and ChatGPT app users to
+https://amdahl.ai/connect, and "This terminal" starts ticked with the marker
+on it, so Enter goes straight on to sign-in:
 
 ```
 Where should Amdahl work?
@@ -92,7 +92,7 @@ Using the Claude or ChatGPT app? Connect it at https://amdahl.ai/connect
   [ ] Claude Code
   [ ] Cursor
   [ ] Codex
-> [ ] This terminal
+> [x] This terminal
 ↑↓ move · Space tick/untick · Enter continue
 ```
 
@@ -115,7 +115,7 @@ screen is six lines or fewer:
 
 ```
 ✓ Added Amdahl to Claude Code.
-One step left, in Claude Code:
+Two steps left, in Claude Code:
   1. If it's open, quit and reopen it. Type /mcp, pick amdahl, sign in.
   2. Paste an email and say: "Use Amdahl to make this sound less like AI"
 New to Amdahl? The sign-in sets up your free workspace.
@@ -123,7 +123,7 @@ New to Amdahl? The sign-in sets up your free workspace.
 
 ```
 ✓ Added Amdahl to Cursor.
-One step left, in Cursor:
+Two steps left, in Cursor:
   1. If it's open, quit and reopen it. In Customize > MCPs, sign in to amdahl.
   2. In chat, paste an email, say: "Use Amdahl to make this sound less like AI"
 ```
@@ -227,9 +227,12 @@ where the sign-in is stored.
 ### Run by an agent, or with no terminal
 
 You can ask Claude Code, Cursor or Codex to run `npx -y amdahl` for you. With
-no terminal (an agent's shell, a pipe such as `npx -y amdahl | cat`, or stdin,
-stdout or stderr redirected), and whenever `CLAUDECODE` or `CURSOR_AGENT`
-is set, it sets up without a question and without a browser sign-in:
+no terminal on stdin (an agent's shell, or `npx -y amdahl < /dev/null`), and
+whenever `CLAUDECODE` or `CURSOR_AGENT` is set, it sets up without a question
+and without a browser sign-in. A person who only redirects the output
+(`npx -y amdahl | tee setup.log`, `> out.txt`) still gets the question, drawn on
+stderr. With stdin at a terminal but stderr redirected, the question could not
+be seen, so it prints the usage with that reason and changes nothing:
 
 - `CLAUDECODE` set (Claude Code runs it): Claude Code only.
 - `CURSOR_AGENT` set (Cursor runs it): Cursor only.
@@ -538,7 +541,9 @@ lines it rests on, each with its verdict and reason. Without
 `--evidence workspace` only the ask is evaluated: the four lines that read your
 customers' calls say "Not evaluated: evidence was off", and the headline says
 how many lines the score rests on: `Grade 5 of 5, on 1 of the 5 lines (1 of 1
-line passed).` A line that could not be evaluated is not a fail. When no line could be,
+line passed).` When fewer than half the lines were evaluated there is no bar verdict:
+the next line says the grade is not a verdict on the draft, and, when no calls are
+synced yet, how to connect them. A line that could not be evaluated is not a fail. When no line could be,
 the grade is `Not graded.`, never 0. Every grade says it is one reading and does
 not predict replies. The run id comes last; `amdahl run <id>` opens it. With
 `--json` it prints `{ok, file, result}`: the grade is `.result.grade`.
@@ -693,6 +698,14 @@ optimize takes, and the server refuses a key it does not know. The optimize flag
 `--evidence`, `--on-unsupported`, `--tries`, `--context`) apply to every
 item that does not set its own; a row's facts and a `--context` file's rules
 and voice examples are both sent.
+
+Columns may be separated by commas, or, in a header with no comma, by tabs or
+semicolons (as Excel saves them in some regions). Every file the CLI reads,
+a list or a draft, must be UTF-8, or UTF-16 with a byte-order mark (Excel's
+"Unicode Text"). A file in another encoding, such as Excel's plain "CSV" saved
+as Windows-1252, is refused before anything is sent: its accented letters
+would otherwise arrive garbled, and a list would be billed as written. Save
+it as "CSV UTF-8" and run the same command again.
 
 The whole file is read and checked first. A missing `message` column says
 which columns it reads. Progress goes to stderr, in place at a terminal: a
@@ -980,9 +993,9 @@ writes anything: the skill, the sentence from the skill page, and the page's
 link.
 
 ```
-Warning: amdahl.ai's security review flagged amdahl/call-prep.
+Warning: amdahl.ai's security review flagged amdahl/system-diagram.
   Flagged: it may send your data somewhere else (line 14), and 2 more. Read it before you install.
-  See what was flagged: https://amdahl.ai/skills/amdahl/call-prep
+  See what was flagged: https://amdahl.ai/skills/amdahl/system-diagram
 ```
 
 In a terminal, it then asks `Install this skill?` in the same kind of menu.
@@ -1071,7 +1084,7 @@ nothing. `--site <origin>` sends both requests to another origin, for
 example a local copy of the site (`--site http://localhost:6782`). The
 origin must be `https`; `http` is allowed only for localhost.
 
-## Feedback link
+## Run id
 
 Without `--json`, `amdahl optimize` ends each run with its run id:
 
@@ -1081,35 +1094,24 @@ Run: 3f2c8a1e-...
 
 Under `--json` the run id is in `result.run_id` and nothing extra prints.
 
-Amdahl staff can opt in to a feedback link after the run id. The link opens the
-run's internal page in the Amdahl console, which only staff can see. It is off
-by default. To turn it on:
-
-- Set `"feedbackLink": true` at the top level of the config file
-  (`${XDG_CONFIG_HOME:-~/.config}/amdahl/config.json`, or
-  `%APPDATA%\amdahl\config.json` on Windows).
-- Or set `AMDAHL_FEEDBACK_LINK=1` for one command or shell.
-  `AMDAHL_FEEDBACK_LINK=0` turns it off even when the config turns it on.
-
-The link uses the console for your API host (see
-[Targeting staging](#targeting-staging)).
-
 Every request to the Amdahl API sends the headers
 `X-Amdahl-Client: cli/<version>` and `User-Agent: amdahl-cli/<version>`, so
-Amdahl can tell which runs came from the CLI. The headers are only labels. It never changes what a credential can do.
+Amdahl can tell which runs came from the CLI. The headers are only labels. They
+never change what a credential can do.
 
-## Targeting staging
+## API host
+
+The CLI uses `https://app.amdahl.ai` by default. To use a different host, set
+`AMDAHL_API_URL` or pass `--api-url`:
 
 ```sh
-AMDAHL_API_URL=https://staging.amdahl.ai amdahl login
-# or: amdahl login --api-url https://staging.amdahl.ai
+AMDAHL_API_URL=https://<api-host> amdahl login
+# or: amdahl login --api-url https://<api-host>
 ```
 
 A profile remembers its API host, so later commands need no flag. A profile's
 token is only ever sent to that host. Messages that link to the console use
-`AMDAHL_CONSOLE_URL` when set, otherwise the console for the known API host
-(`staging.amdahl.ai` -> `https://stagingui.amdahl.ai`, otherwise
-`https://console.amdahl.ai`).
+`AMDAHL_CONSOLE_URL` when set, otherwise `https://console.amdahl.ai`.
 
 ## Credentials
 
@@ -1131,6 +1133,9 @@ the default profile). `whoami` names the source that won. `keys create`,
 `keys create` generates the key on your machine and sends only its sha256 hash
 and 14-character prefix. You approve the request in the console by typing the
 code shown in the terminal; then the key is printed once and stored nowhere.
+`keys create` and `keys revoke` open the approve page in the browser only for
+a person at a terminal, as `login` and `connect` do. From a script, CI, an
+agent or with `--json`, they print the link and open nothing.
 
 `--preset` picks what the key can do:
 
