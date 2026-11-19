@@ -46,6 +46,8 @@ export interface RatingInput {
   comment?: string
   /** true: the team may email the person. false: said no. Absent: not said. */
   emailOk?: boolean
+  /** The `query_id` of the search that started a research job: it links the rating to that run. */
+  queryId?: string
 }
 
 /** Send one rating. Resolves the server's answer; throws the CLI's usual error on a refusal. */
@@ -60,6 +62,8 @@ export async function postRating(ctx: Ctx, credential: Credential, input: Rating
   }
   if (input.comment?.trim()) body.comment = input.comment
   if (input.emailOk !== undefined) body.email_ok = input.emailOk
+  if (input.surface === 'research') body.research_id = input.id
+  if (input.queryId) body.search_query_id = input.queryId
   try {
     return await call(() =>
       apiClient(ctx, credential).request<Record<string, unknown>>('/api/platform/v1/feedback', { method: 'POST', body, signal: AbortSignal.timeout(RATING_TIMEOUT_MS) })
@@ -84,13 +88,13 @@ export function ratingFromAnswer(answer: string): Rating | null {
  * A no asks one more question for what went wrong. A refusal or a failure to save prints one quiet
  * line and never changes the command's exit code: the result was already printed.
  */
-export async function askRating(ctx: Ctx, credential: Credential, target: { id: string; surface: RatingSurface }): Promise<void> {
+export async function askRating(ctx: Ctx, credential: Credential, target: { id: string; surface: RatingSurface; queryId?: string }): Promise<void> {
   if (!feedbackPromptOn(ctx.io, ctx.config) || !canAsk(ctx) || !target.id) return
   try {
     const rating = ratingFromAnswer(await ctx.io.prompt('Was this useful? [y/n, Enter to skip] '))
     if (!rating) return
     const comment = rating === 'down' ? (await ctx.io.prompt('What went wrong? (Enter to skip) ')).trim() : ''
-    await postRating(ctx, credential, { id: target.id, surface: target.surface, rating, ...(comment ? { comment: comment.slice(0, MAX_RATING_COMMENT_CHARS) } : {}) })
+    await postRating(ctx, credential, { id: target.id, surface: target.surface, queryId: target.queryId, rating, ...(comment ? { comment: comment.slice(0, MAX_RATING_COMMENT_CHARS) } : {}) })
     ctx.io.stderr('Thanks, saved.\n')
   } catch (err) {
     if (err instanceof PromptCancelled) return

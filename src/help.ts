@@ -504,9 +504,9 @@ or the question. --email-ok says they may email you about it (--no-email-ok
 says they may not). Until the server accepts a browser sign-in, a rating needs
 an API key. The surfaces are optimize, search, research, grade, lead_list and
 other. It does not mix with --evidence, --outcome or --sent-text: run the
-command once for each. To be asked "Was this useful?" after each optimize or
-search result at a terminal, set feedbackPrompt to true in config.json, or
-AMDAHL_FEEDBACK_PROMPT=1.
+command once for each. To be asked "Was this useful?" after each optimize,
+search or research result at a terminal, set feedbackPrompt to true in
+config.json, or AMDAHL_FEEDBACK_PROMPT=1.
 ${GLOBAL}`,
 
   sent: `Usage: amdahl sent <run-id> --provider <provider> --channel <channel>

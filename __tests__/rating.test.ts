@@ -11,6 +11,8 @@ import { cli, fakeIo, type FakeIo } from './helpers/fake-io'
 import { API_KEY, KNOWN_RUN, SEARCH_QUERY, startMockServer, type MockServer } from './helpers/mock-server'
 
 const RESEARCH_ID = '44444444-4444-4444-8444-444444444444'
+const ROUTED_RESEARCH = '66666666-6666-4666-8666-666666666666'
+const ROUTED_QUERY = '77777777-7777-4777-8777-777777777777'
 let server: MockServer | null = null
 afterEach(async () => {
   await server?.close()
@@ -148,6 +150,52 @@ describe('the "Was this useful?" line', () => {
     io.answers.push('y')
     expect((await cli(io, 'search', 'pricing')).code).toBe(0)
     expect(ratings()).toEqual([expect.objectContaining({ surface: 'search', subject_id: SEARCH_QUERY, rating: 'up' })])
+  })
+
+  it('asks after a finished --research answer and rates it by the research id', async () => {
+    const io = await terminal({ AMDAHL_FEEDBACK_PROMPT: '1' })
+    io.answers.push('n', 'Missed the pricing calls.')
+    const r = await cli(io, 'search', 'why do we lose deals', '--research')
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('Deals with a pricing objection closed less often')
+    expect(io.prompts).toEqual(['Was this useful? [y/n, Enter to skip] ', 'What went wrong? (Enter to skip) '])
+    expect(ratings()).toEqual([
+      {
+        answer_id: ROUTED_RESEARCH,
+        subject_id: ROUTED_RESEARCH,
+        research_id: ROUTED_RESEARCH,
+        surface: 'research',
+        rating: 'down',
+        comment: 'Missed the pricing calls.',
+        client: 'cli',
+        client_version: VERSION,
+      },
+    ])
+    expect(r.stderr).toContain('Thanks, saved.')
+  })
+
+  it('a research job the server routed to carries the query id of the search that started it, so the rating links to its run', async () => {
+    server = await startMockServer({ routedResearch: { route: 'research', reason: 'counts', signals: [] } })
+    const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: API_KEY, AMDAHL_FEEDBACK_PROMPT: '1' })
+    io.stdoutIsTTY = true
+    io.answers.push('y')
+    expect((await cli(io, 'search', 'how many deals closed last quarter')).code).toBe(0)
+    expect(io.prompts).toEqual(['Was this useful? [y/n, Enter to skip] '])
+    expect(ratings()).toEqual([expect.objectContaining({ surface: 'research', subject_id: ROUTED_RESEARCH, research_id: ROUTED_RESEARCH, search_query_id: ROUTED_QUERY, rating: 'up' })])
+  })
+
+  it('asks after search --research-id reads a finished job, and never with --json', async () => {
+    const io = await terminal({ AMDAHL_FEEDBACK_PROMPT: '1' })
+    io.answers.push('y')
+    expect((await cli(io, 'search', '--research-id', RESEARCH_ID)).code).toBe(0)
+    expect(ratings()).toEqual([expect.objectContaining({ surface: 'research', subject_id: RESEARCH_ID, research_id: RESEARCH_ID, rating: 'up' })])
+    expect(ratings()[0]).not.toHaveProperty('search_query_id')
+
+    io.prompts.length = 0
+    io.answers.push('y')
+    expect((await cli(io, 'search', 'why do we lose deals', '--research', '--json')).code).toBe(0)
+    expect(io.prompts).toEqual([])
+    expect(ratings()).toHaveLength(1)
   })
 
   it('Ctrl+C at the question after a finished optimize does not change the exit code', async () => {

@@ -38,7 +38,7 @@ export interface Config {
    */
   feedbackLink?: boolean
   /**
-   * Ask "Was this useful?" after an optimize or search result at a terminal, and send the answer as
+   * Ask "Was this useful?" after an optimize, search or research result at a terminal, and send the answer as
    * a rating. Absent means off. `AMDAHL_FEEDBACK_PROMPT` overrides it (see {@link feedbackPromptOn}).
    */
   feedbackPrompt?: boolean

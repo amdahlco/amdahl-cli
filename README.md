@@ -875,7 +875,7 @@ they may not. It does not mix with `--evidence`, `--outcome`
 or `--sent-text`, which say what happened to a message: run the command once
 for each.
 
-To be asked "Was this useful?" after each optimize or search result at a
+To be asked "Was this useful?" after each optimize, search or research result at a
 terminal, set `"feedbackPrompt": true` in `config.json`, or
 `AMDAHL_FEEDBACK_PROMPT=1` (`0` turns it off). It is off by default, asks nothing with `--json`, in CI, in an agent or
 with `AMDAHL_NO_PROMPT=1`, and Enter skips it. A no asks what went wrong.

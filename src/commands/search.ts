@@ -309,7 +309,7 @@ async function readResearch(ctx: Ctx, args: string[]): Promise<number> {
     }
     throw err
   }
-  return printResearch(ctx, {}, job)
+  return printResearch(ctx, credential, {}, job)
 }
 
 /** The recipe flags a command line gave, by fill-in key. */
@@ -389,9 +389,9 @@ async function showAnswer(ctx: Ctx, credential: Credential, body: Record<string,
       }
       throw err
     }
-    return printResearch(ctx, result, job)
+    return printResearch(ctx, credential, result, job)
   }
-  if (handoff && field(handoff.status)) return printResearch(ctx, result, handoff)
+  if (handoff && field(handoff.status)) return printResearch(ctx, credential, result, handoff)
 
   const rows = rowsOf(result)
   const answered = record(result.answer)?.status === 'answered'
@@ -448,8 +448,8 @@ export function setupLines(message: string): string[] {
   return /\bconnect/i.test(message) ? wrap(message) : [...wrap(message), connectLine()]
 }
 
-/** Print a settled (or still running) research job; the exit code says how it ended. */
-function printResearch(ctx: Ctx, search: Record<string, unknown>, job: Record<string, unknown>): number {
+/** Print a settled (or still running) research job; the exit code says how it ended. A finished one may ask "Was this useful?". */
+async function printResearch(ctx: Ctx, credential: Credential, search: Record<string, unknown>, job: Record<string, unknown>): Promise<number> {
   const { out } = ctx
   const status = field(job.status)
   const id = field(job.research_id)
@@ -459,6 +459,7 @@ function printResearch(ctx: Ctx, search: Record<string, unknown>, job: Record<st
   }
   if (status === 'complete') {
     out.result({}, researchLines(job).join('\n'))
+    await askRating(ctx, credential, { id, surface: 'research', queryId: field(search.query_id) })
     return EXIT.ok
   }
   if (status === 'running') {
