@@ -205,7 +205,9 @@ export class AmdahlApiError extends Error {
     /** Machine-readable code from the response body, when it sent one. */
     public readonly errorCode?: string,
     /** Where the credential that was refused came from (`flag`, `env:AMDAHL_KEY`, `profile` ...), when the client knows. */
-    public readonly credentialSource?: string
+    public readonly credentialSource?: string,
+    /** Whole seconds from the Retry-After header, when the response sent one. */
+    public readonly retryAfterSeconds?: number
   ) {
     super(message)
     this.name = 'AmdahlApiError'
@@ -339,7 +341,9 @@ export function createAmdahlClient(config: AmdahlClientConfig) {
     if (!response.ok) {
       const errorBody = await response.text().catch(() => '')
       const { message, code } = parseErrorBody(errorBody, response.status)
-      throw new AmdahlApiError(message, response.status, path, errorBody, code, source)
+      const header = response.headers.get('retry-after')
+      const wait = header ? Number(header) : NaN
+      throw new AmdahlApiError(message, response.status, path, errorBody, code, source, wait >= 0 ? wait : undefined)
     }
 
     const json = (await response.json()) as unknown

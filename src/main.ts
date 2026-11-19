@@ -18,6 +18,7 @@ import { prompt } from './commands/prompt'
 import { recipes } from './commands/recipes'
 import { run, runs } from './commands/runs'
 import { search } from './commands/search'
+import { sequence } from './commands/sequence'
 import { sequencersCampaigns, sequencersPush } from './commands/sequencers'
 import { noSetupLine, setup, setupMode } from './commands/setup'
 import { skillsAdd } from './commands/skills'
@@ -39,6 +40,7 @@ const COMMANDS: Record<string, Handler> = {
   status: (ctx) => status(ctx),
   optimize,
   grade,
+  sequence,
   prompt,
   runs: (ctx) => runs(ctx),
   run,

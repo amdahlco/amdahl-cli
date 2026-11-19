@@ -38,6 +38,8 @@ export class CliError extends Error {
   readonly detail?: string
   /** More fields for `--json` only, printed beside `ok` and `error`. */
   readonly data?: Record<string, unknown>
+  /** Seconds the server asked to wait before the same request is tried again (`retry_after_seconds` or Retry-After). */
+  retryAfterSeconds?: number
 
   constructor(code: string, message: string, exit: ExitCode, hint?: string, detail?: string, data?: Record<string, unknown>) {
     super(message)

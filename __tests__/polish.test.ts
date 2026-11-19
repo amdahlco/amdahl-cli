@@ -266,7 +266,7 @@ describe('sent: providers and channels', () => {
   it("lists the server's providers in --help and in the refusal of one that is not there (nosuchtool is not)", async () => {
     // The CLI list is the server's list (messages.report_send), in order, with the four 0.5 added.
     expect(SEND_PROVIDERS).toEqual([...SERVER_PROVIDERS])
-    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker']) expect(SEND_PROVIDERS).toContain(added)
+    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker', 'amplemarket']) expect(SEND_PROVIDERS).toContain(added)
     const io = await signedIn()
     const before = server!.log.length
     const r = await cli(io, ...base('nosuchtool', 'email'))
@@ -277,7 +277,7 @@ describe('sent: providers and channels', () => {
     expect(server!.log.length).toBe(before)
     // `other` works, and so does each provider the server added.
     expect((await cli(io, ...base('other', 'email'))).code).toBe(0)
-    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker']) {
+    for (const added of ['smartlead', 'reply_io', 'lgm', 'woodpecker', 'amplemarket']) {
       expect((await cli(io, ...base(added, 'email'))).code).toBe(0)
       expect(sentBody('/api/platform/v1/messages/report_send').items[0]).toMatchObject({ provider: added })
     }

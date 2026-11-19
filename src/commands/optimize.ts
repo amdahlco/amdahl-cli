@@ -6,7 +6,10 @@
 // unreachable or unconfigured) is not a rewrite: it prints the reason and the
 // command exits 1. Without `--json`, the message goes to stdout and the
 // summary and up to three lines on what Amdahl did go to stderr, then the run
-// id. A message that still fails a hard rule (`incomplete`, `failed_rules`)
+// id. When the result carries `changes`, a "What Amdahl changed" block (see
+// changes.ts) follows the message and replaces the line on rewritten and cut
+// sentences that it repeats. The line on removed claims stays: a removed claim
+// may have no row. A message that still fails a hard rule (`incomplete`, `failed_rules`)
 // has a warning line on stderr just before it, naming the rules. A feedback link to the run's internal page follows only for Amdahl staff
 // who turn it on (`feedbackLink` in the config, or AMDAHL_FEEDBACK_LINK=1).
 //
@@ -23,7 +26,9 @@
 // no request for it and print no line.
 
 import { amdahlCommand } from '../command-name'
+import { changeLines } from '../changes'
 import { feedbackLinkOn } from '../config'
+import { askRating } from '../rating'
 import { apiClient, resolveCredential, toCliError, str, type Credential, type Ctx } from '../context'
 import { CliError, EXIT, usageError } from '../errors'
 import { readTextFile } from '../files'
@@ -74,14 +79,20 @@ export function readContext(path: string): Record<string, unknown> {
   return parsed as Record<string, unknown>
 }
 
-/** Reject after `ms`; the request itself is abandoned. */
-function withTimeout<T>(promise: Promise<T>, ms: number, file: string): Promise<T> {
+/** The request timeout: {@link OPTIMIZE_TIMEOUT_MS}, or AMDAHL_OPTIMIZE_TIMEOUT_MS (for tests). */
+function timeoutMs(ctx: Ctx): number {
+  const n = Number(ctx.io.env.AMDAHL_OPTIMIZE_TIMEOUT_MS)
+  return Number.isFinite(n) && n > 0 ? n : OPTIMIZE_TIMEOUT_MS
+}
+
+/** Reject after `ms`, and abort the request through `controller`, so it does not run on after the timeout. */
+function withTimeout<T>(promise: Promise<T>, ms: number, file: string, controller: AbortController): Promise<T> {
   let timer: NodeJS.Timeout | undefined
   const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () => reject(new CliError('timeout', `Optimizing ${file} timed out after ${ms / 1000} s.`, EXIT.network)),
-      ms
-    )
+    timer = setTimeout(() => {
+      reject(new CliError('timeout', `Optimizing ${file} timed out after ${ms / 1000} s.`, EXIT.network))
+      controller.abort()
+    }, ms)
   })
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
@@ -191,7 +202,7 @@ function and(parts: string[]): string {
  * what Amdahl did first and the flags last. Empty when nothing says anything
  * worth reading.
  */
-export function whatAmdahlDid(result: Record<string, unknown>): string[] {
+export function whatAmdahlDid(result: Record<string, unknown>, withChanges = false): string[] {
   // A kept draft is not the version the steps describe.
   const steps = result.unchanged === true ? { did: '', flagged: [] } : readSteps(list(result.steps) ?? [])
   const flagged = [...steps.flagged]
@@ -233,7 +244,7 @@ export function whatAmdahlDid(result: Record<string, unknown>): string[] {
     { rank: 5, line: checked },
     { rank: 3, line: removed },
     { rank: 6, line: usedLine },
-    { rank: 7, line: steps.did },
+    { rank: 7, line: withChanges ? '' : steps.did },
     { rank: 4, line: leftOut },
     { rank: 1, line: flagged.length ? `Flagged ${and(flagged)}; check before sending.` : '' },
   ].filter((l) => l.line && l.line !== '.')
@@ -332,14 +343,17 @@ export function requestOptions(ctx: Ctx): Record<string, unknown> {
 
 /** One optimize request, with the timeout, any failure as a CliError. */
 export async function optimizeOne(ctx: Ctx, credential: Credential, message: string, base: Record<string, unknown>, file: string): Promise<Record<string, unknown>> {
+  const controller = new AbortController()
   try {
     return await withTimeout(
       apiClient(ctx, credential).request<Record<string, unknown>>('/api/platform/v1/messages/optimize', {
         method: 'POST',
         body: { message, ...base },
+        signal: controller.signal,
       }),
-      OPTIMIZE_TIMEOUT_MS,
-      file
+      timeoutMs(ctx),
+      file,
+      controller
     )
   } catch (err) {
     throw toCliError(err)
@@ -349,15 +363,15 @@ export async function optimizeOne(ctx: Ctx, credential: Credential, message: str
 /**
  * The credential for a pasted run. With no sign-in (or an expired one), signs
  * in through the browser first, so nobody pastes a draft only to hear they
- * are not signed in.
+ * are not signed in. `then` is what the command asks for next, in its own words.
  */
-export async function credentialOrSignIn(ctx: Ctx): Promise<Credential> {
+export async function credentialOrSignIn(ctx: Ctx, then = 'paste your message'): Promise<Credential> {
   try {
     return await resolveCredential(ctx)
   } catch (err) {
     if (!(err instanceof CliError && err.exit === EXIT.unauthenticated)) throw err
   }
-  ctx.out.info(`Sign in first, then paste your message.\n${NEW_USER}`)
+  ctx.out.info(`Sign in first, then ${then}.\n${NEW_USER}`)
   const signedIn = await browserSignIn(ctx)
   ctx.out.info(`✓ Signed in · ${printable(signedIn.workspace.name)}`)
   return resolveCredential(ctx)
@@ -396,9 +410,11 @@ export async function optimizePasted(ctx: Ctx): Promise<number> {
   const incomplete = incompleteLine(result)
   if (incomplete) out.info(incomplete)
   out.result({}, String(result.message ?? ''))
-  const did = whatAmdahlDid(result)
+  const changes = result.unchanged === true ? [] : changeLines(result, ctx.io.columns() ?? undefined, ctx.flags.verbose === true)
+  const did = [...changes, ...whatAmdahlDid(result, changes.length > 0)]
   const connect = tipsOn(ctx) && (saysNoData(result) || (await noData)) ? [noDataLine()] : []
   out.info([...did, ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx)), ...connect, nextTimeLine(ctx)].join('\n'))
+  await askRating(ctx, credential, { id: text(result.run_id), surface: 'optimize' })
   return EXIT.ok
 }
 
@@ -466,8 +482,10 @@ export async function optimize(ctx: Ctx, args: string[]): Promise<number> {
       const incomplete = incompleteLine(result)
       if (incomplete) out.info(incomplete)
       out.result({}, String(result.message ?? ''))
-      const lines = [...whatAmdahlDid(result), ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx))]
+      const changes = result.unchanged === true ? [] : changeLines(result, ctx.io.columns() ?? undefined, ctx.flags.verbose === true)
+      const lines = [...changes, ...whatAmdahlDid(result, changes.length > 0), ...feedbackLines(ctx, result), ...sentLines(result.run_id, undefined, canAsk(ctx))]
       if (lines.length) out.info(lines.join('\n'))
+      if (inputs.length === 1) await askRating(ctx, credential, { id: text(result.run_id), surface: 'optimize' })
     }
   }
   if (out.json) out.result(results.length === 1 ? (results[0] as unknown as Record<string, unknown>) : (results as unknown as Record<string, unknown>[]))

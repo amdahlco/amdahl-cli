@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { batchProblems, feedbackProblem, optimizeProblems, promptProblems, reportSendProblem, reportSendRejection, searchProblem } from './strict'
+import { batchProblems, feedbackProblem, optimizeProblems, promptProblems, reportSendProblem, ratingProblem, reportSendRejection, searchProblem } from './strict'
 
 /** The recipe library `GET /search/suggestions` answers with (2026-11-13): 14 recipes, each with its search question and fill-ins. */
 export const SUGGESTED_LIBRARY: Record<string, unknown>[] = JSON.parse(readFileSync(new URL('../fixtures/suggestions-library.json', import.meta.url), 'utf8'))
@@ -19,6 +19,8 @@ export const API_KEY = `amdhl_${'a'.repeat(48)}`
 export const READONLY_KEY = `amdhl_${'b'.repeat(48)}`
 /** An optimize run this workspace has (made an hour ago): `feedback` and `sent` find it. */
 export const KNOWN_RUN = '88888888-8888-4888-8888-888888888888'
+/** The `query_id` the mock gives a plain search answer. */
+export const SEARCH_QUERY = '33333333-3333-4333-8333-333333333333'
 /** A well-formed run id this workspace does not have. */
 export const UNKNOWN_RUN = '00000000-0000-4000-8000-000000000000'
 /** The run id the mock gives a grade. */
@@ -35,6 +37,29 @@ export const KNOWN_RUN_BODY = {
   created_at: '2026-11-12T08:00:00Z',
   omitted: [{ what: 'a second proof point', why: 'The context held one.' }],
 }
+/** The `changes` and `added_claims` a server that computes them answers with (MockOptions.whatChanged). */
+export const WHAT_CHANGED = {
+  changes: [
+    { before: 'We are the leading onboarding platform.', after: null, why: 'Nothing backs it.', why_cut: 'nothing in your calls backs it' },
+    { before: null, after: 'Helix cut provisioning tickets by 70% in one quarter.', why: 'Proof.', why_added: 'it gives proof from a team like theirs' },
+    { before: 'Quick note about pricing.', after: 'Quick note on pricing for Helix.', why: 'Names the company.' },
+    { before: 'Can we talk?', after: 'Worth 15 minutes?', why: 'Asks for a time.', why_cut: 'it did not say how long', why_added: 'it asks for 15 minutes' },
+  ],
+  added_claims: [
+    {
+      sentence: 'Helix cut provisioning tickets by 70% in one quarter.',
+      sources: [
+        { id: 's1', tag: 'call', text: 'We cut provisioning tickets by 70% after we moved onto the new platform and trained every support lead on it in the first quarter' },
+        { id: 's2', tag: null, text: 'Second source.' },
+      ],
+    },
+  ],
+}
+/** The `changes` of an improved prompt run (MockOptions.whatChanged). */
+export const PROMPT_CHANGES = [
+  { before: 'Write an email.', after: 'Write a first-touch email to a Head of Platform.', why_cut: 'it named no reader', why_added: 'it says who reads it' },
+  { before: null, after: 'Then ask for 15 minutes.', why_added: 'it ends on one ask' },
+]
 /** The run id of item `index` of any batch the mock ran. */
 export const batchRun = (index: number) => `99999999-9999-4999-8999-${String(index).padStart(12, '0')}`
 
@@ -46,6 +71,9 @@ export interface LoggedRequest {
   headers: Record<string, string | string[] | undefined>
   body: string
 }
+
+/** The most bytes of JSON the server's parser takes. */
+export const BODY_LIMIT = 1024 * 1024
 
 export interface MockOptions {
   /**
@@ -72,6 +100,10 @@ export interface MockOptions {
   decision?: 'approved' | 'denied' | 'expired'
   /** The optimize result body (inside `data`). */
   optimizeResult?: Record<string, unknown>
+  /** A refusal for an optimize request, by its call number from 0: the status, the error body and any headers. */
+  optimizeRefusal?: (index: number) => { status: number; body: unknown; headers?: Record<string, string> } | undefined
+  /** The optimize result body for each request, from the request's own body and its place (from 0): a message made from what was sent. Wins over `optimizeResult`. */
+  optimizeAnswer?: (body: Record<string, unknown>, index: number) => Record<string, unknown>
   /** Access token lifetime in seconds. */
   expiresIn?: number
   /** Answer every /oauth/revoke with a 503. */
@@ -82,10 +114,20 @@ export interface MockOptions {
   noConnections?: boolean
   /** Answer setup/status with an optimize blocker (and the quota used up for quota_exhausted). */
   blocker?: 'missing_scope' | 'role_too_low' | 'quota_exhausted'
+  /** The scopes /me/context answers and a research request needs `conversations:write` from (default: the usual set, and an API key can research). */
+  scopes?: string[]
+  /** Answer /me/context with a 500. */
+  failMeContext?: boolean
+  /** Refuse every research request with the server's "ran search instead" note, though /me/context lists `conversations:write`. */
+  researchRefused?: boolean
   /** The search/query result body (inside `data`); the default is two rows and a cited answer. */
   searchResult?: Record<string, unknown>
   /** Research reads that answer `running` before the job completes. */
   researchPolls?: number
+  /** Each research read takes this long to answer (a long-poll that holds). */
+  researchDelayMs?: number
+  /** The optimize request is never answered; `onClose` runs when the client drops it. */
+  optimizeHang?: { onClose: () => void }
   /** The research answer's text (default: one sentence). */
   researchText?: string
   /** The research read is refused for want of `conversations:read`, though the key could start the job. */
@@ -106,7 +148,11 @@ export interface MockOptions {
    */
   /** `GET /search/suggestions` never answers (a hanging server). */
   suggestionsHang?: boolean
-  suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown> }
+  suggestions?: { for_you?: Record<string, unknown>[]; library?: Record<string, unknown>[]; generated_at?: string; setup_needed?: Record<string, unknown>; hidden_recipe_ids?: string[] }
+  /** The first n suggestions reads answer `pending: true` with an empty For you (the server still working it out). */
+  suggestionsPendingReads?: number
+  /** A key's search without `route: "research"` is handed to research by the server: this is its `routing`, and the answer carries a `query_id`. */
+  routedResearch?: Record<string, unknown>
   /** setup/status's `free_usage` (a self-serve workspace on its free credit). */
   freeUsage?: Record<string, unknown>
   /** optimize_prompt refuses with this message (a 422), as the server does with no recipients on an empty workspace. */
@@ -134,8 +180,22 @@ export interface MockOptions {
   batchMessage?: string
   /** The one-line summary every batch item comes back with (default: `Tighter opener.`). */
   batchSummary?: string
+  /** The server computes `changes` and `added_claims`: optimize, batch items, the known run and an improved prompt run answer with {@link WHAT_CHANGED} and {@link PROMPT_CHANGES}. Unset: they are absent, as on an older server. */
+  whatChanged?: boolean
   /** A whole item's status and result by its index, when the default message does not do. */
   batchResults?: (item: Record<string, unknown>, index: number) => { status: string; result: Record<string, unknown> | null } | undefined
+  /** Items an `only_finished` read adds each time (the rest are still running). Unset: all finish together, after `batchPolls` reads. */
+  batchFinishPerRead?: number
+  /** The nth batch submitted (from 1) is refused, as the server refuses one over quota or scope. */
+  batchRefuse?: Record<number, { status: number; code: string; message: string; details?: Record<string, unknown>; retryAfter?: number }>
+  /** The nth batch submitted (from 1) is queued, and then the connection is cut with no answer, as a dropped network does. A resend with the same `idempotency_key` gets the first batch back, `replayed: true`. */
+  batchDrop?: number[]
+  /** Called as the nth batch is submitted (from 1), before the answer, with the request's JSON body. */
+  onBatch?: (position: number, body: string) => void
+  /** Every read of a batch is answered with this error. */
+  batchReadRefuse?: { status: number; code: string; message: string }
+  /** With `batchReadRefuse`: refuse the reads of only these batches, by the order they were sent from 1. */
+  batchReadRefuseOnly?: number[]
   /** Connected sequencers, listed after the connections; their campaigns are SEQUENCER_CAMPAIGNS. */
   sequencers?: { id: string; type: string; name: string }[]
   /** After this many pushes, a push answers 409 campaign_active, as when someone starts the campaign mid-command. */
@@ -174,10 +234,13 @@ const b64url = (buf: Buffer) => buf.toString('base64url')
 
 export async function startMockServer(options: MockOptions = {}): Promise<MockServer> {
   const log: LoggedRequest[] = []
+  let optimizeCalls = 0
   const issued = { access: [] as string[], refresh: [] as string[] }
   const revoked: string[] = []
   const keyRequests = new Map<string, Record<string, unknown>>()
-  const batches = new Map<string, { items: Record<string, unknown>[]; polls: number }>()
+  const batches = new Map<string, { items: Record<string, unknown>[]; polls: number; finished: number }>()
+  let batchPosts = 0
+  const byKey = new Map<string, string>()
   // Run ids this workspace has, and when each was made.
   const runs = new Map<string, number>([[KNOWN_RUN, Date.now() - 3_600_000]])
   // What a run was sent and what came back, for the runs the mock made.
@@ -186,6 +249,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
   // Sends already reported, by run and send key.
   const reports = new Map<string, number>()
   let researchReads = 0
+  let suggestionReads = 0
   let workspaceCreated = false
   let refusals = 0
   const codes = new Map<string, { challenge: string; redirectUri: string }>()
@@ -237,6 +301,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       const url = new URL(req.url ?? '/', base)
       const path = url.pathname
       log.push({ method: req.method ?? 'GET', path, query: url.search, headers: req.headers, body })
+      // The server's JSON parser takes 1 MB at most, and answers an over-size body with this 413.
+      if (Buffer.byteLength(body) > BODY_LIMIT) return json(res, 413, { error: 'payload_too_large', message: 'Request body too large. The maximum upload size is 1MB.', limit_bytes: BODY_LIMIT })
       const form = () => {
         if (!String(req.headers['content-type']).startsWith('application/x-www-form-urlencoded')) return null
         return new URLSearchParams(body)
@@ -349,10 +415,11 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       if (path === '/api/platform/v1/me/context') {
+        if (options.failMeContext) return err(res, 500, 'internal_error')
         return json(res, 200, {
           user_id: USER,
           business_id: BIZ,
-          scopes: ['data:read', 'connections:read', 'messages:execute', 'sequencers:push'],
+          scopes: options.scopes ?? ['data:read', 'connections:read', 'messages:execute', 'sequencers:push'],
           auth_method: kind,
           email: 'dev@example.com',
           workspace: { id: BIZ, name: options.workspaceName ?? 'Acme', slug: 'acme' },
@@ -385,8 +452,22 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         const input = JSON.parse(body) as { query?: string; route?: string }
         const problem = searchProblem(input, options.suggestions ? (options.suggestions.library ?? SUGGESTED_LIBRARY).map((r) => String(r.id)) : null)
         if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
+        const canResearch = kind === 'api_key' && !options.researchRefused && (options.scopes ? options.scopes.includes('conversations:write') : true)
+        if (options.routedResearch && input.route !== 'research' && canResearch) {
+          return json(res, 200, {
+            data: {
+              success: true,
+              mode_ran: 'research',
+              results: [],
+              timing: { total_ms: 5 },
+              query_id: '77777777-7777-4777-8777-777777777777',
+              routing: options.routedResearch,
+              research: { research_id: '66666666-6666-4666-8666-666666666666', chat_id: 'chat1', status: 'running', poll: 'Poll GET /research/:id' },
+            },
+          })
+        }
         if (input.route === 'research') {
-          if (kind === 'api_key') {
+          if (canResearch) {
             return json(res, 200, {
               data: {
                 success: true,
@@ -399,7 +480,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             })
           }
           return json(res, 200, {
-            data: options.searchResult ?? {
+            data: (options.researchRefused && options.searchResult ? { ...options.searchResult, notes: ['Starting a research job for this ask needs a credential that can start one (conversations:write); ran search instead.'] } : null) ?? options.searchResult ?? {
               success: true,
               mode_ran: 'fuzzy',
               results: [{ id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' }],
@@ -411,6 +492,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         return json(res, 200, {
           data: options.searchResult ?? {
             success: true,
+            query_id: SEARCH_QUERY,
             mode_ran: 'semantic',
             results: [
               { id: 'r1', title: 'Discovery call', speaker: 'Dana', occurred_at: '2026-10-01T10:00:00Z', text: 'Pricing came up twice.' },
@@ -433,7 +515,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         if (options.researchUnknown) return err(res, 404, 'not_found', `research://${research[1]} not found`)
         researchReads++
         const done = researchReads > (options.researchPolls ?? 1)
-        return json(res, 200, {
+        const reply = () => json(res, 200, {
           data: {
             research_id: research[1],
             chat_id: 'chat1',
@@ -445,6 +527,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             error: null,
           },
         })
+        if (options.researchDelayMs) return void setTimeout(reply, options.researchDelayMs)
+        return reply()
       }
 
       if (path === '/api/platform/v1/connections' && req.method === 'GET') {
@@ -497,13 +581,24 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       }
 
       if (path === '/api/platform/v1/messages/optimize/batch' && req.method === 'POST') {
-        const input = JSON.parse(body) as { items?: Record<string, unknown>[] }
+        const input = JSON.parse(body) as { items?: Record<string, unknown>[]; idempotency_key?: string }
+        const position = ++batchPosts
+        options.onBatch?.(position, body)
+        const refuse = options.batchRefuse?.[position]
+        if (refuse) {
+          const headers: Record<string, string | number> = { 'Content-Type': 'application/json', ...(refuse.retryAfter === undefined ? {} : { 'Retry-After': refuse.retryAfter }) }
+          return void res.writeHead(refuse.status, headers).end(JSON.stringify({ error: { code: refuse.code, message: refuse.message, ...(refuse.details ? { details: refuse.details } : {}) } }))
+        }
+        const first = input.idempotency_key ? byKey.get(input.idempotency_key) : undefined
+        if (first) return json(res, 202, { data: { ok: true, replayed: true, ...batchSummary(first, batches.get(first)?.items ?? [], false) } })
         const problems = batchProblems(input)
         if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
         const items = input.items ?? []
         const id = `77777777-7777-4777-8777-${String(++n).padStart(12, '0')}`
-        batches.set(id, { items, polls: 0 })
+        batches.set(id, { items, polls: 0, finished: 0 })
+        if (input.idempotency_key) byKey.set(input.idempotency_key, id)
         items.forEach((_, index) => runs.set(batchRun(index), Date.now()))
+        if (options.batchDrop?.includes(position)) return void req.socket.destroy()
         return json(res, 202, { data: { ok: true, replayed: false, ...batchSummary(id, items, false) } })
       }
 
@@ -512,12 +607,41 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         // A malformed id and an unknown id are one not-found, as on the real route.
         const entry = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(batch[1] ?? '') ? batches.get(batch[1] ?? '') : undefined
         if (!entry) return err(res, 404, 'not_found')
+        if (options.batchReadRefuse && (!options.batchReadRefuseOnly || options.batchReadRefuseOnly.includes(Number((batch[1] ?? '').slice(-12))))) return err(res, options.batchReadRefuse.status, options.batchReadRefuse.code, options.batchReadRefuse.message)
         entry.polls++
         const reads = options.batchPolls ?? 1
-        const done = entry.polls > reads
+        const finishedMode = ['true', '1'].includes(url.searchParams.get('only_finished') ?? '') || url.searchParams.has('finished_since')
+        const stagger = options.batchFinishPerRead
+        if (finishedMode && stagger) entry.finished = Math.min(entry.items.length, entry.finished + stagger)
+        else if (entry.polls > reads) entry.finished = entry.items.length
+        const done = entry.finished === entry.items.length && entry.polls > reads - (stagger ? reads : 0)
+        const resultOf = (item: Record<string, unknown>, index: number) =>
+          options.batchResults?.(item, index)
+            ? options.batchResults(item, index)?.result
+            : options.batchFailures?.includes(index)
+              ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
+              : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: options.batchSummary ?? 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false, ...(options.whatChanged ? WHAT_CHANGED : {}) }
+        const statusOf = (index: number, item: Record<string, unknown>) => options.batchResults?.(item, index)?.status ?? (options.batchFailures?.includes(index) ? 'failed' : 'done')
         // The last few reads before it completes see one item running and none done, the estimate falling.
         const running = !done && entry.polls > reads - (options.batchRunningPolls ?? 0) ? { eta: Math.max(60, 300 - entry.polls * 60) } : undefined
         const limit = Number(url.searchParams.get('limit') ?? 50)
+        if (finishedMode) {
+          const since = Number(/^f\.(\d+)$/.exec(url.searchParams.get('finished_since') ?? '')?.[1] ?? 0)
+          const fresh = entry.items.map((item, index) => ({ item, index })).filter((x) => x.index >= since && x.index < entry.finished)
+          const page = fresh.slice(0, limit)
+          const seen = page.length ? (page[page.length - 1]?.index ?? 0) + 1 : since
+          const failedNow = entry.items.filter((item, index) => index < entry.finished && statusOf(index, item) === 'failed').length
+          return json(res, 200, {
+            data: {
+              ...batchSummary(batch[1] ?? '', entry.items, done, running),
+              counts: { total: entry.items.length, queued: entry.items.length - entry.finished, running: 0, done: entry.finished - failedNow, failed: failedNow },
+              items: page.map(({ item, index }) => ({ index, item_id: (item.item_id as string | undefined) ?? null, status: statusOf(index, item), result: resultOf(item, index) })),
+              next_cursor: null,
+              finished_cursor: `f.${seen}`,
+              finished_remaining: fresh.length - page.length,
+            },
+          })
+        }
         const after = Number(url.searchParams.get('cursor') ?? -1)
         const page = entry.items.map((item, index) => ({ item, index })).filter((x) => x.index > after).slice(0, limit)
         const last = page[page.length - 1]
@@ -527,14 +651,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
             items: page.map(({ item, index }) => ({
               index,
               item_id: (item.item_id as string | undefined) ?? null,
-              status: done ? (options.batchResults?.(item, index)?.status ?? (options.batchFailures?.includes(index) ? 'failed' : 'done')) : 'queued',
-              result: !done
-                ? null
-                : options.batchResults?.(item, index)
-                  ? options.batchResults(item, index)?.result
-                  : options.batchFailures?.includes(index)
-                  ? { ok: false, reason: 'optimizer_error', detail: 'It failed.' }
-                  : { ok: true, message: options.batchMessage ?? `better: ${String(item.message)}`, summary: options.batchSummary ?? 'Tighter opener.', what_changed: 'Wrote this message from the context you sent.', run_id: batchRun(index), unchanged: false },
+              status: done ? statusOf(index, item) : 'queued',
+              result: !done ? null : resultOf(item, index),
             })),
             next_cursor: last && last.index < entry.items.length - 1 ? String(last.index) : null,
           },
@@ -548,6 +666,14 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         if (problem) return json(res, 400, { data: { success: false, error: { code: 'invalid_argument', message: problem } } })
         if (!runs.has(feedback[1] ?? '')) return json(res, 404, { data: { success: false, error: { code: 'not_found', message: 'No optimize run with this id from you in this workspace.' } } })
         return json(res, 200, { data: { success: true, feedback_id: 'fb1', run_id: feedback[1], rubric_miss: null, outcome: input.outcome ?? null, evidence: input.evidence } })
+      }
+
+      if (path === '/api/platform/v1/feedback' && req.method === 'POST') {
+        if (kind !== 'api_key') return json(res, 403, { error: 'Feedback is sent from the console or with an API key.', code: 'credential_not_allowed' })
+        const input = JSON.parse(body) as Record<string, unknown>
+        const problem = ratingProblem(input)
+        if (problem) return json(res, 400, { error: problem, code: 'invalid_argument' })
+        return json(res, 200, { data: { answer_id: input.answer_id, surface: input.surface, rating: input.rating, email_ok: input.email_ok === true, has_comment: typeof input.comment === 'string' && input.comment.trim() !== '' } })
       }
 
       if (path === '/api/platform/v1/messages/report_send' && req.method === 'POST') {
@@ -611,6 +737,13 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
 
       if (path === '/api/platform/v1/messages/optimize' && req.method === 'POST') {
         const input = JSON.parse(body) as { message?: string; mode?: string; evidence?: string; context?: unknown }
+        const answered = optimizeCalls++
+        if (options.optimizeHang) {
+          res.on('close', options.optimizeHang.onClose)
+          return
+        }
+        const refusal = options.optimizeRefusal?.(answered)
+        if (refusal) return res.writeHead(refusal.status, { 'Content-Type': 'application/json', ...refusal.headers }).end(JSON.stringify(refusal.body))
         const problems = optimizeProblems(input)
         if (problems.length) return json(res, 400, { error: { code: 'invalid_input', message: `Input failed schema validation: ${problems[0]}`, details: { errors: problems } } })
         if (input.mode === 'grade') {
@@ -620,7 +753,7 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
           return json(res, 200, { data: options.gradeResult ?? gradeBody(input.evidence === 'workspace') })
         }
         return json(res, 200, {
-          data: options.optimizeResult ?? { ok: true, message: `better: ${input.message}`, summary: 'Tighter opener.', unchanged: false, run_id: 'r1' },
+          data: options.optimizeAnswer?.(input as Record<string, unknown>, answered) ?? options.optimizeResult ?? { ok: true, message: `better: ${input.message}`, summary: 'Tighter opener.', unchanged: false, run_id: 'r1', ...(options.whatChanged ? WHAT_CHANGED : {}) },
         })
       }
 
@@ -644,7 +777,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
         if (!entry) return err(res, 404, 'not_found', 'No prompt run with this id from you in this workspace.')
         entry.polls++
         if (entry.polls <= (options.promptPolls ?? 1)) return json(res, 200, { data: { run_id: promptRead[1], status: 'running', phase: entry.polls === 1 ? 'writing_emails' : 'grading' } })
-        return json(res, 200, { data: { run_id: promptRead[1], status: 'complete', ...(options.promptResult ? options.promptResult(entry.mode) : promptBody(entry.mode)) } })
+        const body = options.promptResult ? options.promptResult(entry.mode) : promptBody(entry.mode)
+        return json(res, 200, { data: { run_id: promptRead[1], status: 'complete', ...body, ...(options.whatChanged && body.outcome === 'improved' ? { changes: PROMPT_CHANGES } : {}) } })
       }
 
       // messages.get_run: one past run, read by its id by the person who made it.
@@ -659,6 +793,8 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       if (path === '/api/platform/v1/search/suggestions' && req.method === 'GET') {
         if (options.suggestionsHang) return
         if (!options.suggestions) return err(res, 404, 'not_found', 'No such route.')
+        suggestionReads++
+        if (suggestionReads <= (options.suggestionsPendingReads ?? 0)) return json(res, 200, { data: { for_you: [], library: SUGGESTED_LIBRARY, generated_at: '2026-11-13T22:40:02.728Z', pending: true } })
         return json(res, 200, { data: { for_you: [], library: SUGGESTED_LIBRARY, generated_at: '2026-11-13T22:40:02.728Z', ...options.suggestions } })
       }
       if (path === '/api/platform/v1/search/overview' && req.method === 'GET') {

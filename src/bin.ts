@@ -9,6 +9,8 @@ import { runCli } from './main'
 runCli(process.argv.slice(2), realIo()).then(
   (code) => {
     process.exitCode = code
+    // A request still in flight when the person pressed Ctrl+C must not keep the process alive.
+    if (code === 130) setTimeout(() => process.exit(code), 200).unref()
   },
   (err: unknown) => {
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`)

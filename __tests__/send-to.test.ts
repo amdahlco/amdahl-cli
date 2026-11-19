@@ -114,6 +114,53 @@ describe('--for writes the console file', () => {
     expect(hubspot.stderr).not.toContain('character limit')
   })
 
+  it('amplemarket, email: writes the console file, prints the three import steps and its note', async () => {
+    const { io, list } = await withList()
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'amplemarket')
+    expect(r.code, r.stderr).toBe(1)
+    const file = join(io.cwd, 'q4-leads-amplemarket.csv')
+    expect(readFileSync(file, 'utf8')).toBe(
+      [
+        'email,first_name,last_name,company,linkedin_url,amdahl_subject,amdahl_message,notes',
+        'sam.rivera@example.com,Sam,Rivera,Northwind Traders,https://www.linkedin.com/in/sam-rivera,A note for Sam,"Hi Sam,\n\nA claim about calls.\n\nOpen to 20 minutes?","Hiring 4 AEs, call notes"',
+        'jo.okafor@example.com,Jo,Okafor,Fabrikam,,A note for Jo,"Hi Jo,\n\nA claim about calls.\n\nOpen to 20 minutes?",=1+1',
+        'lee.park@example.com,Lee,Park,Contoso,https://www.linkedin.com/in/lee-park,A note for Lee,"Hi Lee,\n\nA claim about calls.\n\nOpen to 20 minutes?",Skip',
+      ].join('\r\n')
+    )
+    expect(r.stdout).toBe(`Results: ${join(io.cwd, 'q4 leads.optimized.csv')}\nImport file for Amplemarket: ${file}\n`)
+    expect(r.stderr).toContain('3 messages ready for Amplemarket. 2 left out: 1 failed, 1 with no email.\n')
+    expect(r.stderr).toContain(
+      [
+        '  1. Import: Upload the CSV to a List, then add the leads in that List to your',
+        '     sequence.',
+        '  2. Map email to Email. Keep amdahl_subject and amdahl_message as lead fields',
+        '     with these names.',
+        '  3. Paste into your step: Subject {{amdahl_subject}}, Body {{amdahl_message}}',
+        "Amplemarket's public docs do not say how a CSV column becomes a lead field. This",
+        'file names the columns amdahl_subject and amdahl_message, so check that one lead',
+        'shows them before you start the sequence. Each field holds at most 1,024',
+        'characters.',
+      ].join('\n')
+    )
+    expect(r.stderr).not.toContain('character limit for a variable')
+  })
+
+  it('amplemarket warns at 1,024 characters, not at 2,000', async () => {
+    const long = 'x'.repeat(1100)
+    const { io, list } = await withList({ batchResults: (item, i) => results(item, i) && { status: 'done', result: { ok: true, message: `Subject: S\n\n${long}`, summary: 'Written.', run_id: `99999999-9999-4999-8999-${String(i).padStart(12, '0')}`, unchanged: false } } })
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'amplemarket')
+    expect(r.stderr).toContain("4 messages are over Amplemarket's 1,024 character limit for a variable.")
+    const lemlist = await cli(io, 'optimize', '--list', list, '--for', 'lemlist', '--channel', 'email', '--force')
+    expect(lemlist.stderr).not.toContain('character limit for a variable')
+  })
+
+  it('amplemarket refuses a LinkedIn list', async () => {
+    const { io, list } = await withList()
+    const r = await cli(io, 'optimize', '--list', list, '--for', 'amplemarket', '--channel', 'linkedin')
+    expect(r.code).toBe(2)
+    expect(r.stderr).toContain('Error: Amplemarket takes email lists only, and this one is LinkedIn.\nPick a tool for this channel, or use --for other.')
+  })
+
   it('--json adds send_to with the file and the counts, prints no steps, and still writes the file but not the results file', async () => {
     const { io, list } = await withList()
     const r = await cli(io, 'optimize', '--list', list, '--for', 'lemlist', '--channel', 'email', '--json')
@@ -464,7 +511,7 @@ describe('the file builder', () => {
   })
 
   it('has the console\'s tool ids, and the CLI takes --for', () => {
-    expect([...SEND_TO_IDS]).toEqual(['instantly', 'smartlead', 'lemlist', 'heyreach', 'reply_io', 'apollo', 'outreach', 'salesloft', 'hubspot', 'lgm', 'woodpecker', 'other'])
+    expect([...SEND_TO_IDS]).toEqual(['instantly', 'smartlead', 'lemlist', 'heyreach', 'reply_io', 'apollo', 'outreach', 'salesloft', 'hubspot', 'lgm', 'woodpecker', 'amplemarket', 'other'])
     expect(Object.keys(COMMAND_OPTIONS.optimize ?? {})).toContain('for')
     expect(planSendTo(SEND_TO_PRESETS[0]!, { path: 'x.csv', kind: 'csv', header: ['email', 'message'], items: [{ message: 'a' }] }, undefined)).toEqual({ preset: SEND_TO_PRESETS[0], channel: 'email' })
   })
@@ -483,6 +530,7 @@ describe('the file builder', () => {
       ['hubspot', {}, 'amdahl_subject', 'amdahl_message', ['email'], false, 0],
       ['lgm', {}, 'amdahl_subject', 'amdahl_message', ['linkedin'], false, 0],
       ['woodpecker', {}, 'Snippet 1', 'Snippet 2', ['email'], false, 0],
+      ['amplemarket', {}, '{{amdahl_subject}}', '{{amdahl_message}}', ['email'], false, 1024],
       ['other', {}, '{{amdahl_subject}}', '{{amdahl_message}}', ['email', 'linkedin'], false, 0],
     ])
   })

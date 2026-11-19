@@ -172,7 +172,7 @@ export function apiClient(ctx: Ctx, credential: Credential): AmdahlClient {
 }
 
 /** Pull `details` from a server error body, when it sent any. */
-function errorDetails(body: string | undefined): Record<string, unknown> {
+export function errorDetails(body: string | undefined): Record<string, unknown> {
   if (!body) return {}
   try {
     const parsed = JSON.parse(body) as { error?: { details?: unknown }; details?: unknown }
@@ -283,14 +283,16 @@ export function toCliError(err: unknown): CliError {
   if (err instanceof AmdahlApiError) {
     const exit = exitForHttp(err.statusCode, err.errorCode)
     const details = errorDetails(err.responseBody)
-    const retry = details.retry_after_seconds
+    const retry = typeof details.retry_after_seconds === 'number' ? details.retry_after_seconds : err.retryAfterSeconds
     const hint =
       exit === EXIT.unauthenticated
         ? `Run \`${amdahlCommand('login')}\`, or check AMDAHL_KEY.`
         : typeof retry === 'number'
           ? `Try again in ${retry} seconds.`
           : undefined
-    return new CliError(err.errorCode ?? `http_${err.statusCode}`, plainMessage(err) ?? err.message, exit, hint)
+    const refused = new CliError(err.errorCode ?? `http_${err.statusCode}`, plainMessage(err) ?? err.message, exit, hint)
+    if (typeof retry === 'number') refused.retryAfterSeconds = retry
+    return refused
   }
   const message = err instanceof Error ? err.message : String(err)
   if (droppedMidRequest(err)) {

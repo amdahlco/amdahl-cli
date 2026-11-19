@@ -28,9 +28,9 @@ const CONTEXT_LIMITS: Record<string, { maxItems: number; maxChars: number }> = {
 }
 
 /** The refusals of a `context` block (messageOptimizer/context.ts): unknown keys, counts and lengths. `triggers` is not a key here. */
-export function contextProblems(at: string, context: unknown): string[] {
+export function contextProblems(at: string, context: unknown, extraKeys: readonly string[] = []): string[] {
   if (!isObject(context)) return [`${at}: Expected object`]
-  const errors = unknownKeys(at, context, CONTEXT_KEYS)
+  const errors = unknownKeys(at, context, [...CONTEXT_KEYS, ...extraKeys])
   for (const [key, limit] of Object.entries(CONTEXT_LIMITS)) {
     const list = context[key]
     if (list === undefined) continue
@@ -48,6 +48,73 @@ export function contextProblems(at: string, context: unknown): string[] {
   return errors
 }
 
+// messageOptimizer/relationship.ts: priorTouchesSchema (2026-11-19).
+const PRIOR_TOUCH_CHANNELS = ['email', 'linkedin', 'call', 'meeting', 'other']
+const PRIOR_TOUCH_KEYS = ['on', 'channel', 'summary']
+
+/** The refusals of `context.prior_touches`: at most 10 strict objects of a day, an optional channel and a summary of 1 to 500 characters once trimmed. */
+function priorTouchProblems(at: string, touches: unknown): string[] {
+  if (!Array.isArray(touches)) return [`${at}: Expected array`]
+  const errors = touches.length > 10 ? [`${at}: Array must contain at most 10 element(s)`] : []
+  touches.forEach((touch, j) => {
+    const here = `${at}[${j}]`
+    if (!isObject(touch)) return void errors.push(`${here}: Expected object`)
+    errors.push(...unknownKeys(here, touch, PRIOR_TOUCH_KEYS))
+    if (typeof touch.on !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(touch.on)) errors.push(`${here}.on: must be a day, YYYY-MM-DD`)
+    if (touch.channel !== undefined && !PRIOR_TOUCH_CHANNELS.includes(String(touch.channel))) errors.push(`${here}.channel: Invalid enum value. Expected ${PRIOR_TOUCH_CHANNELS.map((c) => `'${c}'`).join(' | ')}, received '${String(touch.channel)}'`)
+    const summary = typeof touch.summary === 'string' ? touch.summary.trim() : null
+    if (summary === null) errors.push(`${here}.summary: Required`)
+    else if (summary.length < 1) errors.push(`${here}.summary: String must contain at least 1 character(s)`)
+    else if (summary.length > 500) errors.push(`${here}.summary: String must contain at most 500 character(s)`)
+  })
+  return errors
+}
+
+/** The refusals of the `context` of messages.optimize (optimizerContextSchema): the batch's keys, and `prior_touches`, `stage`, `offer`, `thread`, `triggers`. */
+export function optimizeContextProblems(context: unknown, at = '$.context'): string[] {
+  const errors = contextProblems(at, context, ['triggers', 'offer', 'thread', 'stage', 'prior_touches'])
+  if (isObject(context) && context.prior_touches !== undefined) errors.push(...priorTouchProblems(`${at}.prior_touches`, context.prior_touches))
+  return errors
+}
+
+// messageOptimizer/recipient.ts: recipientSchema (strict; attributes at most 100 string values of 1000 characters, keys of 100).
+const RECIPIENT_KEYS = ['email', 'name', 'company', 'domain', 'linkedin_url', 'attributes']
+const RECIPIENT_LIMITS: Record<string, number> = { email: 320, name: 200, company: 200, domain: 253, linkedin_url: 300 }
+
+/** The refusals of an item's `recipient`: unknown keys, string lengths and the attributes. */
+function recipientProblems(at: string, recipient: unknown): string[] {
+  if (!isObject(recipient)) return [`${at}: Expected object`]
+  const errors = unknownKeys(at, recipient, RECIPIENT_KEYS)
+  for (const [key, max] of Object.entries(RECIPIENT_LIMITS)) {
+    const value = recipient[key]
+    if (value === undefined) continue
+    if (typeof value !== 'string') errors.push(`${at}.${key}: Expected string`)
+    else if (value.length > max) errors.push(`${at}.${key}: String must contain at most ${max} character(s)`)
+  }
+  const attributes = recipient.attributes
+  if (attributes !== undefined) {
+    if (!isObject(attributes)) errors.push(`${at}.attributes: Expected object`)
+    else {
+      if (Object.keys(attributes).length > 100) errors.push(`${at}.attributes: must have at most 100 entries`)
+      for (const [key, value] of Object.entries(attributes)) {
+        if (key.length > 100) errors.push(`${at}.attributes.${key.slice(0, 20)}: key must be at most 100 characters`)
+        if (typeof value !== 'string') errors.push(`${at}.attributes.${key}: Expected string`)
+        else if (value.length > 1000) errors.push(`${at}.attributes.${key}: String must contain at most 1000 character(s)`)
+      }
+    }
+  }
+  return errors
+}
+
+/** True when `context` holds something a message can be written from (contextFirst.hasWritableContext): facts, rules, voice examples or earlier touches. */
+function writable(context: unknown): boolean {
+  if (!isObject(context)) return false
+  return ['facts', 'rules', 'voice_examples', 'prior_touches'].some((key) => {
+    const list = context[key]
+    return Array.isArray(list) && list.some((entry) => (typeof entry === 'string' ? entry.trim() : entry) !== '')
+  })
+}
+
 /** The refusals of a batch body, as paths (`$.items[3].channel: ...`), at most 20. */
 export function batchProblems(input: unknown): string[] {
   if (!isObject(input)) return ['$: Expected object']
@@ -61,7 +128,10 @@ export function batchProblems(input: unknown): string[] {
     const at = `$.items[${i}]`
     if (!isObject(item)) return void errors.push(`${at}: Expected object`)
     errors.push(...unknownKeys(at, item, BATCH_ITEM_KEYS))
-    if (typeof item.message !== 'string') errors.push(`${at}.message: Required`)
+    // An item needs a draft, or something to write from (messageOptimizer/contextFirst.missingInput; _batchInput.refuseMissingInput): facts, rules, voice examples, earlier touches or a recipient.
+    if (item.message === undefined) {
+      if (!writable(item.context) && !(isObject(item.recipient) && Object.keys(item.recipient).length > 0)) errors.push(`${at}.message: Required`)
+    } else if (typeof item.message !== 'string') errors.push(`${at}.message: Expected string`)
     else if (item.message.length > 10_000) errors.push(`${at}.message: String must contain at most 10000 character(s)`)
     if (item.item_id !== undefined) {
       if (typeof item.item_id !== 'string' || item.item_id.trim().length < 1 || item.item_id.trim().length > 200) errors.push(`${at}.item_id: String must contain 1 to 200 character(s)`)
@@ -73,7 +143,8 @@ export function batchProblems(input: unknown): string[] {
       if (item[key] !== undefined && !allowed.includes(String(item[key]))) errors.push(`${at}.${key}: Invalid enum value. Expected ${allowed.map((a) => `'${a}'`).join(' | ')}, received '${String(item[key])}'`)
     }
     if (item.include_tries !== undefined && typeof item.include_tries !== 'boolean') errors.push(`${at}.include_tries: Expected boolean`)
-    if (item.context !== undefined) errors.push(...contextProblems(`${at}.context`, item.context))
+    if (item.context !== undefined) errors.push(...optimizeContextProblems(item.context, `${at}.context`))
+    if (item.recipient !== undefined) errors.push(...recipientProblems(`${at}.recipient`, item.recipient))
   })
   return errors.slice(0, 20)
 }
@@ -92,10 +163,29 @@ export function feedbackProblem(input: unknown): string | null {
   return null
 }
 
+// ── feedback.record: operations/implementations/feedback/recordFeedback.ts (2026-11-19) ────────
+
+const RATING_KEYS = ['answer_id', 'surface', 'rating', 'comment', 'email_ok', 'subject_id', 'research_id', 'search_query_id', 'client', 'client_version', 'question', 'route']
+
+/** The strict-schema refusal of a feedback.record body (a 400), or null. */
+export function ratingProblem(input: unknown): string | null {
+  if (!isObject(input)) return 'body: Invalid input.'
+  const extra = Object.keys(input).find((k) => !RATING_KEYS.includes(k))
+  if (extra) return `${extra}: Unrecognized key`
+  if (typeof input.answer_id !== 'string' || !input.answer_id.trim() || input.answer_id.length > 80) return 'answer_id: Invalid'
+  if (!['search', 'research', 'optimize', 'grade', 'lead_list', 'other'].includes(String(input.surface))) return 'surface: Invalid enum value.'
+  if (!['up', 'down'].includes(String(input.rating))) return 'rating: Invalid enum value.'
+  if (input.comment !== undefined && (typeof input.comment !== 'string' || input.comment.length > 2000)) return 'comment: String must contain at most 2000 character(s)'
+  if (input.email_ok !== undefined && typeof input.email_ok !== 'boolean') return 'email_ok: Expected boolean'
+  if (input.client !== undefined && !['cli', 'api'].includes(String(input.client))) return 'client: Invalid enum value.'
+  if (input.client_version !== undefined && (typeof input.client_version !== 'string' || input.client_version.length > 64)) return 'client_version: Invalid'
+  return null
+}
+
 // ── messages.report_send: messages/_reportSendSchema.ts, messageOptimizer/sendReports ────────
 
 // The server's send providers (2026-11-13).
-export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'smartlead', 'reply_io', 'lgm', 'woodpecker', 'linkedin_manual', 'other']
+export const SEND_PROVIDERS = ['lemlist', 'instantly', 'outreach', 'salesloft', 'hubspot', 'salesforce', 'gmail', 'heyreach', 'apollo', 'smartlead', 'reply_io', 'lgm', 'woodpecker', 'amplemarket', 'linkedin_manual', 'other']
 export const SEND_CHANNELS = ['email', 'linkedin_invite', 'linkedin_message', 'linkedin_inmail']
 const REPORT_KEYS = ['run_id', 'provider', 'channel', 'sent_as', 'sent_at', 'provider_send_id', 'provider_campaign_id', 'sequence_step', 'provider_variant_id', 'provider_lead_id', 'thread_id', 'recipient', 'recipient_key_hash', 'sent_text']
 const TEXT_LIMITS: Record<string, number> = { provider_send_id: 256, provider_campaign_id: 256, provider_variant_id: 256, provider_lead_id: 256, thread_id: 512, recipient: 512, sent_text: 10_000 }
@@ -188,6 +278,8 @@ export function searchProblem(input: unknown, recipeIds: string[] | null = null)
   if (input.query !== undefined && (typeof input.query !== 'string' || input.query.length > 10_000)) return 'Invalid search request: query: String must contain at most 10000 character(s)'
   if (input.limit !== undefined && (!Number.isInteger(input.limit) || (input.limit as number) < 1)) return 'Invalid search request: limit: Number must be greater than 0'
   if (input.route !== undefined && !['auto', 'search', 'research'].includes(String(input.route))) return 'Invalid search request: route: Invalid enum value'
+  // search/query.ts: `from_query_id` is a uuid (the query_id of the answer whose research offer was taken).
+  if (input.from_query_id !== undefined && (typeof input.from_query_id !== 'string' || !UUID.test(input.from_query_id))) return 'Invalid search request: from_query_id: Invalid uuid'
   if (input.answer !== undefined && typeof input.answer !== 'boolean') return 'Invalid search request: answer: Expected boolean'
   if (!(typeof input.query === 'string' && input.query.trim())) return 'Provide a `query`, `filters`, or a `group_by`+`metrics` aggregation: an empty request has nothing to run.'
   return null
@@ -207,6 +299,11 @@ export function optimizeProblems(input: unknown): string[] {
     if (input[key] !== undefined && !allowed.includes(String(input[key]))) errors.push(`$.${key}: Invalid enum value. Expected ${allowed.map((a) => `'${a}'`).join(' | ')}, received '${String(input[key])}'`)
   }
   if (input.mode !== undefined && input.mode !== 'improve' && input.mode !== 'grade') return [...errors, '$.mode: must be one of improve, grade']
+  if (input.context !== undefined) errors.push(...optimizeContextProblems(input.context))
+  // contextFirst.ts: an empty message is accepted when the context has something to write from; constraints alone are not.
+  if (input.mode !== 'grade' && !(typeof input.message === 'string' && input.message.trim()) && !writable(input.context)) {
+    errors.push('$.context: send what you know about the recipient. context.facts is the message; context.rules is what it must and must not do.')
+  }
   if (input.mode === 'grade') {
     if (typeof input.message !== 'string' || !input.message.trim()) errors.push('$.message: mode grade grades a draft, so message is required')
     if (input.include_tries === true) errors.push('$.include_tries: mode grade writes no versions to return')
@@ -252,6 +349,8 @@ export function promptProblems(input: unknown): string[] {
         const at = `$.recipients[${i}]`
         if (!isObject(item)) return void errors.push(`${at}: Expected object`)
         errors.push(...unknownKeys(at, item, RECIPIENT_ITEM_KEYS))
+        // messages/_promptRecipients.ts: label is trimmed, 1 to MAX_LABEL_CHARS (200).
+        if (item.label !== undefined && (typeof item.label !== 'string' || !item.label.trim() || item.label.trim().length > 200)) errors.push(`${at}.label: String must contain 1 to 200 character(s)`)
         if (!isObject(item.recipient) || Object.keys(item.recipient).length === 0) errors.push(`${at}.recipient: name a person or a company`)
       })
     }

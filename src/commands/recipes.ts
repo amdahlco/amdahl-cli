@@ -16,6 +16,7 @@ import { apiClient, resolveCredential, type Ctx } from '../context'
 import { connectLine } from './connections'
 import { CliError, EXIT, usageError } from '../errors'
 import { FILL_MAX, NEEDS_LABEL, RECIPES, RECIPE_CATEGORIES, type Recipe, type RecipeCategory } from '../recipes-data'
+import { atTerminal } from '../terminal'
 import { field, record, records, wrap } from '../text'
 
 const PLATFORM = '/api/platform/v1'
@@ -25,6 +26,10 @@ function readTimeout(ctx: Ctx): number {
   const n = Number(ctx.io.env.AMDAHL_LIBRARY_TIMEOUT_MS)
   return Number.isFinite(n) && n > 0 ? n : 5000
 }
+
+/** How many times, and how far apart, `recipes` re-reads a "For you" the server is still working out. */
+const PENDING_READS = 3
+const PENDING_WAIT_MS = 2000
 
 /** The most "For you" rows shown. */
 const FOR_YOU_MAX = 4
@@ -47,6 +52,8 @@ export interface Library {
   generatedAt?: string
   /** The server's message when it has no data to suggest from (nothing connected). */
   setup?: string
+  /** True when the server is still working out "For you": a later read has it. */
+  pending?: true
 }
 
 const BUNDLED: Library = { recipes: RECIPES, categories: RECIPE_CATEGORIES, forYou: [], source: 'bundled' }
@@ -83,14 +90,15 @@ export async function loadLibrary(ctx: Ctx): Promise<Library> {
     const answer = await apiClient(ctx, credential).request<Record<string, unknown>>(`${PLATFORM}/search/suggestions`, { signal: AbortSignal.timeout(readTimeout(ctx)) })
     const recipes = records(answer.library).flatMap((e) => parseRecipe(e) ?? [])
     if (recipes.length === 0) return BUNDLED
+    const hidden = new Set((Array.isArray(answer.hidden_recipe_ids) ? answer.hidden_recipe_ids : []).map(field))
     const forYou = records(answer.for_you).flatMap((s) => {
       const recipe_id = field(s.recipe_id)
-      if (!recipes.some((r) => r.id === recipe_id)) return []
+      if (!recipes.some((r) => r.id === recipe_id) || hidden.has(recipe_id)) return []
       const fills = Object.fromEntries(Object.entries(record(s.fills) ?? {}).flatMap(([k, v]) => (typeof v === 'string' && v.trim() ? [[k, v.trim()]] : [])))
       return [{ recipe_id, kind: field(s.kind), reason: field(s.reason), fills }]
     })
     const setup = field(record(answer.setup_needed)?.message)
-    return { recipes, categories: categoriesOf(recipes), forYou: forYou.slice(0, FOR_YOU_MAX), source: 'server', ...(field(answer.generated_at) ? { generatedAt: field(answer.generated_at) } : {}), ...(setup ? { setup } : {}) }
+    return { recipes, categories: categoriesOf(recipes), forYou: forYou.slice(0, FOR_YOU_MAX), source: 'server', ...(field(answer.generated_at) ? { generatedAt: field(answer.generated_at) } : {}), ...(setup ? { setup } : {}), ...(answer.pending === true ? { pending: true as const } : {}) }
   } catch (err) {
     if (err instanceof CliError && err.code === 'invalid_grant') throw err
     return BUNDLED
@@ -180,6 +188,14 @@ export async function recipes(ctx: Ctx): Promise<number> {
   let library: Library
   try {
     library = await loadLibrary(ctx)
+    // The server is still working out "For you": at a terminal, read again a few times, 2 s apart, then show what came back.
+    const waiting = () => library.pending && atTerminal(ctx) && !out.json
+    if (waiting()) out.info('Working out For you...')
+    for (let i = 0; i < PENDING_READS && waiting(); i++) {
+      await ctx.io.sleep(PENDING_WAIT_MS)
+      library = await loadLibrary(ctx)
+    }
+    if (waiting()) out.info('For you is not ready yet.')
   } catch (err) {
     // Listing the recipes needs no sign-in: say the sign-in is gone (reading it cleared it), and list the bundled ones.
     if (!(err instanceof CliError)) throw err
@@ -195,6 +211,7 @@ export async function recipes(ctx: Ctx): Promise<number> {
       ok: true,
       source: library.source,
       ...(library.generatedAt ? { generated_at: library.generatedAt } : {}),
+      ...(library.pending ? { pending: true } : {}),
       for_you: library.forYou.map((s) => ({ recipe_id: s.recipe_id, title: forYouOf(s).recipe.title, kind: s.kind, reason: s.reason, fills: forYouOf(s).known, command: forYouOf(s).command })),
       ...(library.setup ? { setup_needed: { message: library.setup } } : {}),
       recipes: library.recipes.map((r) => ({
@@ -217,7 +234,7 @@ export async function recipes(ctx: Ctx): Promise<number> {
   // With nothing connected, the first step is to connect: the suggestions are for after that, with no
   // Run lines, since each would only say again that there is nothing to search.
   if (library.setup) lines.push('', ...wrap(library.setup), connectLine())
-  // "For you": the recipes that suit this workspace now, each with why. Nothing to hide here: only the console can.
+  // "For you": the recipes that suit this workspace now, each with why. A recipe hidden in the console is left out.
   if (library.forYou.length > 0) {
     lines.push('', library.setup ? 'For you, once something is connected' : 'For you')
     for (const s of library.forYou) {

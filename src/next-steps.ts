@@ -12,14 +12,15 @@ import { field } from './text'
  * `amdahl sent` (the server needs a send key) and `amdahl feedback`. Empty
  * when there is no run id. `atTerminal`: the person will be asked for what is
  * missing, so the commands are short; anywhere else they are written out in full.
+ * `provider`: the tool the messages were written for (`--for`), named in the full command.
  */
-export function sentLines(runId: unknown, lead = 'Sent it?', atTerminal = false): string[] {
+export function sentLines(runId: unknown, lead = 'Sent it?', atTerminal = false, provider?: string): string[] {
   const id = field(runId)
   if (!id) return []
   // At a terminal `sent` and `feedback` ask for what is missing, so the short command is enough.
   if (atTerminal) return [`${lead} ${amdahlCommand('sent')} ${id}`, `Or say how it went: ${amdahlCommand('feedback')} ${id}`]
   return [
-    `${lead} ${amdahlCommand('sent')} ${id} --provider <provider> --channel <channel> --sent-as returned --provider-send-id <id>`,
+    `${lead} ${amdahlCommand('sent')} ${id} --provider ${provider ?? '<provider>'} --channel <channel> --sent-as returned --provider-send-id <id>`,
     `Or say how it went: ${amdahlCommand('feedback')} ${id} --evidence did_it_myself --outcome used`,
   ]
 }

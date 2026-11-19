@@ -37,6 +37,11 @@ export interface Config {
    * it (see {@link feedbackLinkOn}).
    */
   feedbackLink?: boolean
+  /**
+   * Ask "Was this useful?" after an optimize or search result at a terminal, and send the answer as
+   * a rating. Absent means off. `AMDAHL_FEEDBACK_PROMPT` overrides it (see {@link feedbackPromptOn}).
+   */
+  feedbackPrompt?: boolean
 }
 
 /**
@@ -70,6 +75,7 @@ export function loadConfig(io: Io): Config {
       default_profile: typeof parsed.default_profile === 'string' ? parsed.default_profile : null,
       profiles: parsed.profiles && typeof parsed.profiles === 'object' ? parsed.profiles : {},
       ...(typeof parsed.feedbackLink === 'boolean' ? { feedbackLink: parsed.feedbackLink } : {}),
+      ...(typeof parsed.feedbackPrompt === 'boolean' ? { feedbackPrompt: parsed.feedbackPrompt } : {}),
     }
   } catch {
     return emptyConfig()
@@ -121,4 +127,15 @@ export function feedbackLinkOn(io: Io, config: Config): boolean {
   if (env === '0' || env === 'false' || env === 'off') return false
   if (env === '1' || env === 'true' || env === 'on') return true
   return config.feedbackLink ?? false
+}
+
+/**
+ * Whether `optimize` and `search` ask for a rating after a result: `AMDAHL_FEEDBACK_PROMPT`
+ * (`0`/`false`/`off` or `1`/`true`/`on`) wins, then the config's `feedbackPrompt`, then off.
+ */
+export function feedbackPromptOn(io: Io, config: Config): boolean {
+  const env = io.env.AMDAHL_FEEDBACK_PROMPT?.trim().toLowerCase()
+  if (env === '0' || env === 'false' || env === 'off') return false
+  if (env === '1' || env === 'true' || env === 'on') return true
+  return config.feedbackPrompt ?? false
 }

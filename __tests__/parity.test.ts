@@ -251,7 +251,10 @@ describe('prompt', () => {
     expect(tooFew.stderr).toContain('Improving a prompt needs at least 2 recipients')
     expect((await cli(io, 'prompt', write(io, 'p3.md', PROMPT), '--recipients', one, '--mode', 'grade')).code).toBe(0)
     const seven = write(io, 'seven.json', JSON.stringify(Array.from({ length: 7 }, () => ({ recipient: { company: 'X' } }))))
+    // A script is refused; a person at a terminal uses the first 6 (main-qa.test.ts).
+    io.env.AMDAHL_NO_PROMPT = '1'
     expect((await cli(io, 'prompt', write(io, 'p4.md', PROMPT), '--recipients', seven)).stderr).toContain('needs 1 to 6 recipients, not 7')
+    delete io.env.AMDAHL_NO_PROMPT
     expect((await cli(io, 'prompt', write(io, 'p5.md', PROMPT), '--recipients', write(io, 'bad.json', '{}'))).code).toBe(2)
     expect((await cli(io, 'prompt', write(io, 'p6.md', PROMPT), '--recipients', write(io, 'bad2.json', '[{"label":"x"},{"label":"y"}]'))).stderr).toContain('item 1 needs a "recipient" object')
     expect((await cli(io, 'prompt', write(io, 'big.md', 'x'.repeat(20_001)))).stderr).toContain('at most 20000 characters')
@@ -295,7 +298,7 @@ describe('prompt', () => {
     io.stdinText = PROMPT
     expect((await cli(io, 'prompt', '-', '--no-wait')).code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/optimize_prompt').prompt).toBe(PROMPT)
-    io.answers = [PROMPT + ' Paste']
+    io.answers = ['', PROMPT + ' Paste', '', '']
     expect((await cli(io, 'prompt', '--no-wait')).code).toBe(0)
     expect(sentBody('/api/platform/v1/messages/optimize_prompt').prompt).toBe(PROMPT + ' Paste')
   })
@@ -1145,7 +1148,7 @@ describe('0.5.0: cold QA findings and the empty-search reason', () => {
     }
     for (const emailOnly of ['instantly', 'gmail']) expect((await cli(flags, ...args(emailOnly, 'linkedin_inmail'))).code).toBe(2)
     // Smartlead and Woodpecker run LinkedIn steps too.
-    for (const both of ['smartlead', 'woodpecker']) expect((await cli(flags, ...args(both, 'linkedin_message'))).code).toBe(0)
+    for (const both of ['smartlead', 'woodpecker', 'amplemarket']) expect((await cli(flags, ...args(both, 'linkedin_message'))).code).toBe(0)
     expect((await cli(flags, ...args('linkedin_manual', 'email'))).code).toBe(2)
     expect((await cli(flags, ...args('heyreach', 'linkedin'))).code).toBe(0)
   })

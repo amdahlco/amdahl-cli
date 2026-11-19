@@ -102,6 +102,10 @@ export interface Io {
   hostname: string
   now: () => number
   sleep: (ms: number) => Promise<void>
+  /** Call `handler` at Ctrl+C (SIGINT) until the returned function is called. Absent where nothing can send one. */
+  onInterrupt?: (handler: () => void) => () => void
+  /** True once the reader of stdout closed the pipe (`| head`): more output goes nowhere. */
+  stdoutClosed?: () => boolean
   /** How long `login` waits for the browser callback: long enough to create a workspace on the way. */
   loginTimeoutMs: number
   /** How long `skills add` waits for each request, body included. */
@@ -227,6 +231,12 @@ export function outputColumns(env: Record<string, string | undefined>, stdoutCol
 
 /** Build the real {@link Io} for the running process. */
 export function realIo(): Io {
+  let closed = false
+  // A reader that quits early (`| head`) is not a crash: later writes are dropped and a command may stop.
+  process.stdout.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EPIPE') closed = true
+    else throw err
+  })
   return {
     env: process.env,
     stdout: (text) => process.stdout.write(text),
@@ -266,6 +276,11 @@ export function realIo(): Io {
     hostname: hostname(),
     now: () => Date.now(),
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+    onInterrupt: (handler) => {
+      process.on('SIGINT', handler)
+      return () => void process.off('SIGINT', handler)
+    },
+    stdoutClosed: () => closed,
     loginTimeoutMs: 900_000,
     fetchTimeoutMs: 15_000,
   }

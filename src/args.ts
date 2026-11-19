@@ -53,6 +53,25 @@ export const COMMAND_OPTIONS: Record<string, OptionSpec> = {
     force: { type: 'boolean' },
     for: { type: 'string' },
   },
+  sequence: {
+    write: { type: 'string' },
+    emails: { type: 'string' },
+    plan: { type: 'string' },
+    csv: { type: 'string' },
+    from: { type: 'string' },
+    force: { type: 'boolean' },
+    channel: { type: 'string' },
+    evidence: { type: 'string' },
+    'on-unsupported': { type: 'string' },
+    context: { type: 'string' },
+    leads: { type: 'string' },
+    match: { type: 'string', multiple: true },
+    fallback: { type: 'string', multiple: true },
+    same: { type: 'string', multiple: true },
+    drop: { type: 'string', multiple: true },
+    for: { type: 'string' },
+    resume: { type: 'boolean' },
+  },
   grade: {
     channel: { type: 'string' },
     evidence: { type: 'string' },
@@ -94,6 +113,10 @@ export const COMMAND_OPTIONS: Record<string, OptionSpec> = {
     comment: { type: 'string' },
     outcome: { type: 'string' },
     evidence: { type: 'string' },
+    rating: { type: 'string' },
+    surface: { type: 'string' },
+    'email-ok': { type: 'boolean' },
+    'no-email-ok': { type: 'boolean' },
   },
   sent: {
     provider: { type: 'string' },
@@ -207,7 +230,7 @@ export function parseCommandLine(argv: string[]): ParsedArgs {
   const spec = COMMAND_OPTIONS[name]
   if (!spec) throw unknownCommand(positionals.slice(0, words))
 
-  const strict = strictParse(argv, { ...GLOBAL_OPTIONS, ...spec }, name === 'search' && argv.some((a) => a === '--recipe' || a.startsWith('--recipe=')))
+  const strict = strictParse(name === 'sequence' ? bareCsv(argv) : argv, { ...GLOBAL_OPTIONS, ...spec }, name === 'search' && argv.some((a) => a === '--recipe' || a.startsWith('--recipe=')))
   return { command: name, args: strict.positionals.slice(words), flags: strict.values }
 }
 
@@ -255,6 +278,14 @@ function unknownCommand(words: string[]): CliError {
     message,
     `Run \`${amdahlCommand('--help')}\` to see the commands. If the docs show it, this amdahl may be older than the docs: update with \`npm install -g amdahl@latest\`, or run \`npx -y amdahl@latest\`.`
   )
+}
+
+/**
+ * `--csv` alone means "next to the input"; `--csv <path>` names the file, and the path ends in .csv.
+ * Any other word after a bare `--csv` is the input, so it is passed on as `--csv=` and that word.
+ */
+function bareCsv(argv: string[]): string[] {
+  return argv.map((arg, i) => (arg === '--csv' && !/\.csv$/i.test(argv[i + 1] ?? '') ? '--csv=' : arg))
 }
 
 function strictParse(argv: string[], options: OptionSpec, withRecipe = false) {
@@ -305,7 +336,8 @@ What you can do:
                                  client it finds, and asks nothing (also:
                                  amdahl setup)
   amdahl optimize draft.md       Rewrite an outbound email or LinkedIn message
-                                 (with no file, at a terminal, paste it)
+                                 and say what changed and why (with no file,
+                                 at a terminal, paste it)
   amdahl optimize --list drafts.csv
                                  Rewrite a whole list in one batch; results go
                                  to drafts.optimized.csv
@@ -313,9 +345,15 @@ What you can do:
                                  Also write drafts-lemlist.csv, a file your
                                  sequencer imports, and say how (Instantly,
                                  Smartlead, lemlist, HeyReach, Apollo and more)
+  amdahl sequence emails.md      Improve a 2 to 10 email sequence, in order
+  amdahl sequence --write "<goal>"
+                                 Write a new one, 2 to 6 emails
+  amdahl sequence emails.md --leads leads.csv
+                                 A sequence for each person in a lead list
   amdahl grade draft.md          Grade a message: score and the lines behind
   amdahl prompt prompt.md        Grade or improve a reusable prompt by the
-                                 emails it writes
+                                 emails it writes (with no file, at a
+                                 terminal, three short steps)
   amdahl search "<question>"     Ask about your customers, calls and deals
   amdahl recipes                 The console's questions (amdahl search
                                  --recipe <id> runs one)
@@ -362,20 +400,37 @@ Commands:
                        as a CSV that tool imports (<list>-<tool>.csv), and say
                        how to import it. Tools: instantly, smartlead, lemlist,
                        heyreach, reply_io, apollo, outreach, salesloft,
-                       hubspot, lgm, woodpecker, other (any tool that imports
-                       a CSV). lemlist, reply_io and other take both channels,
-                       so add --channel email|linkedin.
+                       hubspot, lgm, woodpecker, amplemarket, other (any tool
+                       that imports a CSV). lemlist, reply_io and other take
+                       both channels, so add --channel email|linkedin.
+  sequence [<file>|-] [--evidence off|workspace] [--on-unsupported flag|remove]
+           [--context <file.json>] [--csv [<file.csv>]] [--force] [--from <n>]
+  sequence --write "<goal>" [--emails <2-6>] [--plan <file>] [the flags above]
+           Improve 2 to 10 emails in order (a text, markdown or CSV file, or -
+           for stdin), or write 2 to 6 new ones. Each email is written as a
+           follow-up to the improved ones before it. --json prints {ok, mode,
+           emails, fields}: each email has .subject, .message and .run_id.
+  sequence <file> --leads <list.csv> [--match <field>=<column>]
+           [--fallback <field>=<text>] [--same <field>=<text>] [--drop <field>]
+           [--for <tool>] [--force] [--resume]
+  sequence --write "<goal>" --leads <list.csv> [--emails <2-6>] [--plan <file>]
+           [--for <tool>] [--force] [--resume]
+           A whole sequence for each person in a lead list, up to 500 people.
+           Each person's email 2 follows their own email 1. The results are
+           saved next to the list as <list>-amdahl-sequence.csv.
   grade <file|-> [--channel email|linkedin] [--evidence off|workspace]
            [--context <file.json>]
            Grade a draft and write nothing. The score always comes with its
            five lines. No line evaluated reads "Not graded", never 0. A grade
            does not predict replies. --json prints {ok, file, result}: the
            grade is .result.grade.
-  prompt <file|-> [--mode improve|grade] [--recipients <file.json>]
+  prompt <file|-> [--mode improve|grade] [--recipients <file.json|file.csv>]
            [--channel email|linkedin] [--context <file.json>] [--no-wait]
   prompt --run <id> [--no-wait]
            Grade or improve a reusable prompt by the emails it writes. A run
            takes minutes: its id is printed, --run <id> reads it later.
+  prompt   With no file, at a terminal, it asks in three steps: the prompt,
+           who to test it on, and Improve or Grade.
   runs [--limit <n>]                         Your latest runs, on this computer
   run <run-id>                               One run: your draft, then Amdahl's
   data [--surface interactions|deals|deal_qualification]
@@ -387,7 +442,9 @@ Commands:
   search --research-id <id>
            --research  ask for a research job: a deeper, cited answer (needs
                        a Customer agent key, amdahl keys create --preset
-                       agent; a sign-in gets the search answer)
+                       agent; a sign-in gets the search answer). Search starts
+                       research itself when a question needs it, and offers
+                       it when it could help
            --recipe    one of the console's questions (amdahl recipes); its
                        fill-in is a flag, like --account Acme
            --research-id  read a research job that started earlier; search
@@ -420,8 +477,8 @@ Commands:
            both (a recipient is --recipient or --recipient-key-hash, not both).
            --provider: lemlist, instantly, outreach, salesloft, hubspot,
                        salesforce, gmail, heyreach, apollo, smartlead,
-                       reply_io, lgm, woodpecker, linkedin_manual, other
-                       (any sender not listed)
+                       reply_io, lgm, woodpecker, amplemarket,
+                       linkedin_manual, other (any sender not listed)
            --channel:  email, linkedin (= linkedin_message), linkedin_invite,
                        linkedin_message, linkedin_inmail
            --sent-as edited needs --sent-text.

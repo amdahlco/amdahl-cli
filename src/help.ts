@@ -72,7 +72,10 @@ With --json it prints the server's setup status as one object.
        amdahl optimize --batch <id> [--list <file>] [--force]
 
 Rewrite an outbound email or LinkedIn message. Each file is one message; "-"
-reads standard input. With no file, at a terminal, paste the message.
+reads standard input. With no file, at a terminal, paste the message. It shows
+what Amdahl changed and why, sentence by sentence. The reasons are documented
+in the cookbook, https://github.com/amdahlco/amdahl-cookbook, in
+prompts/agent-platform/optimize-reasons.md.
 
   --channel email|linkedin     What the message is. Left out, it is inferred.
   --evidence off|workspace     "workspace" also evaluates each claim against
@@ -96,8 +99,8 @@ reads standard input. With no file, at a terminal, paste the message.
                                drafts-lemlist.csv), then print how to import it.
                                Tools: instantly, smartlead, lemlist, heyreach,
                                reply_io, apollo, outreach, salesloft, hubspot,
-                               lgm, woodpecker, or other (any tool that imports
-                               a CSV).
+                               lgm, woodpecker, amplemarket, or other (any tool
+                               that imports a CSV).
   --force                      Replace a results file that already exists.
 
 In the results CSV, a cell that starts with =, +, - or @ gets a ' in front, so
@@ -118,6 +121,166 @@ stderr. With --json it prints {"ok", "file", "result"}: the rewritten message
 is .result.message and the run id is .result.run_id. Several files give an
 array of those. A list prints the batch, and each item's result, with --json.
 Exit 1 when a message could not be rewritten.
+${GLOBAL}`,
+
+  sequence: `Usage: amdahl sequence <file> | -  [--evidence off|workspace]
+                       [--on-unsupported flag|remove] [--context <file.json>]
+                       [--csv [<file.csv>]] [--force] [--from <n>]
+       amdahl sequence --write "<goal>" [--emails <2-6>] [--plan <file>]
+                       [--context <file.json>] [--csv [<file.csv>]] [--force]
+       amdahl sequence <file> --leads <list.csv> [--match <field>=<column>]
+                       [--fallback <field>=<text>] [--same <field>=<text>]
+                       [--drop <field>] [--for <tool>] [--force] [--resume]
+       amdahl sequence --write "<goal>" --leads <list.csv> [--emails <2-6>]
+                       [--plan <file>] [--for <tool>] [--force] [--resume]
+       amdahl sequence
+
+Improve a sequence of 2 to 10 emails, or write a new one of 2 to 6. The emails
+run in order, and each is written as a follow-up to the improved emails before
+it. Each email is one request, so a sequence of 4 is 4 runs.
+
+The file is text or markdown, or "-" for standard input. A line of --- starts
+the next email, and so does a label line: Email, Step, Touch, Message, Day or
+Follow-up with a number, then maybe (...) and a title of up to 5 words, such as
+"Email 2", "Day 3" or "Step 2: Break-up email". A line that ends in . ? or !
+after the colon is text, not a break. At a terminal it lists what it found
+before it sends anything. An email may start with a Subject: line. Email 1
+keeps its subject. A later email with a Subject: line starts a new thread and
+keeps it. A later email with none is a reply in the same thread and goes with
+no subject:
+
+  Subject: Ramping SDRs at {{company}}
+
+  Hi {{first_name}}, most teams take 4 months to ramp a new rep.
+  ---
+  Hi {{first_name}}, bumping this up. Worth a quick call?
+  ---
+  Subject: Close the loop?
+
+  Hi {{first_name}}, should I stop reaching out?
+
+A CSV file has one column for each email, step_1_body, step_2_body and so on,
+and may have step_1_subject and so on. The first row with text is the sequence;
+with more rows it says so. The file --csv saves (Email, Subject, Message, one
+row for each email) reads back the same way.
+
+Fill-in fields such as {{first_name}} are sent as they are. After the last
+email it says whether each field is still there, and names the emails that lost
+one.
+
+  --evidence off|workspace     "workspace" also checks each claim against your
+                               customers' own conversations. Slower.
+  --on-unsupported flag|remove What to do with a claim nothing backs.
+  --context <file.json>        Your rules, voice_examples and facts, as JSON,
+                               for every email. Not prior_touches: Amdahl
+                               sends the emails before each one itself.
+  --channel                    Not taken: a sequence is email only.
+  --write "<goal>"             Write a new sequence for this goal, up to 300
+                               characters. The plan comes first, then each
+                               email is written after the ones before it.
+  --emails <2-6>               With --write: how many emails. Default 3.
+  --plan <file>                With --write: your own plan, one email on each
+                               line, "Name: job" or "Name" alone, 2 to 6 lines.
+  --csv [<file.csv>]           Also save the emails as a CSV with the columns
+                               Email, Subject and Message. With no name, it is
+                               next to the file (emails.md gives
+                               emails-amdahl.csv), or sequence-amdahl.csv here.
+                               Put it after the file. A name ends in .csv. The
+                               folder must exist. The file starts with a UTF-8
+                               byte order mark, so a spreadsheet reads accents.
+  --force                      With --csv: replace a file that already exists.
+  --from <n>                   Improve from email n, after a run that stopped.
+                               It reads emails 1 to n-1 from the CSV that run
+                               saved (--csv <file.csv>, or the default name
+                               next to the file) and writes it back whole.
+
+It says how long it takes ("About 3 minutes in all") and, at a terminal,
+shows the seconds for the email it is on. Ctrl+C stops after saving the emails
+that came back (with --csv, or at a terminal) and exits 130; each email's run id
+is printed, and --from picks up. A closed pipe (| head) stops before the next
+email. At a terminal, a finished run asks "Save as <name>-amdahl.csv?".
+
+A written sequence: email 2 and later reply in email 1's thread, so they have
+no subject, and are told not to name an earlier email's date. A template for
+anyone (no --leads) greets with {{first_name}}.
+
+At a terminal, --write shows the plan and asks "Write these N emails?", after
+checking you are signed in (it signs you in first). An
+agent, CI, a pipe or --json is not asked. With no file and no --write, at a
+terminal, it asks what to do: improve emails you paste, or write a new sequence.
+
+In the CSV, a cell that starts with =, +, - or @ gets a ' in front, so a
+spreadsheet does not run it as a formula.
+
+A sequence for each person: add --leads <list.csv> (up to 500 people; it needs
+an email, LinkedIn, or name and company column). Each person's email 2 is
+written as a follow-up to their own email 1, never another person's. Email 1 is
+sent as a batch for everyone (as several, when one request would pass about 900
+KB), then email 2 for everyone whose email 1 came back, and so on. Every batch
+of an email is read before the next email starts. A person whose email fails
+stops there. A written sequence (--write) starts with one sample person at a
+terminal, shows it, and asks "Write 3 emails for each of the other N people: up
+to M runs. Start?". At a terminal it also asks "Start?" once for an improved
+sequence. An agent, CI, a pipe or --json is never asked.
+
+The results file is written before the first batch and after every email, and
+its path (Results: <path>) is printed first. Ctrl+C stops this command, not a
+batch already sent: that batch still runs. --resume picks up from the results
+file.
+
+  --leads <list.csv>           The lead list. The results go next to it as
+                               <list>-amdahl-sequence.csv: every column of the
+                               list, then each email's columns (amdahl_subject,
+                               amdahl_message, amdahl_subject_2,
+                               amdahl_message_2 ...), then amdahl_status.
+  --match <field>=<column>     Fill {{field}} from this column of the list.
+  --fallback <field>=<text>    Text for the people whose cell is empty.
+                               first_name starts as "there".
+  --same <field>=<text>        The same text for everyone.
+  --drop <field>               Leave the field out. Repeat any of these four.
+  --for <tool>                 Also write <list>-<tool>.csv, a file your
+                               sequencer imports with a column for each email,
+                               and say how. The tools are the ones optimize
+                               --list --for takes, for email.
+  --force                      Replace the results file, and a --for file.
+  --resume                     Pick up where a run stopped, also after Ctrl+C
+                               or a timeout. It reads the results file: people
+                               with every email are kept, and the others
+                               continue from their first empty email. Use the
+                               same emails and flags.
+
+A field with no column and no flag asks at a terminal, and is refused anywhere
+else before anything is sent. An existing results file is not replaced without
+--force or --resume. --csv and --context do not go with --leads. A batch
+refused as rate limited is sent once more after the wait the server asks for
+(60 seconds at most, 10 with no number). A batch that got no answer is sent
+once more with the same key, so Amdahl does not bill it twice. A refusal for
+the monthly limit says how many runs are left, and stops. Rows that share an
+email address are still written, and counted before the start question.
+
+With --json it prints {"ok", "mode", "people", "written", "file", "left_out",
+"duplicates", "stopped", "rows"}, and "halted" when a batch was refused and
+"send_to" with --for. It also writes the results file. .file is that file.
+.left_out has .over_cap (people past the first 500) and .empty_rows.
+.duplicates counts rows that share an email. .stopped has .row, .email,
+.at_email and .reason. Each of .rows has .row, .emails (each {subject,
+message}, or null) and .status. .halted has .at_email and .reason. .send_to has
+.tool, .channel, .file, .ready, .left_out and .over_limit.
+
+The recipes behind it are in the cookbook,
+https://github.com/amdahlco/amdahl-cookbook, in prompts/agent-platform/
+improve-a-sequence.md and write-a-sequence.md.
+
+Output: each email goes to stdout under "Email 1 of 3". What Amdahl changed goes
+to stderr. A failed email stops the run: the ones before it are printed, the
+rest are not sent, and it exits 1 (6 when rate limited, after one retry). With
+--csv, the emails that came back are still saved. With --json it prints
+{"ok", "mode", "emails", "fields"}: each email has .subject, .message,
+.run_id and .result; .fields has .kept and .lost; on a failure .failed has
+.index, .reason and .detail; with --csv, .file and .saved (how many emails it
+holds). --write adds .plan (each email's .name and .job). A run that Ctrl+C or a
+closed pipe stopped has .stopped ("interrupted" or "closed"), and a CSV that
+could not be written has .file_error (.code and .detail).
 ${GLOBAL}`,
 
   search: `Usage: amdahl search "<question>" [--research] [--limit <n>]
@@ -141,6 +304,10 @@ with the rows it came from.
                 Read a research job that started earlier, and wait for it.
                 Search prints the id when a job starts. It needs a key that
                 can read research, the one that started the job.
+
+Amdahl starts research by itself when a question needs it, and says why first.
+When it only offers research, at a terminal with a Customer agent key it asks
+once. Otherwise it prints the command: add --research.
 
 With no rows it says why, in the server's words. A search the server cut at its
 deadline says it ran out of time and exits 1; add --research, which can run
@@ -169,14 +336,22 @@ predict replies. With --json it prints {"ok", "file", "result"}: the grade is
 ${GLOBAL}`,
 
   prompt: `Usage: amdahl prompt <file|-> [--mode improve|grade]
-                     [--recipients <file.json>] [--channel email|linkedin]
-                     [--context <file.json>] [--no-wait]
+                     [--recipients <file.json|file.csv>]
+                     [--channel email|linkedin] [--context <file.json>]
+                     [--no-wait]
        amdahl prompt --run <id> [--no-wait]
+       amdahl prompt          (at a terminal: three steps, no file needed)
 
 Grade or improve a reusable prompt (the instructions a writer follows to write
 an outbound email to any recipient) by the emails it writes. It starts a run
 that takes a few minutes, prints the run id and waits. One message, not a
 prompt, is for amdahl optimize.
+
+With no file, at a terminal, amdahl prompt walks through three steps: 1 your
+prompt (paste it, or start from an example), 2 who to test it on (up to 6
+companies you type, or none and Amdahl picks from your workspace), 3 Improve
+or Grade. It ends by showing the command that skips the questions next time.
+An agent, CI, a pipe, --json and AMDAHL_NO_PROMPT=1 get no questions.
 
   --mode improve|grade  improve (the default) revises the prompt and returns it
                         only when the revision wrote better email on recipients
@@ -185,8 +360,10 @@ prompt, is for amdahl optimize.
   --recipients <file>   1 to 6 sample recipients as JSON: [{"recipient":
                         {"company": "Helix"}, "recipient_notes": "..."}]. Each
                         may have name, company, email, domain, linkedin_url and
-                        attributes. Improve needs 2 or more. Left out, Amdahl
-                        picks up to 6 of your workspace's accounts.
+                        attributes. Or a .csv with a header row: company
+                        (required), name and notes. Improve needs 2 or more.
+                        Left out, Amdahl picks up to 6 of your workspace's
+                        accounts.
   --channel email|linkedin  What the emails are.
   --context <file.json>     Your rules, facts and voice_examples, as JSON.
   --no-wait             Start the run, print its id and stop.
@@ -234,7 +411,9 @@ ${GLOBAL}`,
 
 List the console's recipe library: the questions it asks as a search, by
 category, with what each reads and the fill-in it needs. "For you" above it
-shows up to four that suit this workspace now, each with why. Run one with
+shows up to four that suit this workspace now, each with why; one hidden in the
+console is left out, and at a terminal it waits a few seconds for a list still
+being made. Run one with
 amdahl search --recipe <id>. With --json it prints every recipe with its
 question and fill-ins, and for_you. Where the server's list cannot be read, it
 lists the copy bundled in this version.
@@ -302,6 +481,8 @@ created in the console with Add leads to sequencer campaigns.
   feedback: `Usage: amdahl feedback <run-id> --evidence did_it_myself|reported_to_me|inferred
                        [--outcome used|used_with_edits|not_used|unsure]
                        [--sent-text <file> | -] [--comment <text>]
+       amdahl feedback <id> --rating up|down [--surface <what>]
+                       [--comment <text>] [--email-ok | --no-email-ok]
 
 Say what happened to the message an optimize run returned. The run id is the
 one \`amdahl optimize\` printed. Amdahl learns your preferences from an edit,
@@ -315,6 +496,17 @@ unless the evidence is "inferred". Each call stores one event.
 Give at least one of --outcome, --sent-text and --comment. At a terminal, what
 you leave out is asked (two questions at most). With --json, in an agent or in
 CI, nothing is asked: a missing flag is a usage error.
+
+Rate a result with --rating up|down: a thumbs up or down on an optimize run, or
+on a search or research answer (--surface search|research, with its query id or
+research id). It goes to the Amdahl team with your comment, and not the message
+or the question. --email-ok says they may email you about it (--no-email-ok
+says they may not). Until the server accepts a browser sign-in, a rating needs
+an API key. The surfaces are optimize, search, research, grade, lead_list and
+other. It does not mix with --evidence, --outcome or --sent-text: run the
+command once for each. To be asked "Was this useful?" after each optimize or
+search result at a terminal, set feedbackPrompt to true in config.json, or
+AMDAHL_FEEDBACK_PROMPT=1.
 ${GLOBAL}`,
 
   sent: `Usage: amdahl sent <run-id> --provider <provider> --channel <channel>
