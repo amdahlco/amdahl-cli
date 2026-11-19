@@ -54,6 +54,18 @@ describe('amdahl sequencers campaigns', () => {
     expect(r.stderr).not.toContain('keys create')
   })
 
+  it('says the same for the server\'s scope_not_granted refusal, and keeps its code', async () => {
+    server = await startMockServer({ sequencers: [INSTANTLY], scopeNotGranted: true })
+    const io = fakeIo({ AMDAHL_API_URL: server.url, AMDAHL_KEY: API_KEY })
+    const r = await cli(io, 'sequencers', 'campaigns')
+    expect(r.code).toBe(4)
+    expect(r.stderr).toBe(
+      'Error: This credential is missing the sequencers:push permission, so it cannot add leads to a sequencer campaign. Run `amdahl login` again, or use a key created in the console with Add leads to sequencer campaigns turned on.\n'
+    )
+    const j = await cli(io, 'sequencers', 'campaigns', '--json')
+    expect(j.json.error.code).toBe('scope_not_granted')
+  })
+
   it('says when no sequencer is connected', async () => {
     const io = await withKey(API_KEY, [])
     const r = await cli(io, 'sequencers', 'campaigns', '--json')

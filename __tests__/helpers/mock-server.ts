@@ -200,6 +200,8 @@ export interface MockOptions {
   sequencers?: { id: string; type: string; name: string }[]
   /** After this many pushes, a push answers 409 campaign_active, as when someone starts the campaign mid-command. */
   pushesBeforeLive?: number
+  /** The sequencer routes answer as the server's `pushCallerOf` does for a key whose grant does not name sequencers:push: 403 `scope_not_granted`, `details.required_scope`. */
+  scopeNotGranted?: boolean
 }
 
 /** Every sequencer's campaigns in the mock, as `GET /connections/:id/campaigns` returns them. */
@@ -547,6 +549,15 @@ export async function startMockServer(options: MockOptions = {}): Promise<MockSe
       const seqPath = path.match(/^\/api\/platform\/v1\/connections\/([^/]+)\/(campaigns|pushes)(?:\/([^/]+))?(\/leads)?$/)
       if (seqPath) {
         if (kind === 'readonly') return err(res, 403, options.forbiddenCode ?? 'forbidden', 'Missing required scope(s): sequencers:push')
+        if (options.scopeNotGranted) {
+          return json(res, 403, {
+            error: {
+              code: 'scope_not_granted',
+              message: 'This key does not name sequencers:push. A Full admin or older key does not carry it. Create a key with Sequencers: push added.',
+              details: { required_scope: 'sequencers:push' },
+            },
+          })
+        }
         const [, connId, what, sub, leadsPart] = seqPath
         if (!(options.sequencers ?? []).some((c) => c.id === connId)) return err(res, 404, 'not_found', 'Connection not found.')
         if (what === 'campaigns' && !sub && req.method === 'GET') return json(res, 200, { data: { campaigns: SEQUENCER_CAMPAIGNS } })

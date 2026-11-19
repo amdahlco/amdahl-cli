@@ -1203,8 +1203,9 @@ its `hint` is the same, because scripts and agents branch on them.
   \`amdahl keys create --name ci\`, or run \`amdahl login\` again.` (exit 4).
   For research or workspace changes the command adds `--preset agent`. For
   `sequencers:push`, which no `--preset` carries, it names the console's
-  **Add leads to sequencer campaigns** option instead. It never prints the
-  server's bare `Missing required scope(s)`.
+  **Add leads to sequencer campaigns** option instead, and says the same for
+  the server's `scope_not_granted` (a Full admin or older key, which never
+  carries it). It never prints the server's bare `Missing required scope(s)`.
 - A key the server will not take (revoked or expired): `This key isn't valid
   (revoked or expired).` and the hint, `Run amdahl login, or check
   AMDAHL_KEY.` (exit 3). An OAuth access token in `AMDAHL_ACCESS_TOKEN` says
@@ -1436,7 +1437,7 @@ default, so a key made for CI can optimize.
 | 1 | general (`login_timeout`, `state_mismatch`, optimize `ok: false`, a failed item in `optimize --list`, a send `sent` could not store, research that failed or is still running, a prompt run that failed or is still going, a `skills add` refusal, `invalid_config`, bare `amdahl` with no terminal that found no client) |
 | 2 | usage (also bare `amdahl` in CI, with `AMDAHL_NO_PROMPT=1` or with `--json`) |
 | 3 | not signed in (401, `invalid_grant`, no credential) |
-| 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`, `missing_scope`; also research that started but this credential cannot read) |
+| 4 | forbidden (403, `oauth_required`, `cli_client_required`, `not_admin`, `missing_scope`, `scope_not_granted`; also research that started but this credential cannot read) |
 | 5 | no workspace |
 | 6 | rate limited or quota (429) |
 | 7 | approval denied, expired or locked out |

@@ -202,13 +202,16 @@ const CALL_VERBS: [string, string][] = [
 ]
 
 /**
- * The scopes a refusal names: the server's `error.details.missing_scopes`, else
+ * The scopes a refusal names: the server's `error.details.missing_scopes`, or
+ * the one `error.details.required_scope` of a `scope_not_granted` refusal, else
  * the list in its `Missing required scope(s): a, b` message (servers before the
- * field). Empty when neither says.
+ * field). Empty when none says.
  */
 function missingScopes(err: AmdahlApiError): string[] {
-  const listed = errorDetails(err.responseBody).missing_scopes
+  const details = errorDetails(err.responseBody)
+  const listed = details.missing_scopes
   if (Array.isArray(listed)) return listed.filter((s): s is string => typeof s === 'string' && s.length > 0)
+  if (typeof details.required_scope === 'string' && details.required_scope.length > 0) return [details.required_scope]
   const match = /^Missing required scope\(s\):\s*(.+?)\.?$/i.exec(err.message)
   return match ? match[1]!.split(/,\s*/).map((s) => s.trim()).filter(Boolean) : []
 }
@@ -266,7 +269,9 @@ function plainMessage(err: AmdahlApiError): string | null {
     const noun = err.credentialSource === 'env:AMDAHL_ACCESS_TOKEN' ? 'token' : 'key'
     return `This ${noun} isn't valid (revoked or expired).`
   }
-  if (err.errorCode === 'missing_scope' || /^Missing required scope/i.test(err.message)) {
+  // `scope_not_granted`: a key whose grant does not name a scope that must be named, such as
+  // sequencers:push on a Full admin or older key (amdahl-app `sequencerPush/callerRules.ts`).
+  if (err.errorCode === 'missing_scope' || err.errorCode === 'scope_not_granted' || /^Missing required scope/i.test(err.message)) {
     const verb = CALL_VERBS.find(([prefix]) => err.path.includes(prefix))?.[1] ?? 'do this'
     return missingScopeMessage(verb, missingScopes(err))
   }
